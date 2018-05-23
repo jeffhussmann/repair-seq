@@ -23,11 +23,11 @@ def hq_mismatches(char* first_seq, char* second_seq, char* first_qual, char* sec
             
     return d
 
-def hq_mismatches_from_seed(char* seed, char* seq, char* qual, int min_q):
+def hq_mismatches_from_seed(char* seed, char* seq, char[:] qual, int min_q):
     cdef int i
     cdef int d = 0
     cdef int length = len(seq)
-    cdef int floor = min_q + OFFSET
+    cdef int floor = min_q
     
     for i in range(length):
         if (seq[i] != seed[i]) and (qual[i] >= floor):
