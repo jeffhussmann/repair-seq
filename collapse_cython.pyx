@@ -11,7 +11,7 @@ def hamming_distance(char* first, char* second):
             
     return d
 
-def hq_mismatches(char* first_seq, char* second_seq, char* first_qual, char* second_qual, int min_q):
+def hq_hamming_distance(char* first_seq, char* second_seq, char* first_qual, char* second_qual, int min_q):
     cdef int i
     cdef int d = 0
     cdef int length = len(first_seq)
