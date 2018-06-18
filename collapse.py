@@ -18,7 +18,9 @@ import pysam
 from sequencing import fastq, utilities, sw, sam
 from sequencing import annotation as annotation_module
 
-from collapse_cython import hq_mismatches_from_seed, hq_hamming_distance, hamming_distance
+from collapse_cython import hq_mismatches_from_seed, hq_hamming_distance, hamming_distance_matrix, register_corrections
+
+progress = tqdm.tqdm
 
 CELL_BC_TAG = 'CB'
 UMI_TAG = 'UR'
@@ -29,7 +31,6 @@ HIGH_Q = 31
 LOW_Q = 10
 N_Q = 2
 
-
 cluster_fields = [
     ('cell_BC', 's'),
     ('UMI', 's'),
@@ -38,7 +39,7 @@ cluster_fields = [
 ]
 cluster_Annotation = annotation_module.Annotation_factory(cluster_fields)
 
-def call_consensus(als, max_read_length=285):
+def call_consensus(als, max_read_length):
     statistics = fastq.quality_and_complexity(als, max_read_length, alignments=True, min_q=30)
     shape = statistics['c'].shape
 
@@ -130,40 +131,6 @@ def form_clusters(als, max_read_length, max_hq_mismatches):
             
     return clusters
 
-def hamming_distance_matrix(seqs):
-    seq_bs = [seq.encode() for seq in seqs]
-    
-    n = len(seqs)
-    ds = np.zeros((n, n), dtype=int)
-
-    for i in range(n):
-        for j in range(i + 1, n):
-            ds[i, j] = hamming_distance(seq_bs[i], seq_bs[j])
-
-    return ds
-
-def hq_hamming_distance_matrix(reads):
-    seqs = [r.seq.encode() for r in reads]
-    quals = [r.qual.encode() for r in reads]
-    
-    n = len(reads)
-    ds = np.zeros((n, n), dtype=int)
-    for i in range(n):
-        for j in range(i + 1, n):
-            ds[i, j] = hq_hamming_distance(seqs[i], seqs[j], quals[i], quals[j], 20)
-
-    return ds
-
-def hq_levenshtein_distance_matrix(reads):
-    n = len(reads)
-    ds = np.zeros((n, n), dtype=int)
-    for i in range(n):
-        for j in range(i + 1, n):
-            indels, num_hq_mismatches = align_clusters(reads[i], reads[j])
-            ds[i, j] = indels + num_hq_mismatches
-
-    return ds
-
 def align_clusters(first, second):
     al = sw.global_alignment(first.query_sequence, second.query_sequence)
     
@@ -174,20 +141,25 @@ def align_clusters(first, second):
             
     return al['XO'], num_hq_mismatches
 
+cell_key = lambda al: al.get_tag(CELL_BC_TAG)
+UMI_key = lambda al: al.get_tag(UMI_TAG)
 sort_key = lambda al: (al.get_tag(CELL_BC_TAG), al.get_tag(UMI_TAG))
 empty_header = pysam.AlignmentHeader()
 
-def sort_cellranger_bam(bam_fn, sorted_fn, notebook=True):
+def sort_cellranger_bam(bam_fn, sorted_fn, show_progress=False):
     Path(sorted_fn).parent.mkdir(exist_ok=True)
 
     bam_fh = pysam.AlignmentFile(str(bam_fn))
-    total_reads = bam_fh.mapped + bam_fh.unmapped
+    total_reads_in = bam_fh.mapped + bam_fh.unmapped
 
     als = bam_fh
+    if show_progress:
+        als = progress(als, total=total_reads_in, desc='Sorting')
 
     relevant = (al for al in als if al.is_unmapped and al.has_tag(CELL_BC_TAG))
 
     max_read_length = 0
+    total_reads_out = 0
     
     chunk_fns = []
         
@@ -199,6 +171,7 @@ def sort_cellranger_bam(bam_fn, sorted_fn, notebook=True):
         with pysam.AlignmentFile(str(chunk_fn), 'wb', header=empty_header) as fh:
             for al in sorted_chunk:
                 max_read_length = max(max_read_length, al.query_length)
+                total_reads_out += 1
                 fh.write(al)
 
         chunk_fns.append(chunk_fn)
@@ -206,43 +179,40 @@ def sort_cellranger_bam(bam_fn, sorted_fn, notebook=True):
     chunk_fhs = [pysam.AlignmentFile(str(fn), check_sq=False) for fn in chunk_fns]
     
     with pysam.AlignmentFile(str(sorted_fn), 'wb', header=empty_header) as fh:
-        for al in heapq.merge(*chunk_fhs, key=sort_key):
+        merged_chunks = heapq.merge(*chunk_fhs, key=sort_key)
+
+        if show_progress:
+            merged_chunks = progress(merged_chunks, total=total_reads_out, desc='Merging sorted chunks')
+
+        for al in merged_chunks:
             fh.write(al)
+
+    for fh in chunk_fhs:
+        fh.close()
 
     for fn in chunk_fns:
         fn.unlink()
     
-    pysam.index(str(sorted_fn))
+    yaml_fn = sorted_fn.with_suffix('.yaml')
+    stats = {
+        'total_reads': total_reads_out,
+        'max_read_length': max_read_length,
+    }
+    yaml_fn.write_text(yaml.dump(stats, default_flow_style=False))
 
-    return max_read_length
-
-def error_correct_UMIs(cell_group):
-    UMI_counts = Counter(s.UMI for s in cell_group)
+def error_correct_UMIs(cell_group, max_UMI_distance=1):
+    # sort UMIs in descending order by number of occurrences.
+    UMI_counts = Counter(al.get_tag(UMI_TAG) for al in cell_group)
     UMIs = [UMI for UMI, count in UMI_counts.most_common()]
 
     ds = hamming_distance_matrix(UMIs)
 
-    corrections = {}
+    corrections = register_corrections(ds, max_UMI_distance, UMIs)
 
-    # Moving from least common to most common, register a correction
-    # from a UMI to the most common UMI that is within Hamming distance
-    # 1 of it.
-    for j in range(len(ds) - 1, -1, -1):
-        for i in range(j - 1, -1, -1):
-            if ds[i, j] == 1:
-                corrections[UMIs[j]] = UMIs[i]
-
-    # If a correction points to a UMI that is itself going to be corrected,
-    # propogate this correction through.  
-    for from_, to in list(corrections.items()):
-        while to in corrections:
-            to = corrections[to]
-
-        corrections[from_] = to
-    
-    for singleton in cell_group:
-        if singleton.UMI in corrections:
-            singleton.UMI = corrections[singleton.UMI]
+    for al in cell_group:
+        correct_to = corrections.get(al.get_tag(UMI_TAG))
+        if correct_to:
+            al.set_tag(UMI_TAG, correct_to)
     
     return cell_group
 
@@ -258,55 +228,63 @@ def merge_annotated_clusters(biggest, other):
     return biggest
 
 def form_collapsed_clusters(sorted_fn,
-                            collapsed_fn,
-                            max_read_length,
                             max_hq_mismatches,
                             max_indels,
-                            notebook=True):
+                            max_UMI_distance,
+                            show_progress=True):
+
+    collapsed_fn = sorted_fn.with_name(sorted_fn.stem + '_collapsed.bam')
+
+    yaml_fn = sorted_fn.with_suffix('.yaml')
+    stats = yaml.load(yaml_fn.read_text())
+    max_read_length = stats['max_read_length']
+    total_reads = stats['total_reads']
+
     sorted_als = pysam.AlignmentFile(str(sorted_fn), check_sq=False)
-    total_reads = sorted_als.unmapped
+    if progress:
+        sorted_als = progress(sorted_als, total=total_reads, desc='Collapsing')
     
-    groups = utilities.group_by(sorted_als, sort_key)
+    cell_groups = utilities.group_by(sorted_als, cell_key)
     
     with pysam.AlignmentFile(str(collapsed_fn), 'wb', header=empty_header) as collapsed_fh:
-        for (cell_BC, umi), group in groups:
-            annotated_clusters = []
+        for cell_BC, cell_group in cell_groups:
+            if max_UMI_distance > 0:
+                error_correct_UMIs(cell_group, max_UMI_distance)
 
-            clusters = form_clusters(group, max_read_length, max_hq_mismatches)
-            clusters = sorted(clusters, key=lambda c: c.get_tag(NUM_READS_TAG), reverse=True)
+            for UMI, UMI_group in utilities.group_by(cell_group, UMI_key):
+                clusters = form_clusters(UMI_group, max_read_length, max_hq_mismatches)
+                clusters = sorted(clusters, key=lambda c: c.get_tag(NUM_READS_TAG), reverse=True)
 
-            for i, cluster in enumerate(clusters):
-                cluster.set_tag(CELL_BC_TAG, cell_BC, 'Z')
-                cluster.set_tag(UMI_TAG, umi, 'Z')
-                cluster.set_tag(CLUSTER_ID_TAG, str(i), 'Z')
+                for i, cluster in enumerate(clusters):
+                    cluster.set_tag(CELL_BC_TAG, cell_BC, 'Z')
+                    cluster.set_tag(UMI_TAG, UMI, 'Z')
+                    cluster.set_tag(CLUSTER_ID_TAG, str(i), 'Z')
 
-            biggest = clusters[0]
-            rest = clusters[1:]
+                biggest = clusters[0]
+                rest = clusters[1:]
 
-            not_collapsed = []
+                not_collapsed = []
 
-            for other in rest:
-                if other.get_tag(NUM_READS_TAG) == biggest.get_tag(NUM_READS_TAG):
-                    not_collapsed.append(other)
-                else:
-                    indels, hq_mismatches = align_clusters(biggest, other)
-
-                    if indels <= max_indels and hq_mismatches <= max_hq_mismatches:
-                        biggest = merge_annotated_clusters(biggest, other)
-                    else:
+                for other in rest:
+                    if other.get_tag(NUM_READS_TAG) == biggest.get_tag(NUM_READS_TAG):
                         not_collapsed.append(other)
-            
-            for cluster in [biggest] + not_collapsed:
-                annotation = cluster_Annotation(cell_BC=cluster.get_tag(CELL_BC_TAG),
-                                                UMI=cluster.get_tag(UMI_TAG),
-                                                num_reads=cluster.get_tag(NUM_READS_TAG),
-                                                cluster_id=cluster.get_tag(CLUSTER_ID_TAG),
-                                               )
+                    else:
+                        indels, hq_mismatches = align_clusters(biggest, other)
 
-                cluster.query_name = str(annotation)
-                collapsed_fh.write(cluster)
+                        if indels <= max_indels and hq_mismatches <= max_hq_mismatches:
+                            biggest = merge_annotated_clusters(biggest, other)
+                        else:
+                            not_collapsed.append(other)
+                
+                for cluster in [biggest] + not_collapsed:
+                    annotation = cluster_Annotation(cell_BC=cluster.get_tag(CELL_BC_TAG),
+                                                    UMI=cluster.get_tag(UMI_TAG),
+                                                    num_reads=cluster.get_tag(NUM_READS_TAG),
+                                                    cluster_id=cluster.get_tag(CLUSTER_ID_TAG),
+                                                   )
 
-    pysam.index(str(collapsed_fn))
+                    cluster.query_name = str(annotation)
+                    collapsed_fh.write(cluster)
 
 def split_into_guide_fastqs(collapsed_fn, cell_BC_to_guide, gemgroup, group_dir):
     clusters = pysam.AlignmentFile(str(collapsed_fn), check_sq=False)
@@ -366,9 +344,11 @@ def make_cluster_fastqs(collapsed_fn, target, gemgroup, notebook=True):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--base_dir')
-    mode_group = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument('--base_dir', required=True)
+    parser.add_argument('--force_sort', action='store_true')
+    parser.add_argument('--no_progress', action='store_true')
 
+    mode_group = parser.add_mutually_exclusive_group(required=True)
     mode_group.add_argument('--parallel', metavar='MAX_PROCS')
     mode_group.add_argument('--collapse', metavar='NAME')
 
@@ -381,12 +361,19 @@ if __name__ == '__main__':
     if args.parallel is not None:
         max_procs = args.parallel
 
+        if args.force_sort:
+            possibly_force_sort = ['--force_sort']
+        else:
+            possibly_force_sort = []
+
         parallel_command = [
             'parallel',
             '-n', '1', 
             '--verbose',
             '--max-procs', max_procs,
             './collapse.py',
+            '--no_progress',
+        ] + possibly_force_sort + [
             '--base_dir', str(base_dir),
             '--collapse', ':::',
         ] + sorted(sample_sheet)
@@ -399,18 +386,21 @@ if __name__ == '__main__':
 
         max_hq_mismatches = info.get('max_hq_mismatches', 10)
         max_indels = info.get('max_indels', 2)
+        max_UMI_distance = info.get('max_UMI_distance', 1)
+        
+        show_progress = not args.no_progress
 
         input_fn = Path(info['cellranger_dir']) / 'outs' / 'possorted_genome_bam.bam'
         sorted_fn = (base_dir / 'data' / name / name).with_suffix('.bam')
-        collapsed_fn = sorted_fn.with_name(sorted_fn.stem + '_collapsed.bam')
 
-        max_read_length = sort_cellranger_bam(input_fn, sorted_fn)
+        if not sorted_fn.exists() or args.force_sort:
+            sort_cellranger_bam(input_fn, sorted_fn, show_progress=show_progress)
 
         form_collapsed_clusters(sorted_fn,
-                                collapsed_fn,
-                                max_read_length,
                                 max_hq_mismatches,
                                 max_indels,
+                                max_UMI_distance,
+                                show_progress=show_progress,
                                )
             
         #make_cluster_fastqs(collapsed_fn, target, gemgroup)
