@@ -347,6 +347,7 @@ def make_sample_sheet(group_dir, target, guides):
                 'target_info': target,
                 'project': 'screen',
                 'color': color,
+                'experiment_type': 'britt',
             }
 
     sample_sheet_fn = group_dir / 'sample_sheet.yaml'
