@@ -11,9 +11,8 @@ import pandas as pd
 
 from knockin import experiment
 from sequencing import fastq
-from sequencing.utilities import group_by, possibly_fn
+from sequencing.utilities import group_by
 import collapse
-
 
 class UMI_Outcome(object):
     def __init__(self, name, guide, category, subcategory, details):
@@ -72,6 +71,7 @@ def make_UMIs_table(UMIs):
         'category',
         'subcategory',
         'details',
+        'name',
     ]
     rows = []
     for UMI in UMIs:
