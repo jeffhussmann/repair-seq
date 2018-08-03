@@ -3,6 +3,7 @@
 import argparse
 import array
 import heapq
+import bisect
 import subprocess
 from collections import namedtuple, Counter
 import itertools
@@ -18,9 +19,9 @@ import pysam
 from sequencing import fastq, utilities, sw, sam
 from sequencing import annotation as annotation_module
 
-from collapse_cython import hq_mismatches_from_seed, hq_hamming_distance, hamming_distance_matrix, register_corrections
+from knockin.collapse_cython import hq_mismatches_from_seed, hq_hamming_distance, hamming_distance_matrix, register_corrections
 
-progress = tqdm.tqdm
+progress = tqdm.tqdm_notebook
 
 CELL_BC_TAG = 'CB'
 UMI_TAG = 'UR'
@@ -39,8 +40,31 @@ cluster_fields = [
 ]
 cluster_Annotation = annotation_module.Annotation_factory(cluster_fields)
 
-def call_consensus(als, max_read_length):
-    statistics = fastq.quality_and_complexity(als, max_read_length, alignments=True, min_q=30)
+read_fields = [
+    ('cell_BC', 's'),
+    ('UMI', 's'),
+    ('original_name', 's'),
+]
+read_Annotation = annotation_module.Annotation_factory(read_fields)
+
+UMI_fields = [
+    ('UMI', 's'),
+    ('original_name', 's'),
+]
+UMI_Annotation = annotation_module.Annotation_factory(UMI_fields)
+
+collapsed_UMI_fields = [
+    ('UMI', 's'),
+    ('cluster_id', '06d'),
+    ('num_reads', '06d'),
+]
+collapsed_UMI_Annotation = annotation_module.Annotation_factory(collapsed_UMI_fields)
+
+def call_consensus(reads, max_read_length, bam):
+    if max_read_length is None:
+        max_read_length = len(reads[0].query_sequence)
+
+    statistics = fastq.quality_and_complexity(reads, max_read_length, alignments=bam, min_q=30)
     shape = statistics['c'].shape
 
     rl_range = np.arange(max_read_length)
@@ -60,7 +84,7 @@ def call_consensus(als, max_read_length):
     
     best_stats = stat_tuples[rl_range, best_idxs]
 
-    majority = (best_stats['c'] / len(als)) > 0.5
+    majority = (best_stats['c'] / len(reads)) > 0.5
     at_least_one_hq = best_stats['c_above_min_q'] > 0
     
     qs = np.full(max_read_length, LOW_Q, dtype=int)
@@ -71,22 +95,32 @@ def call_consensus(als, max_read_length):
     best_idxs[ties] = utilities.base_to_index['N']
     qs[ties] = N_Q
 
-    consensus = pysam.AlignedSegment()
-    consensus.query_sequence = ''.join(utilities.base_order[i] for i in best_idxs)
-    consensus.query_qualities = array.array('B', qs)
-    consensus.set_tag(NUM_READS_TAG, len(als), 'i')
+    seq = ''.join(utilities.base_order[i] for i in best_idxs)
+    if bam:
+        consensus = pysam.AlignedSegment()
+        consensus.query_sequence = seq
+        consensus.query_qualities = array.array('B', qs)
+        consensus.set_tag(NUM_READS_TAG, len(reads), 'i')
+    else:
+        annotation = collapsed_UMI_Annotation(UMI='PH',
+                                              num_reads=len(reads),
+                                              cluster_id=0,
+                                             )
+        name = str(annotation)
+        qual = fastq.encode_sanger(qs)
+        consensus = fastq.Read(name, seq, qual)
 
     return consensus
 
-def within_radius_of_seed(seed, als, max_hq_mismatches):
+def within_radius_of_seed(seed, reads, max_hq_mismatches):
     seed_b = seed.encode()
-    ds = [hq_mismatches_from_seed(seed_b, al.query_sequence.encode(), al.query_qualities, 20)
-          for al in als]
+    ds = [hq_mismatches_from_seed(seed_b, read.query_sequence.encode(), read.query_qualities, 20)
+          for read in reads]
     
     near_seed = []
     remaining = []
     
-    for i, (d, al) in enumerate(zip(ds, als)):
+    for i, (d, al) in enumerate(zip(ds, reads)):
         if d <= max_hq_mismatches:
             near_seed.append(al)
         else:
@@ -94,40 +128,50 @@ def within_radius_of_seed(seed, als, max_hq_mismatches):
     
     return near_seed, remaining
 
-def propose_seed(als, max_read_length):
-    seq, count = Counter(al.query_sequence for al in als).most_common(1)[0]
+def propose_seed(reads, max_read_length, bam):
+    seqs = (read.query_sequence for read in reads)
+
+    seq, count = Counter(seqs).most_common(1)[0]
     
     if count > 1:
         seed = seq
     else:
-        seed = call_consensus(als, max_read_length).query_sequence
+        consensus = call_consensus(reads, max_read_length, bam)
+        seed = consensus.query_sequence
         
     return seed
 
-def make_singleton_cluster(al):
-    singleton = pysam.AlignedSegment()
-    singleton.query_sequence = al.query_sequence
-    singleton.query_qualities = al.query_qualities
-    singleton.set_tag(NUM_READS_TAG, 1, 'i')
+def make_singleton_cluster(read, bam):
+    if bam:
+        singleton = pysam.AlignedSegment()
+        singleton.query_sequence = read.query_sequence
+        singleton.query_qualities = read.query_qualities
+        singleton.set_tag(NUM_READS_TAG, 1, 'i')
+    else:
+        name = collapsed_UMI_Annotation(UMI='PH', num_reads=1, cluster_id=0)
+        singleton = fastq.Read(str(name), read.seq, read.qual)
+
     return singleton
 
-def form_clusters(als, max_read_length, max_hq_mismatches):
-    if len(als) == 0:
+def form_clusters(reads, max_read_length=None, max_hq_mismatches=0, bam=False):
+    if len(reads) == 0:
         clusters = []
     
-    elif len(als) == 1:
-        clusters = [make_singleton_cluster(al) for al in als]
+    elif len(reads) == 1:
+        clusters = [make_singleton_cluster(read, bam) for read in reads]
     
     else:
-        seed = propose_seed(als, max_read_length)
-        near_seed, remaining = within_radius_of_seed(seed, als, max_hq_mismatches)
+        seed = propose_seed(reads, max_read_length, bam)
+        near_seed, remaining = within_radius_of_seed(seed, reads, max_hq_mismatches)
         
         if len(near_seed) == 0:
             # didn't make progress, so give up
-            clusters = [make_singleton_cluster(al) for al in als]
+            clusters = [make_singleton_cluster(read, bam) for read in reads]
         
         else:
-            clusters = [call_consensus(near_seed, max_read_length)] + form_clusters(remaining, max_read_length, max_hq_mismatches)
+            consensus_near_seed = call_consensus(near_seed, max_read_length, bam)
+            all_others = form_clusters(remaining, max_read_length, max_hq_mismatches, bam)
+            clusters = [consensus_near_seed] + all_others
             
     return clusters
 
@@ -143,7 +187,13 @@ def align_clusters(first, second):
 
 cell_key = lambda al: al.get_tag(CELL_BC_TAG)
 UMI_key = lambda al: al.get_tag(UMI_TAG)
+
+def fastq_sort_key(read):
+    annotation = read_Annotation.from_identifier(read.name)
+    return annotation['cell_BC'], annotation['UMI']
+
 sort_key = lambda al: (al.get_tag(CELL_BC_TAG), al.get_tag(UMI_TAG))
+
 empty_header = pysam.AlignmentHeader()
 
 def sort_cellranger_bam(bam_fn, sorted_fn, show_progress=False):
@@ -200,6 +250,197 @@ def sort_cellranger_bam(bam_fn, sorted_fn, show_progress=False):
     }
     yaml_fn.write_text(yaml.dump(stats, default_flow_style=False))
 
+def sort_cellranger_bam_to_fastq(bam_fn, sorted_fn, gemgroup, show_progress=False):
+    Path(sorted_fn).parent.mkdir(exist_ok=True)
+
+    bam_fh = pysam.AlignmentFile(str(bam_fn))
+    total_reads_in = bam_fh.mapped + bam_fh.unmapped
+
+    als = bam_fh
+    if show_progress:
+        als = progress(als, total=total_reads_in, desc='Sorting')
+
+    relevant = (al for al in als if al.is_unmapped and al.has_tag(CELL_BC_TAG))
+
+    max_read_length = 0
+    total_reads_out = 0
+    
+    chunk_fns = []
+        
+    for i, chunk in enumerate(utilities.chunks(relevant, 5000000)):
+        suffix = '.{:06d}.fastq'.format(i)
+        chunk_fn = Path(sorted_fn).with_suffix(suffix)
+        sorted_chunk = sorted(chunk, key=sort_key)
+    
+        with chunk_fn.open('w') as fh:
+            for al in sorted_chunk:
+                max_read_length = max(max_read_length, al.query_length)
+
+                cell_BC = al.get_tag(CELL_BC_TAG)
+                cell_BC_gemgroup = '{}-{}'.format(cell_BC.split('-')[0], gemgroup)
+                name = read_Annotation(cell_BC=cell_BC_gemgroup,
+                                       UMI=al.get_tag(UMI_TAG),
+                                       original_name=al.query_name,
+                                      )
+                read = fastq.Read(name,
+                                  al.query_sequence,
+                                  fastq.encode_sanger(al.query_qualities),
+                                 )
+                fh.write(str(read))
+
+                total_reads_out += 1
+
+        chunk_fns.append(chunk_fn)
+
+    chunk_reads = [fastq.reads(fn) for fn in chunk_fns]
+    
+    with sorted_fn.open('w') as fh:
+        merged_chunks = heapq.merge(*chunk_reads, key=lambda r: r.name)
+
+        if show_progress:
+            merged_chunks = progress(merged_chunks, total=total_reads_out, desc='Merging sorted chunks')
+
+        for read in merged_chunks:
+            fh.write(str(read))
+
+    for fn in chunk_fns:
+        fn.unlink()
+    
+    yaml_fn = sorted_fn.with_suffix('.yaml')
+    stats = {
+        'total_reads': total_reads_out,
+        'max_read_length': max_read_length,
+    }
+    yaml_fn.write_text(yaml.dump(stats, default_flow_style=False))
+
+class UMISorter(object):
+    def __init__(self, output_prefix, chunk_size=200000):
+        self.base_fns = [(output_prefix.parent / '{}_{}'.format(output_prefix.stem, k)) for k in fastq.quartet_order]
+        self.chunk_size = chunk_size
+        self.chunk = []
+        self.chunk_number = 0
+        self.all_chunk_fns = []
+
+    def write(self, quartet):
+        self.chunk.append(quartet)
+        if len(self.chunk) == self.chunk_size:
+            self.finish_chunk()
+
+    def finish_chunk(self):
+        sorted_chunk = sorted(self.chunk, key=lambda q: q.I1.seq)
+        suffix = '.{:06d}.fastq'.format(self.chunk_number)
+        chunk_fns = [Path(str(base) + suffix) for base in self.base_fns]
+        chunk_fhs = [fn.open('w') for fn in chunk_fns]
+        for quartet in sorted_chunk:
+            new_name = UMI_Annotation(original_name=quartet.R1.name.split(' ')[0],
+                                      UMI=quartet.I1.seq,
+                                     )
+            for read, fh in zip(quartet, chunk_fhs):
+                read.name = new_name
+                fh.write(str(read))
+
+        for fh in chunk_fhs:
+            fh.close()
+
+        self.all_chunk_fns.append(chunk_fns)
+        self.chunk = []
+        self.chunk_number += 1
+
+    def close(self):
+        if self.chunk:
+            self.finish_chunk()
+
+        chunk_quartets = [fastq.read_quartets(fns) for fns in self.all_chunk_fns]
+        
+        sorted_fns = [Path(str(base) + '.fastq') for base in self.base_fns]
+        sorted_fhs = [fn.open('w') for fn in sorted_fns]
+
+        merged_chunks = heapq.merge(*chunk_quartets, key=lambda q: q.I1.seq)
+
+        for quartet in merged_chunks:
+            for read, fh in zip(quartet, sorted_fhs):
+                fh.write(str(read))
+
+        for fh in sorted_fhs:
+            fh.close()
+
+        for chunk_fns in self.all_chunk_fns:
+            for fn in chunk_fns:
+                fn.unlink()
+
+def index_sorted_fastq(sorted_fastq_fn, show_progress=False):
+    reads_per_landmark = 100000
+    next_landmark = 0
+    
+    fh = sorted_fastq_fn.open()
+    
+    def lines():
+        line = fh.readline()
+        while line:
+            yield line
+            line = fh.readline()
+    
+    landmarks = []
+    
+    before_pos = fh.tell()
+    
+    reads = fastq.reads(lines())
+    
+    if show_progress:
+        yaml_fn = sorted_fastq_fn.with_suffix('.yaml')
+        stats = yaml.load(yaml_fn.read_text())
+        total_reads = stats['total_reads']
+        reads = progress(reads, total=total_reads, desc='Indexing')
+    
+    grouped = utilities.group_by(enumerate(reads), key=lambda i_and_read: fastq_sort_key(i_and_read[1]))
+    
+    for (cell_BC, UMI), group in grouped:
+        i, n = group[0]
+        if i >= next_landmark:           
+            landmark = (cell_BC, UMI, before_pos)
+            landmarks.append(landmark)
+            while next_landmark <= i:
+                next_landmark += reads_per_landmark
+            
+        before_pos = fh.tell()
+    
+    index_fn = sorted_fastq_fn.with_suffix('.index')
+    pd.DataFrame(landmarks).to_csv(index_fn, header=False, index=False, sep='\t')
+    
+def load_index(sorted_fastq_fn):
+    index_fn = sorted_fastq_fn.with_suffix('.index')
+    index_df = pd.read_table(index_fn, header=None)
+    landmarks = index_df.to_records(index=False)
+    return landmarks
+    
+def find_closest_landmark_before(landmarks, cell_BC, UMI):
+    cell_BC_UMIs = [(cell_BC, UMI) for cell_BC, UMI, offset in landmarks]
+    # bisect logic here taken directly from bisect docs to find rightmost value less than or equal to
+    i = bisect.bisect_right(cell_BC_UMIs, (cell_BC, UMI))
+    if i:
+        offset = landmarks[i - 1][-1]
+    else:
+        raise ValueError
+    return offset
+
+def get_cell_BC_UMI_reads(sorted_fastq_fn, cell_BC, UMI):
+    landmarks = load_index(sorted_fastq_fn)
+    offset = find_closest_landmark_before(landmarks, cell_BC, UMI)
+    fh = sorted_fastq_fn.open()
+    fh.seek(offset)
+    
+    relevant_reads = []
+    
+    target = (cell_BC, UMI)
+    for read in fastq.reads(fh):
+        key = fastq_sort_key(read)
+        if key == target:
+            relevant_reads.append(read)
+        elif key > target:
+            break
+   
+    return relevant_reads
+
 def error_correct_UMIs(cell_group, max_UMI_distance=1):
     # sort UMIs in descending order by number of occurrences.
     UMI_counts = Counter(al.get_tag(UMI_TAG) for al in cell_group)
@@ -228,12 +469,11 @@ def merge_annotated_clusters(biggest, other):
     return biggest
 
 def form_collapsed_clusters(sorted_fn,
+                            collapsed_fn,
                             max_hq_mismatches,
                             max_indels,
                             max_UMI_distance,
                             show_progress=True):
-
-    collapsed_fn = sorted_fn.with_name(sorted_fn.stem + '_collapsed.bam')
 
     yaml_fn = sorted_fn.with_suffix('.yaml')
     stats = yaml.load(yaml_fn.read_text())
@@ -286,7 +526,39 @@ def form_collapsed_clusters(sorted_fn,
                     cluster.query_name = str(annotation)
                     collapsed_fh.write(cluster)
 
-def split_into_guide_fastqs(collapsed_fn, cell_BC_to_guide, gemgroup, group_dir):
+def form_clusters_pooled(sorted_fn,
+                         collapsed_fn,
+                         max_hq_mismatches=0,
+                        ):
+
+    UMI_key = lambda r: UMI_Annotation.from_identifier(r.name)['UMI']
+    num_reads_key = lambda r: collapsed_UMI_Annotation.from_identifier(r.name)['num_reads']
+
+    sorted_reads = fastq.reads(sorted_fn)
+
+    with Path(collapsed_fn).open('w') as collapsed_fh:
+        groups = utilities.group_by(sorted_reads, UMI_key)
+        groups = progress(groups)
+        for UMI, UMI_group in groups:
+            clusters = form_clusters(UMI_group, max_read_length=None, max_hq_mismatches=max_hq_mismatches)
+            clusters = sorted(clusters, key=num_reads_key, reverse=True)
+
+            for i, cluster in enumerate(clusters):
+                annotation = collapsed_UMI_Annotation.from_identifier(cluster.name)
+                annotation['UMI'] = UMI
+                annotation['cluster_id'] = i
+
+                cluster.name = str(annotation)
+
+                collapsed_fh.write(str(cluster))
+
+def make_cluster_fastqs(collapsed_fn, target, gemgroup, notebook=True):
+    group_dir = Path(collapsed_fn).parent
+    cell_identities = pd.read_csv('/home/jah/projects/britt/data/cell_identities.csv', index_col='cell_barcode') 
+    guides = split_into_guide_fastqs(collapsed_fn, cell_identities, gemgroup, group_dir)
+    make_sample_sheet(group_dir, target, guides)
+
+def split_into_guide_fastqs(collapsed_fn, cell_identities, gemgroup, group_dir):
     clusters = pysam.AlignmentFile(str(collapsed_fn), check_sq=False)
 
     guide_fhs = {}
@@ -294,12 +566,20 @@ def split_into_guide_fastqs(collapsed_fn, cell_BC_to_guide, gemgroup, group_dir)
     for cluster in clusters:
         cell_BC = cluster.get_tag(CELL_BC_TAG)
         cell_BC = '{0}-{1}'.format(cell_BC.split('-')[0], gemgroup)
-        guide = cell_BC_to_guide.get(cell_BC, 'unknown')
-        if guide == '*':
-            guide = 'unknown'
+        if cell_BC not in cell_identities.index:
+            guide = 'ambiguous'
+        else:
+            row = cell_identities.loc[cell_BC]
+            if (row['guide_identity'] == '*' or 
+                row['number_of_cells'] != 1 or
+                not row['good_coverage']
+               ):
+                guide = 'ambiguous'
+            else:
+                guide = row['guide_identity']
 
         if guide not in guide_fhs:
-            guide_fn = (Path(group_dir) / guide).with_suffix('.fastq')
+            guide_fn = Path(group_dir) / (guide + '.fastq')
             guide_fhs[guide] = guide_fn.open('w')
 
         read = sam.mapping_to_Read(cluster)
@@ -335,18 +615,17 @@ def make_sample_sheet(group_dir, target, guides):
     sample_sheet_fn = group_dir / 'sample_sheet.yaml'
     sample_sheet_fn.write_text(yaml.dump(sample_sheet, default_flow_style=False))
 
-def make_cluster_fastqs(collapsed_fn, target, gemgroup, notebook=True):
-    group_dir = Path(collapsed_fn).parent
-    df = pd.read_csv('/home/jah/projects/britt/data/cell_identities.csv', index_col='cell_barcode') 
-    cell_BC_to_guide = df['guide_identity']
-    guides = split_into_guide_fastqs(collapsed_fn, cell_BC_to_guide, gemgroup, group_dir)
-    make_sample_sheet(group_dir, target, guides)
+def load_sample_sheet(base_dir):
+    sample_sheet_fn = Path(base_dir) / 'data' / 'sample_sheet.yaml'
+    sample_sheet = yaml.load(sample_sheet_fn.read_text())
+    return sample_sheet
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--base_dir', required=True)
     parser.add_argument('--force_sort', action='store_true')
+    parser.add_argument('--force_collapse', action='store_true')
     parser.add_argument('--no_progress', action='store_true')
 
     mode_group = parser.add_mutually_exclusive_group(required=True)
@@ -355,9 +634,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    base_dir = Path(args.base_dir)
-    sample_sheet_fn = base_dir / 'data' / 'sample_sheet.yaml'
-    sample_sheet = yaml.load(sample_sheet_fn.read_text())
+    sample_sheet = load_sample_sheet(args.base_dir)
 
     if args.parallel is not None:
         max_procs = args.parallel
@@ -384,6 +661,7 @@ if __name__ == '__main__':
     elif args.collapse is not None:
         name = args.collapse
         info = sample_sheet[name]
+        gemgroup = info.get('gemgroup', 1)
 
         max_hq_mismatches = info.get('max_hq_mismatches', 10)
         max_indels = info.get('max_indels', 2)
@@ -392,16 +670,25 @@ if __name__ == '__main__':
         show_progress = not args.no_progress
 
         input_fn = Path(info['cellranger_dir']) / 'outs' / 'possorted_genome_bam.bam'
-        sorted_fn = (base_dir / 'data' / name / name).with_suffix('.bam')
+        sorted_fn = (base_dir / 'data' / name / name).with_suffix('.fastq')
+        collapsed_fn = sorted_fn.with_name(sorted_fn.stem + '_collapsed.bam')
 
         if not sorted_fn.exists() or args.force_sort:
-            sort_cellranger_bam(input_fn, sorted_fn, show_progress=show_progress)
+            sort_cellranger_bam_to_fastq(input_fn,
+                                         sorted_fn,
+                                         gemgroup,
+                                         show_progress=show_progress,
+                                        )
 
-        form_collapsed_clusters(sorted_fn,
-                                max_hq_mismatches,
-                                max_indels,
-                                max_UMI_distance,
-                                show_progress=show_progress,
-                               )
+        index_sorted_fastq(sorted_fn, show_progress=show_progress)
+
+        #if not collapsed_fn.exists() or args.force_collapse:
+        #    form_collapsed_clusters(sorted_fn,
+        #                            collapsed_fn,
+        #                            max_hq_mismatches,
+        #                            max_indels,
+        #                            max_UMI_distance,
+        #                            show_progress=show_progress,
+        #                           )
             
-        #make_cluster_fastqs(collapsed_fn, target, gemgroup)
+        #make_cluster_fastqs(collapsed_fn, info['target'], info['gemgroup'])
