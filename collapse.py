@@ -315,13 +315,13 @@ def sort_cellranger_bam_to_fastq(bam_fn, sorted_fn, gemgroup, show_progress=Fals
 
 class UMISorter(object):
     def __init__(self, output_prefix, chunk_size=200000):
-        self.base_fns = [(output_prefix.parent / '{}_{}'.format(output_prefix.stem, k)) for k in fastq.quartet_order]
+        self.base_fns = [str(output_prefix) + '_{}'.format(which) for which in fastq.quartet_order]
         self.chunk_size = chunk_size
         self.chunk = []
         self.chunk_number = 0
         self.all_chunk_fns = []
 
-    def write(self, quartet):
+    def add(self, quartet):
         self.chunk.append(quartet)
         if len(self.chunk) == self.chunk_size:
             self.finish_chunk()
@@ -350,23 +350,31 @@ class UMISorter(object):
         if self.chunk:
             self.finish_chunk()
 
-        chunk_quartets = [fastq.read_quartets(fns) for fns in self.all_chunk_fns]
-        
-        sorted_fns = [Path(str(base) + '.fastq') for base in self.base_fns]
-        sorted_fhs = [fn.open('w') for fn in sorted_fns]
+        if len(self.all_chunk_fns) == 1:
+            # Only one chunk was written, so just rename it to the final.
+            chunk_fns = self.all_chunk_fns[0]
+            sorted_fns = [Path(str(base) + '.fastq') for base in self.base_fns]
+            for chunk_fn, sorted_fn in zip(chunk_fns, sorted_fns):
+                chunk_fn.rename(sorted_fn)
 
-        merged_chunks = heapq.merge(*chunk_quartets, key=lambda q: q.I1.seq)
+        elif len(self.all_chunk_fns) > 1:
+            chunk_quartets = [fastq.read_quartets(fns) for fns in self.all_chunk_fns]
+            
+            sorted_fns = [Path(str(base) + '.fastq') for base in self.base_fns]
+            sorted_fhs = [fn.open('w') for fn in sorted_fns]
 
-        for quartet in merged_chunks:
-            for read, fh in zip(quartet, sorted_fhs):
-                fh.write(str(read))
+            merged_chunks = heapq.merge(*chunk_quartets, key=lambda q: q.I1.seq)
 
-        for fh in sorted_fhs:
-            fh.close()
+            for quartet in merged_chunks:
+                for read, fh in zip(quartet, sorted_fhs):
+                    fh.write(str(read))
 
-        for chunk_fns in self.all_chunk_fns:
-            for fn in chunk_fns:
-                fn.unlink()
+            for fh in sorted_fhs:
+                fh.close()
+
+            for chunk_fns in self.all_chunk_fns:
+                for fn in chunk_fns:
+                    fn.unlink()
 
 def index_sorted_fastq(sorted_fastq_fn, show_progress=False):
     reads_per_landmark = 100000
