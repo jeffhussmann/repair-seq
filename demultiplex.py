@@ -2,16 +2,18 @@
 
 import argparse
 import subprocess
+import heapq
 from pathlib import Path
 from itertools import chain, islice
-from collections import Counter
+from collections import Counter, defaultdict
 
 import pysam
 import pandas as pd
+import numpy as np
 import yaml
 import tqdm; progress = tqdm.tqdm
 
-from sequencing import mapping_tools, fastq
+from sequencing import mapping_tools, fastq, sam
 
 import collapse
 
@@ -25,15 +27,15 @@ class FastqQuartetSplitter(object):
     
     def close(self):
         if self.chunk_fhs is not None:
-            for fh in self.chunk_fhs:
+            for fh in self.chunk_fhs.values():
                 fh.close()
                 
     def start_next_chunk(self):
         self.close()
   
         template = str(self.base_path)  + '/{}.{:05d}.fastq'
-        fns = [template.format(which, self.next_chunk_number) for which in fastq.quartet_order]
-        self.chunk_fhs = [open(fn, 'w') for fn in fns]
+        fns = {which: template.format(which, self.next_chunk_number) for which in ['R1', 'R2']}
+        self.chunk_fhs = {which: open(fn, 'w') for which, fn in fns.items()}
         
         self.next_chunk_number += 1
         
@@ -41,10 +43,63 @@ class FastqQuartetSplitter(object):
         if self.next_read_number % self.reads_per_chunk == 0:
             self.start_next_chunk()
             
-        for read, fh in zip(quartet, self.chunk_fhs):
-            fh.write(str(read))
-            
+        new_name = collapse.UMI_Annotation(original_name=quartet.R1.name.split(' ')[0],
+                                           UMI=quartet.I1.seq,
+                                          )
+        
+        for which in ['R1', 'R2']:
+            read = getattr(quartet, which)
+            read.name = new_name
+            self.chunk_fhs[which].write(str(read))
+
         self.next_read_number += 1
+
+class UMISorter(object):
+    def __init__(self, output_prefix, chunk_size=50000):
+        self.sorted_fn = Path(str(output_prefix) + '_R2.fastq')
+        self.chunk_size = chunk_size
+        self.chunk = []
+        self.chunk_number = 0
+        self.chunk_fns = []
+
+    def add(self, read):
+        self.chunk.append(read)
+
+        if len(self.chunk) == self.chunk_size:
+            self.finish_chunk()
+
+    def finish_chunk(self):
+        sorted_chunk = sorted(self.chunk, key=lambda r: r.name)
+
+        suffix = '.{:06d}.fastq'.format(self.chunk_number)
+        chunk_fn = self.sorted_fn.with_suffix(suffix)
+
+        with chunk_fn.open('w') as chunk_fh:
+            for read in sorted_chunk:
+                chunk_fh.write(str(read))
+
+        self.chunk_fns.append(chunk_fn)
+        self.chunk = []
+        self.chunk_number += 1
+
+    def close(self):
+        if len(self.chunk_fns) == 1 and len(self.chunk) == 0:
+            # Exactly one full chunk was written, so just rename it.
+            self.chunk_fns[0].rename(self.sorted_fn)
+
+        else:
+            last_chunk = sorted(self.chunk, key=lambda r: r.name)
+
+            previous_chunks = [fastq.reads(fn) for fn in self.chunk_fns]
+            
+            with self.sorted_fn.open('w') as sorted_fh:
+                merged_reads = heapq.merge(last_chunk, *previous_chunks, key=lambda r: r.name)
+
+                for read in merged_reads:
+                    sorted_fh.write(str(read))
+
+            for chunk_fn in self.chunk_fns:
+                chunk_fn.unlink()
 
 def hamming_distance(first, second):
     return sum(1 for f, s in zip(first, second) if f != s)
@@ -66,7 +121,6 @@ if __name__ == '__main__':
     sample_name = sample_dir.parts[-1]
 
     if args.demux_samples:
-        raise ValueError
         sample_counts = Counter()
 
         sample_sheet = yaml.load((sample_dir / 'sample_sheet.yaml').read_text())
@@ -75,7 +129,7 @@ if __name__ == '__main__':
 
         splitters = {}
 
-        to_skip = set(sample_sheet['samples_to_skip'])
+        to_skip = set(sample_sheet.get('samples_to_skip', []))
 
         def get_sample_input_dir(sample):
             return sample_dir.parent / '{}_{}'.format(group_name, sample) / 'input'
@@ -111,7 +165,7 @@ if __name__ == '__main__':
                 stats = {
                     'num_reads': sample_counts[sample],
                 }
-                stats_fn = get_sample_input_dir / 'stats.yaml'
+                stats_fn = get_sample_input_dir(sample) / 'stats.yaml'
                 stats_fn.write_text(yaml.dump(stats, default_flow_style=False))
 
         pd.Series(sample_counts).to_csv(sample_dir / 'sample_counts.txt', sep='\t')
@@ -121,13 +175,10 @@ if __name__ == '__main__':
         R1_fns = sorted((sample_dir / 'input').glob('R1.*.fastq'))
         chunks = [fn.suffixes[0].strip('.') for fn in R1_fns]
 
-        subset_chunks = ['{:05d}'.format(i) for i in range(1)]
-        chunks = [c for c in chunks if c in subset_chunks]
-
         parallel_command = [
             'parallel',
             '-n', '1', 
-            '--verbose',
+            '--bar',
             '--max-procs', max_procs,
             './demultiplex.py',
             '--sample_dir', str(sample_dir),
@@ -146,50 +197,95 @@ if __name__ == '__main__':
         output_prefix = output_dir / '{}.'.format(chunk)
         mapping_tools.map_STAR(R1_fn, STAR_index, output_prefix,
                                sort=False,
-                               min_fraction_matching=0.9,
+                               mode='guide_alignment',
                                include_unmapped=True,
                                )
 
     elif args.demux_guides:
         stats = yaml.load((sample_dir / 'input' / 'stats.yaml').read_text())
 
+        bad_guides_fn = sample_dir / 'bad_guides.bam'
+
         guide_dir = sample_dir / 'by_guide'
         guide_dir.mkdir(exist_ok=True)
 
-        def get_fastq_fns(which):
-            pattern = '{}*.fastq'.format(which)
-            return sorted((sample_dir / 'input').glob(pattern))
-
-        fastq_fns = [get_fastq_fns(which) for which in fastq.quartet_order]
+        R2_fns = sorted((sample_dir / 'input').glob('R2*.fastq'))
         bam_fns = sorted((sample_dir / 'guide_mapping').glob('*.bam'))
 
-        fn_quartets = (fastq.read_quartets(fns) for fns in zip(*fastq_fns))
-        quartets = chain.from_iterable(fn_quartets)
+        with pysam.AlignmentFile(str(bam_fns[0])) as fh:
+            header = fh.header
+
+        fn_reads = (fastq.reads(fn) for fn in R2_fns)
+        reads = chain.from_iterable(fn_reads)
 
         alignment_files = (pysam.AlignmentFile(str(fn)) for fn in bam_fns)
         mappings = chain.from_iterable(alignment_files)
-        primary_mappings = (al for al in mappings if not al.is_secondary)
+        mapping_groups = sam.grouped_by_name(mappings)
 
         sorters = {}
+
+        read_length = 45
+
+        edit_distance = defaultdict(lambda: np.zeros(read_length + 1, int))
+        indels = defaultdict(lambda: np.zeros(read_length + 1, int))
+
+        MDs = defaultdict(Counter)
+
+        def edit_info(al):
+            if al.is_unmapped or al.is_reverse:
+                return (read_length, read_length)
+            else:
+                return (sam.total_indel_lengths(al), al.get_tag('NM'))
+
         guide_counts = Counter()
 
-        for al, quartet in progress(zip(primary_mappings, quartets), total=stats['num_reads']):
-            if al.query_name != quartet.I1.name.split(' ')[0]:
-                raise ValueError
+        bad_sorter = sam.AlignmentSorter(bad_guides_fn, header)
+        with bad_sorter:
+            for (query_name, als), read in progress(zip(mapping_groups, reads), total=stats['num_reads']):
+                # Record stats on all alignments for diagnostics.
+                for al in als:
+                    if not al.is_unmapped:
+                        num_indels, NM = edit_info(al)
+                        guide = al.reference_name
+                        edit_distance[guide][NM] += 1
+                        indels[guide][num_indels] += 1
+
+                        if num_indels == 0 and NM == 1:
+                            MDs[guide][al.get_tag('MD')] += 1
+
+
+                edit_tuples = [(al, edit_info(al)) for al in als]
+                min_edit = min(info for al, info in edit_tuples)
                 
-            if al.is_unmapped:
-                guide = 'unknown'
-            else:
-                guide = al.reference_name
+                min_edit_als = [al for al, info in edit_tuples if info == min_edit]
+                    
+                protospacer = al.query_sequence
+                protospacer_qual = fastq.sanitize_qual(fastq.encode_sanger(al.query_qualities))
 
-            if guide not in sorters:
-                sorters[guide] = collapse.UMISorter(guide_dir / guide)
-
-            sorters[guide].write(quartet)
-
-            guide_counts[guide] += 1
-
+                old_annotation = collapse.UMI_Annotation.from_identifier(read.name)
+                new_annotation = collapse.UMI_protospacer_Annotation(protospacer=protospacer,
+                                                                    protospacer_qual=protospacer_qual,
+                                                                    **old_annotation)
+                read.name = str(new_annotation)
+                
+                min_indels, min_NM = min_edit
+                if min_indels == 0 and min_NM <= 1 and len(min_edit_als) == 1:
+                    al = min_edit_als[0]
+                    guide = al.reference_name
+                else:
+                    guide = 'unknown'
+                    for al in als:
+                        bad_sorter.write(al)
+            
+                if guide not in sorters:
+                    sorters[guide] = UMISorter(guide_dir / guide)
+                
+                sorters[guide].add(read)
+                guide_counts[guide] += 1
+        
         for sorter in progress(sorters.values()):
             sorter.close()
-
-        pd.Series(guide_counts).to_csv(sample_dir / 'guide_counts.txt', sep='\t')
+            
+        pd.DataFrame(indels).T.to_csv(sample_dir / 'indel_distributions.txt')
+        pd.DataFrame(edit_distance).T.to_csv(sample_dir / 'edit_distance_distributions.txt')
+        pd.Series(guide_counts).to_csv(sample_dir / 'guide_counts.txt')

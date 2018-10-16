@@ -2,7 +2,6 @@
 
 import argparse
 import array
-import heapq
 import bisect
 import subprocess
 from collections import namedtuple, Counter
@@ -52,6 +51,14 @@ UMI_fields = [
     ('original_name', 's'),
 ]
 UMI_Annotation = annotation_module.Annotation_factory(UMI_fields)
+
+UMI_protospacer_fields = [
+    ('UMI', 's'),
+    ('protospacer', 's'),
+    ('protospacer_qual', 's'),
+    ('original_name', 's'),
+]
+UMI_protospacer_Annotation = annotation_module.Annotation_factory(UMI_protospacer_fields)
 
 collapsed_UMI_fields = [
     ('UMI', 's'),
@@ -312,69 +319,6 @@ def sort_cellranger_bam_to_fastq(bam_fn, sorted_fn, gemgroup, show_progress=Fals
         'max_read_length': max_read_length,
     }
     yaml_fn.write_text(yaml.dump(stats, default_flow_style=False))
-
-class UMISorter(object):
-    def __init__(self, output_prefix, chunk_size=200000):
-        self.base_fns = [str(output_prefix) + '_{}'.format(which) for which in fastq.quartet_order]
-        self.chunk_size = chunk_size
-        self.chunk = []
-        self.chunk_number = 0
-        self.all_chunk_fns = []
-
-    def add(self, quartet):
-        self.chunk.append(quartet)
-        if len(self.chunk) == self.chunk_size:
-            self.finish_chunk()
-
-    def finish_chunk(self):
-        sorted_chunk = sorted(self.chunk, key=lambda q: q.I1.seq)
-        suffix = '.{:06d}.fastq'.format(self.chunk_number)
-        chunk_fns = [Path(str(base) + suffix) for base in self.base_fns]
-        chunk_fhs = [fn.open('w') for fn in chunk_fns]
-        for quartet in sorted_chunk:
-            new_name = UMI_Annotation(original_name=quartet.R1.name.split(' ')[0],
-                                      UMI=quartet.I1.seq,
-                                     )
-            for read, fh in zip(quartet, chunk_fhs):
-                read.name = new_name
-                fh.write(str(read))
-
-        for fh in chunk_fhs:
-            fh.close()
-
-        self.all_chunk_fns.append(chunk_fns)
-        self.chunk = []
-        self.chunk_number += 1
-
-    def close(self):
-        if self.chunk:
-            self.finish_chunk()
-
-        if len(self.all_chunk_fns) == 1:
-            # Only one chunk was written, so just rename it to the final.
-            chunk_fns = self.all_chunk_fns[0]
-            sorted_fns = [Path(str(base) + '.fastq') for base in self.base_fns]
-            for chunk_fn, sorted_fn in zip(chunk_fns, sorted_fns):
-                chunk_fn.rename(sorted_fn)
-
-        elif len(self.all_chunk_fns) > 1:
-            chunk_quartets = [fastq.read_quartets(fns) for fns in self.all_chunk_fns]
-            
-            sorted_fns = [Path(str(base) + '.fastq') for base in self.base_fns]
-            sorted_fhs = [fn.open('w') for fn in sorted_fns]
-
-            merged_chunks = heapq.merge(*chunk_quartets, key=lambda q: q.I1.seq)
-
-            for quartet in merged_chunks:
-                for read, fh in zip(quartet, sorted_fhs):
-                    fh.write(str(read))
-
-            for fh in sorted_fhs:
-                fh.close()
-
-            for chunk_fns in self.all_chunk_fns:
-                for fn in chunk_fns:
-                    fn.unlink()
 
 def index_sorted_fastq(sorted_fastq_fn, show_progress=False):
     reads_per_landmark = 100000
