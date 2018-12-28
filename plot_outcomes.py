@@ -1,6 +1,7 @@
 from itertools import starmap
 
 import matplotlib.pyplot as plt
+import matplotlib.gridspec
 import pandas as pd
 import numpy as np
 import scipy.stats
@@ -9,12 +10,12 @@ import h5py
 import bokeh.palettes
 from matplotlib.patches import ConnectionPatch
 
-from collections import Counter
-from knockin.target_info import degenerate_indel_from_string
+from collections import Counter, defaultdict
+from knockin.target_info import degenerate_indel_from_string, SNVs
 from knockin import quantiles as quantiles_module
-from sequencing import Visualize
+from sequencing import Visualize, utilities
 
-def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=None, window=70, ax=None):
+def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=None, window=70, ax=None, flip_if_reverse=True):
     outcome_order = outcome_order[:num_outcomes]
     num_outcomes = len(outcome_order)
     if ax is None:
@@ -30,8 +31,18 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
     ax.plot([0.5, 0.5], [-0.5, num_outcomes - 0.5], color='black', linestyle='--', alpha=0.3)
     
     offset = target_info.cut_after
-    seq = target_info.target_sequence[offset + window_left:offset + window_right + 1]
     guide = target_info.features[target_info.target, target_info.sgRNA]
+    if flip_if_reverse and guide.strand == '-':
+        flip = True
+        transform_seq = utilities.complement
+    else:
+        flip = False
+        transform_seq = utilities.identity
+    
+    if flip:
+        window_left, window_right = -window_right, -window_left
+
+    seq = target_info.target_sequence[offset + window_left:offset + window_right + 1]
 
     def draw_rect(x0, x1, y0, y1, alpha, color='black'):
         path = [
@@ -67,7 +78,7 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
             if len(starts) > 1:
                 for x, b in zip(range(window_left, window_right + 1), seq):
                     if (starts[0] <= x < starts[-1]) or (starts[0] + deletion.length <= x < starts[-1] + deletion.length):
-                        ax.annotate(b,
+                        ax.annotate(transform_seq(b),
                                     xy=(x, y),
                                     xycoords='data', 
                                     ha='center',
@@ -99,7 +110,7 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                     center = start + 0.5
                     left_edge = center - (len(bs) * 0.5 * width)
                     for x_offset, b in enumerate(bs):
-                        ax.annotate(b,
+                        ax.annotate(transform_seq(b),
                                     xy=(left_edge + (x_offset * width) + width / 2, y + (wt_height / 2)),
                                     xycoords='data',
                                     ha='center',
@@ -110,35 +121,51 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                                 )
                 
         elif category == 'wild type':
-            guide_start = guide.start - 0.5 - offset
-            guide_end = guide.end + 0.5 - offset
-            
-            draw_rect(guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='blue')
-    
-            if guide.strand == '+':
-                PAM_start = guide_end
-                draw_rect(window_left - 0.5, guide_start, y - wt_height / 2, y + wt_height / 2, block_alpha)
-                draw_rect(PAM_start + 3, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+            if subcategory == 'wild type':
+                guide_start = guide.start - 0.5 - offset
+                guide_end = guide.end + 0.5 - offset
+                
+                draw_rect(guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='blue')
+        
+                if guide.strand == '+':
+                    PAM_start = guide_end
+                    draw_rect(window_left - 0.5, guide_start, y - wt_height / 2, y + wt_height / 2, block_alpha)
+                    draw_rect(PAM_start + 3, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+                else:
+                    PAM_start = guide_start - 3
+                    draw_rect(window_left - 0.5, PAM_start, y - wt_height / 2, y + wt_height / 2, block_alpha)
+                    draw_rect(guide_end, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+
+                draw_rect(PAM_start, PAM_start + 3, y - wt_height / 2, y + wt_height / 2, 0.3, color='green')
+
+                for x, b in zip(range(window_left, window_right + 1), seq):
+                    ax.annotate(transform_seq(b),
+                                xy=(x, y),
+                                xycoords='data', 
+                                ha='center',
+                                va='center',
+                                size=text_size,
+                            )
             else:
-                PAM_start = guide_start - 3
-                draw_rect(window_left - 0.5, PAM_start, y - wt_height / 2, y + wt_height / 2, block_alpha)
-                draw_rect(guide_end, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
-
-            draw_rect(PAM_start, PAM_start + 3, y - wt_height / 2, y + wt_height / 2, 0.3, color='green')
-
-            for x, b in zip(range(window_left, window_right + 1), seq):
-                ax.annotate(b,
-                            xy=(x, y),
-                            xycoords='data', 
-                            ha='center',
-                            va='center',
-                            size=text_size,
-                           )
+                draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+                snvs = SNVs.from_string(details) 
+                for snv in snvs:
+                    x = snv.position - offset
+                    if window_left <= x <= window_right:
+                        ax.annotate(transform_seq(snv.basecall),
+                                    xy=(x, y),
+                                    xycoords='data', 
+                                    ha='center',
+                                    va='center',
+                                    size=text_size,
+                                    color=Visualize.igv_colors[snv.basecall.upper()],
+                                    weight='bold',
+                                )
                 
         elif category == 'donor':
             for ((strand, position), ref_base), read_base in zip(target_info.fingerprints[target_info.target], details):
                 if ref_base != read_base and read_base != '_':
-                    ax.annotate(read_base,
+                    ax.annotate(transform_seq(read_base),
                                 xy=(position - offset, y),
                                 xycoords='data', 
                                 ha='center',
@@ -165,7 +192,12 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                         size=text_size,
                         )
                 
-    ax.set_xlim(window_left - 0.5, window_right + 0.5)
+    x_lims = [window_left - 0.5, window_right + 0.5]
+    if flip:
+        ax.set_xlim(*x_lims[::-1])
+    else:
+        ax.set_xlim(*x_lims)
+
     ax.set_ylim(-0.5, num_outcomes - 0.5)
     ax.set_frame_on(False)
 
@@ -186,121 +218,170 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
     
     return fig
 
-def add_frequencies(fig, ax, pool, outcome_order):
+def add_frequencies(fig, ax, pool, outcome_order, text_only=False):
     ax_p = ax.get_position()
     
     width = ax_p.width * 0.1
     offset = ax_p.width * 0.02
 
-    freq_ax = fig.add_axes((ax_p.x1 + offset, ax_p.y0, width, ax_p.height), sharey=ax)
-    log_ax = fig.add_axes((ax_p.x1 + 2 * offset + width, ax_p.y0, width, ax_p.height), sharey=ax)
-    cumulative_ax = fig.add_axes((ax_p.x1 + 3 * offset + 2 * width, ax_p.y0, width, ax_p.height), sharey=ax)
-    
     freqs = pool.non_targeting_fractions('perfect').loc[outcome_order]
+    counts = pool.non_targeting_counts('perfect').loc[outcome_order]
+
     ys = np.arange(len(outcome_order) - 1, -1, -1)
     
-    freq_ax.plot(freqs, ys, 'o-', markersize=2, color='black')
-    log_ax.plot(np.log10(freqs), ys, 'o-', markersize=2, color='black')
-    cumulative_ax.plot(freqs.cumsum(), ys, 'o-', markersize=2, color='black')
-    
-    freq_ax.set_xlim(0, max(freqs) * 1.05)
-    cumulative_ax.set_xlim(0, 1)
-    cumulative_ax.set_xticks([0, 0.25, 0.5, 0.75, 1])
-    
-    for p_ax in [freq_ax, log_ax, cumulative_ax]:
-        #p_ax.set_yticks([])
-        p_ax.xaxis.tick_top()
-        p_ax.spines['left'].set_alpha(0.3)
-        p_ax.spines['right'].set_alpha(0.3)
-        p_ax.tick_params(labelsize=6)
-        p_ax.grid(axis='x', alpha=0.3)
-        
-        p_ax.spines['bottom'].set_visible(False)
-        
-        p_ax.xaxis.set_label_position('top')
-    
-    freq_ax.set_xlabel('frequency', size=8)
-    log_ax.set_xlabel('frequency (log10)', size=8)
-    cumulative_ax.set_xlabel('cumulative frequency', size=8)
-    
-    ax.set_ylim(-0.5, len(outcome_order) - 0.5)
+    for y, freq, count in zip(ys, freqs, counts):
+        ax.annotate('{:> 5.2%} {:>8s}'.format(freq, '({:,})'.format(count)),
+                    xy=(1, y),
+                    xycoords=('axes fraction', 'data'),
+                    xytext=(6, 0),
+                    textcoords=('offset points'),
+                    family='monospace',
+                    ha='left',
+                    va='center',
+                   )
 
-def plot_guide_specific_frequencies(outcome, pool,
+    if not text_only:
+        freq_ax = fig.add_axes((ax_p.x1 + 6 * offset, ax_p.y0, width, ax_p.height), sharey=ax)
+        freq_ax_p = freq_ax.get_position()
+        log_ax = fig.add_axes((freq_ax_p.x1 + offset, ax_p.y0, width, ax_p.height), sharey=ax)
+        log_ax_p = log_ax.get_position()
+        cumulative_ax = fig.add_axes((log_ax_p.x1 + offset, ax_p.y0, width, ax_p.height), sharey=ax)
+        
+        freq_ax.plot(freqs, ys, 'o-', markersize=2, color='black')
+        log_ax.plot(np.log10(freqs), ys, 'o-', markersize=2, color='black')
+        cumulative_ax.plot(freqs.cumsum(), ys, 'o-', markersize=2, color='black')
+        
+        freq_ax.set_xlim(0, max(freqs) * 1.05)
+        cumulative_ax.set_xlim(0, 1)
+        cumulative_ax.set_xticks([0, 0.25, 0.5, 0.75, 1])
+        
+        for p_ax in [freq_ax, log_ax, cumulative_ax]:
+            p_ax.set_yticks([])
+            p_ax.xaxis.tick_top()
+            p_ax.spines['left'].set_alpha(0.3)
+            p_ax.spines['right'].set_alpha(0.3)
+            p_ax.tick_params(labelsize=6)
+            p_ax.grid(axis='x', alpha=0.3)
+            
+            p_ax.spines['bottom'].set_visible(False)
+            
+            p_ax.xaxis.set_label_position('top')
+        
+        freq_ax.set_xlabel('frequency', size=8)
+        log_ax.set_xlabel('frequency (log10)', size=8)
+        cumulative_ax.set_xlabel('cumulative frequency', size=8)
+        
+        ax.set_ylim(-0.5, len(outcome_order) - 0.5)
+
+def outcome_diagrams_with_frequencies(pool, outcomes, **kwargs):
+    fig = plot_outcome_diagrams(outcomes, pool.target_info, **kwargs)
+    num_outcomes = kwargs.get('num_outcomes')
+    add_frequencies(fig, fig.axes[0], pool, outcomes[:num_outcomes])
+    fig.suptitle(pool.group)
+    return fig
+
+def plot_guide_specific_frequencies(outcome,
+                                    pool,
                                     p_cutoff=4,
                                     num_to_label=20,
                                     genes_to_label=None,
                                     y_lims=None,
+                                    p_val_method='binomial',
+                                    outcome_name=None,
+                                    guide_status='perfect',
                                    ):
-    max_cells = max(pool.UMI_counts)
+    max_cells = max(pool.UMI_counts(guide_status))
 
-    granular_df = pool.outcome_counts
+    granular_df = pool.outcome_counts(guide_status)
     non_targeting = pool.non_targeting_guides
 
-    nt_fraction = pool.all_non_targeting_fractions[outcome]
+    if isinstance(outcome, tuple):
+        nt_fraction = pool.non_targeting_fractions(guide_status)[outcome]
+        outcome_counts = granular_df.loc[outcome]
 
-    with h5py.File(pool.fns['quantiles']) as f:
-        num_samples = f.attrs['num_samples']
+    else:
+        nt_counts = pool.non_targeting_counts(guide_status)
+        nt_fraction = nt_counts[outcome].sum() / nt_counts.sum()
+        outcome_counts = granular_df.loc[outcome].sum()
 
-        outcome_string = '_'.join(outcome)
-        
-        f_quantiles = f[outcome_string]['quantiles']
-        f_frequencies = f[outcome_string]['frequencies']
+    if p_val_method == 'binomial':
+        boundary_xs = np.arange(0, 40000)
+        boundary_xs[0] = 1
+        lower, upper = scipy.stats.binom.interval(1 - 2 * 10**-p_cutoff, boundary_xs, nt_fraction)
+        boundary_lower = lower / boundary_xs
+        boundary_upper = upper / boundary_xs
 
-        num_cells_list = f['num_cells'][:]
-        indices = num_cells_list.argsort()
-        num_cells_list = sorted(num_cells_list)
-        
-        geqs = {}
-        leqs = {}
-        quantiles = {}
-        for q_key, q in quantiles_module.quantiles_to_record(num_samples).items():
-            quantiles[q] = f_quantiles[q_key][:][indices]
+    #with h5py.File(pool.fns['quantiles']) as f:
+    #    outcome_string = '_'.join(outcome)
+    #    num_samples = f.attrs['num_samples']
 
-        medians = dict(zip(num_cells_list, f_quantiles['median'][:][indices]))
+    #    f_quantiles = f[outcome_string]['quantiles']
+    #    f_frequencies = f[outcome_string]['frequencies']
 
-        closest_sampled = np.zeros(40000, int)
-        for num_cells in num_cells_list:
-            closest_sampled[num_cells:] = num_cells
+    #    num_cells_list = f['num_cells'][:]
+    #    indices = num_cells_list.argsort()
+    #    num_cells_list = sorted(num_cells_list)
+    #    
+    #    geqs = {}
+    #    leqs = {}
+    #    quantiles = {}
+    #    for q_key, q in quantiles_module.quantiles_to_record(num_samples).items():
+    #        quantiles[q] = f_quantiles[q_key][:][indices]
 
-        for num_cells in num_cells_list:
-            frequencies = f_frequencies[str(num_cells)][:]
-            full_frequencies = np.zeros(num_cells + 1, int)
-            full_frequencies[:len(frequencies)] = frequencies
+    #    medians = dict(zip(num_cells_list, f_quantiles['median'][:][indices]))
 
-            leq = np.cumsum(full_frequencies)
-            geq = leq[-1] - leq + full_frequencies
+    #    closest_sampled = np.zeros(40000, int)
+    #    for num_cells in num_cells_list:
+    #        closest_sampled[num_cells:] = num_cells
 
-            leqs[num_cells] = leq
-            geqs[num_cells] = geq
+    #    for num_cells in num_cells_list:
+    #        frequencies = f_frequencies[str(num_cells)][:]
+    #        full_frequencies = np.zeros(num_cells + 1, int)
+    #        full_frequencies[:len(frequencies)] = frequencies
+
+    #        leq = np.cumsum(full_frequencies)
+    #        geq = leq[-1] - leq + full_frequencies
+
+    #        leqs[num_cells] = leq
+    #        geqs[num_cells] = geq
     
     data = {
-        'count': granular_df.loc[outcome],
-        'num_cells': pool.UMI_counts,
+        'num_cells': pool.UMI_counts(guide_status),
+        'count': outcome_counts,
     }
 
     df = pd.DataFrame(data)
     df.index.name = 'guide'
     df['fraction'] = df['count'] / df['num_cells']
 
-    df['short_name'] = [pool.guide_to_short_name[g] for g in df.index]
     df['gene'] = pool.guides_df.loc[df.index]['gene']
 
-    def direction_and_pval(actual_outcome_count, actual_num_cells):
-        num_cells = closest_sampled[actual_num_cells]
-        outcome_count = int(np.floor(actual_outcome_count * num_cells / actual_num_cells))
+    #def direction_and_pval(actual_outcome_count, actual_num_cells):
+    #    num_cells = closest_sampled[actual_num_cells]
+    #    outcome_count = int(np.floor(actual_outcome_count * num_cells / actual_num_cells))
 
-        if num_cells > 0:
-            if outcome_count <= medians[num_cells]:
+    #    if num_cells > 0:
+    #        if outcome_count <= medians[num_cells]:
+    #            direction = 'down'
+    #            p = leqs[num_cells][outcome_count] / num_samples
+    #        else:
+    #            direction = 'up'
+    #            p = geqs[num_cells][outcome_count] / num_samples
+    #    else:
+    #        direction = None
+    #        p = 1
+
+    #    return direction, p
+    if p_val_method == 'binomial':
+        def direction_and_pval(actual_outcome_count, actual_num_cells):
+            p = scipy.stats.binom.cdf(actual_outcome_count, actual_num_cells, nt_fraction)
+            if actual_outcome_count < nt_fraction * actual_num_cells:
                 direction = 'down'
-                p = leqs[num_cells][outcome_count] / num_samples
-            else:
+            elif actual_outcome_count >= nt_fraction * actual_num_cells:
                 direction = 'up'
-                p = geqs[num_cells][outcome_count] / num_samples
-        else:
-            direction = None
-            p = 1
-
-        return direction, p
+                p = 1 - p
+            
+            return direction, p
     
     d_and_ps = starmap(direction_and_pval, zip(df['count'], df['num_cells']))
     df['direction'], df['pval'] = zip(*d_and_ps)
@@ -321,7 +402,7 @@ def plot_guide_specific_frequencies(outcome, pool,
 
     g = sns.JointGrid('num_cells', 'fraction',
                       data=df,
-                      size=10,
+                      height=10,
                       xlim=(-0.01 * max_cells, 1.01 * max_cells),
                       ylim=(y_min, y_max),
                       space=0,
@@ -329,24 +410,42 @@ def plot_guide_specific_frequencies(outcome, pool,
 
     g.plot_marginals(sns.distplot, kde=False, color='silver')
 
-    for q in [10**-p_cutoff, 1 - 10**-p_cutoff]:
-        ys = quantiles[q] / num_cells_list
+    #for q in [10**-p_cutoff, 1 - 10**-p_cutoff]:
+    #    ys = quantiles[q] / num_cells_list
 
-        g.ax_joint.plot(num_cells_list, ys, color='black', alpha=0.3)
+    #    g.ax_joint.plot(num_cells_list, ys, color='black', alpha=0.3)
 
-        x = min(1.01 * max_cells, max(num_cells_list))
-        g.ax_joint.annotate(str(q),
-                            xy=(x, ys[-1]),
-                            xytext=(-10, -5 if q < 0.5 else 5),
-                            textcoords='offset points',
-                            ha='right',
-                            va='top' if q < 0.5 else 'bottom',
-                            clip_on=False,
-                            size=6,
-                           )
+    #    x = min(1.01 * max_cells, max(num_cells_list))
+    #    g.ax_joint.annotate(str(q),
+    #                        xy=(x, ys[-1]),
+    #                        xytext=(-10, -5 if q < 0.5 else 5),
+    #                        textcoords='offset points',
+    #                        ha='right',
+    #                        va='top' if q < 0.5 else 'bottom',
+    #                        clip_on=False,
+    #                        size=6,
+    #                       )
+    if p_val_method == 'binomial':
+        to_plot = boundary_xs[1:]
+        g.ax_joint.plot(to_plot, boundary_lower[to_plot], color='black', alpha=0.3)
+        g.ax_joint.plot(to_plot, boundary_upper[to_plot], color='black', alpha=0.3)
+
+        x = int(np.floor(1.01 * max_cells))
+        for q, y in [(10**-p_cutoff, boundary_lower[x]),
+                     (1 - 10**-p_cutoff, boundary_upper[x]),
+                    ]:
+            g.ax_joint.annotate(str(q),
+                                xy=(x, y),
+                                xytext=(-10, -5 if q < 0.5 else 5),
+                                textcoords='offset points',
+                                ha='right',
+                                va='top' if q < 0.5 else 'bottom',
+                                clip_on=False,
+                                size=6,
+                            )
 
     for text, offset, color in [('non-targeting guides', -10, 'C0'),
-                                ('empirical p-value < 1e-{}'.format(p_cutoff), -25, 'C1'),
+                                ('{} p-value < 1e-{}'.format(p_val_method, p_cutoff), -25, 'C1'),
                                ]:
         g.ax_joint.annotate(text,
                             xy=(1, 1),
@@ -369,23 +468,32 @@ def plot_guide_specific_frequencies(outcome, pool,
     g.ax_joint.axhline(nt_fraction, color='black')
 
     g.ax_joint.set_xlabel('number of UMIs', size=16)
-    g.ax_joint.set_ylabel('fraction of UMIs with {}'.format(outcome_string), size=16)
+
+    if outcome_name is None:
+        outcome_name = '_'.join(outcome)
+    g.ax_joint.set_ylabel('fraction of UMIs with {}'.format(outcome_name), size=16)
 
     ax_marg_x_p = g.ax_marg_x.get_position()
     ax_marg_y_p = g.ax_marg_y.get_position()
 
     diagram_width = ax_marg_x_p.width * 0.5 + ax_marg_y_p.width
-    diagram_gap = ax_marg_x_p.height * 0.2
-    diagram_height = ax_marg_x_p.height * 0.2
+    diagram_gap = ax_marg_x_p.height * 0.3
 
-    if outcome[0] not in ('uncategorized', 'genomic insertion'):
-        diagram_ax = g.fig.add_axes((ax_marg_y_p.x1 - diagram_width, ax_marg_x_p.y1 - diagram_gap - diagram_height, diagram_width, diagram_height))
-        outcomes = [('no indel', 'wild type', 'CCGAGGG'), outcome]
-        plot_outcome_diagrams(outcomes, target_info.TargetInfo('/home/jah/projects/britt', 'pooled_vector'),
-                              num_outcomes=2,
-                              window=(-50, 20),
-                              ax=diagram_ax,
-                             )
+    wt = ('wild type', 'wild type', 'n/a')
+    if isinstance(outcome, tuple):
+        outcomes_to_plot = [wt, outcome]
+    else:
+        outcomes_to_plot = [wt] + list(pool.non_targeting_counts('perfect').loc[outcome].sort_values(ascending=False).index.values[:3])
+
+    diagram_height = ax_marg_x_p.height * 0.1 * len(outcomes_to_plot)
+
+    diagram_ax = g.fig.add_axes((ax_marg_y_p.x1 - diagram_width, ax_marg_x_p.y1 - diagram_gap - diagram_height, diagram_width, diagram_height))
+    plot_outcome_diagrams(outcomes_to_plot,
+                          pool.target_info,
+                          window=(-50, 20),
+                          ax=diagram_ax,
+                          flip_if_reverse=True,
+                         )
 
     if num_to_label is not None:
         up = significant.query('direction == "up"').sort_values('fraction', ascending=False)[:num_to_label]
@@ -400,10 +508,10 @@ def plot_guide_specific_frequencies(outcome, pool,
 
         vector = ['upper right' if v == 'up' else 'lower right' for v in to_label['direction']]
 
-        Visualize.label_scatter_plot(g.ax_joint, 'num_cells', 'fraction', 'short_name',
+        Visualize.label_scatter_plot(g.ax_joint, 'num_cells', 'fraction', 'guide',
                                      data=to_label,
                                      vector=vector,
-                                     text_kwargs=dict(size=10),
+                                     text_kwargs=dict(size=8),
                                      initial_distance=5,
                                      distance_increment=5,
                                      arrow_alpha=0.2,
@@ -417,10 +525,10 @@ def plot_guide_specific_frequencies(outcome, pool,
 
         vector = ['upper right' if v == 'up' else 'lower right' for v in to_label['direction']]
 
-        Visualize.label_scatter_plot(g.ax_joint, 'num_cells', 'fraction', 'short_name',
+        Visualize.label_scatter_plot(g.ax_joint, 'num_cells', 'fraction', 'guide',
                                      data=to_label,
                                      vector=vector,
-                                     text_kwargs=dict(size=10, weight='bold'),
+                                     text_kwargs=dict(size=8, weight='bold'),
                                      initial_distance=8,
                                      distance_increment=5,
                                      arrow_alpha=0.2,
@@ -430,20 +538,19 @@ def plot_guide_specific_frequencies(outcome, pool,
                                      min_arrow_distance=0,
                                     )
 
-    
     Visualize.add_commas_to_ticks(g.ax_joint, which='x')
 
-    return g, df, outcome_string
+    return g, df
 
 colors_list = [
-    bokeh.palettes.Blues9[2:],
-    bokeh.palettes.Oranges9[2:],
     bokeh.palettes.Greens9[2:],
     bokeh.palettes.Purples9[2:],
     bokeh.palettes.PuRd9[2:],
+    bokeh.palettes.Blues9[2:],
+    bokeh.palettes.Oranges9[2:],
 ] * 2
 
-def plot_genes(pool, genes, guide_status='perfect'):
+def plot_genes(pool, genes, guide_status='perfect', zoom=False):
     guides_df = pool.guides_df
     
     if len(genes) > 1:
@@ -457,19 +564,28 @@ def plot_genes(pool, genes, guide_status='perfect'):
         else:
             gene_to_colors = {gene: [colors_list[1][0], colors_list[2][0], colors_list[3][0]]}
         
-    axs = {}
-    ax_order = [
-        'frequency',
-        'change',
-        'frequency_zoom',
-        'change_zoom',
-        'fold_change',
-        'log2_fold_change',
-    ]
-    fig, ax_array = plt.subplots(1, 6, figsize=(16, 48 * len(pool.most_frequent_outcomes) / 200), sharey=True, gridspec_kw={'wspace': 0.05})
+    if zoom:
+        ax_order = [
+            'frequency_zoom',
+            'change_zoom',
+            'log2_fold_change',
+        ]
+    else:
+        ax_order = [
+            'frequency',
+            'change',
+            'log2_fold_change',
+        ]
+
+    num_outcomes = len(pool.most_frequent_outcomes)
+    #num_outcomes = 20
+
+    fig, ax_array = plt.subplots(1, len(ax_order), figsize=(8, 48 * num_outcomes / 200), sharey=True, gridspec_kw={'wspace': 0.05})
     axs = dict(zip(ax_order, ax_array))
 
     order, sizes = pool.rational_outcome_order()
+    #order = pool.most_frequent_outcomes[:num_outcomes]
+    sizes = [len(order)]
 
     ys = np.arange(len(order))[::-1]
 
@@ -484,7 +600,8 @@ def plot_genes(pool, genes, guide_status='perfect'):
     
     nt_fracs = pool.common_non_targeting_fractions[order]
     for key in ('frequency', 'frequency_zoom'):
-        dot_and_line(nt_fracs * 100, axs[key], 'grey', 'non-targeting', line_width=1.5, line_alpha=0.9, marker_alpha=1, marker_size=6)
+        if key in axs:
+            dot_and_line(nt_fracs * 100, axs[key], 'grey', 'non-targeting', line_width=1.5, line_alpha=0.9, marker_alpha=1, marker_size=6)
     
     def guide_to_color(guide):
         gene = guides_df['gene'][guide]
@@ -503,21 +620,28 @@ def plot_genes(pool, genes, guide_status='perfect'):
         label = guide
 
         for key in ('change', 'change_zoom'):
-            dot_and_line(absolute_change[order] * 100, axs[key], color, label)
+            if key in axs:
+                dot_and_line(absolute_change[order] * 100, axs[key], color, label)
             
-        dot_and_line(fold_changes[order], axs['fold_change'], color, label)
-        dot_and_line(log2_fold_changes[order], axs['log2_fold_change'], color, label)
+        if 'fold_change' in axs:
+            dot_and_line(fold_changes[order], axs['fold_change'], color, label)
+        if 'log2_fold_change' in axs:
+            dot_and_line(log2_fold_changes[order], axs['log2_fold_change'], color, label)
         
         for key in ('frequency', 'frequency_zoom'):
-            dot_and_line(fractions[order] * 100, axs[key], color, label, line_alpha=0.15)
+            if key in axs:
+                dot_and_line(fractions[order] * 100, axs[key], color, label, line_alpha=0.15)
     
     for key, line_x, title, x_lims in [('change', 0, 'change in percentage', (-8, 8)),
                                        ('change_zoom', 0, 'change in percentage\n(zoomed)', (-0.75, 0.75)),
-                                       ('fold_change', 1, 'fold change', (0, 5)),
+                                       #('fold_change', 1, 'fold change', (0, 5)),
                                        ('log2_fold_change', 0, 'log2 fold change', (-3, 3)),
                                        ('frequency', None, 'percentage', (0, nt_fracs.max() * 100 * 1.05)),
                                        ('frequency_zoom', None, 'percentage\n(zoomed)', (0, 0.75)),
                                       ]:
+        if key not in axs:
+            continue
+
         if line_x is not None:
             axs[key].axvline(line_x, color='black', alpha=0.3)
        
@@ -556,7 +680,7 @@ def plot_genes(pool, genes, guide_status='perfect'):
         num_rows, num_cols = vals.shape
     
         heatmap_width = ax_p.height * num_cols / num_rows * height / width
-        heatmap_ax = fig.add_axes((start_x, ax_p.y0, heatmap_width , ax_p.height), sharey=axs['frequency'])
+        heatmap_ax = fig.add_axes((start_x, ax_p.y0, heatmap_width , ax_p.height), sharey=axs[ax_order[0]])
                  
         im = heatmap_ax.imshow(vals, cmap=plt.get_cmap('RdBu_r'), vmin=-2, vmax=2, origin='lower')
 
@@ -579,14 +703,15 @@ def plot_genes(pool, genes, guide_status='perfect'):
     plt.draw()
 
     for key in ['frequency_zoom', 'change_zoom', 'fold_change']:
-        axs[key].set_xticklabels(list(axs[key].get_xticklabels())[:-1] + [''])
+        if key in axs:
+            axs[key].set_xticklabels(list(axs[key].get_xticklabels())[:-1] + [''])
 
-    ax_p = axs['frequency'].get_position()
+    ax_p = axs[ax_order[0]].get_position()
 
     diagram_width = ax_p.width * 3
     diagram_gap = diagram_width * 0.02
 
-    diagram_ax = fig.add_axes((ax_p.x0 - diagram_width - diagram_gap, ax_p.y0, diagram_width, ax_p.height), sharey=axs['change'])
+    diagram_ax = fig.add_axes((ax_p.x0 - diagram_width - diagram_gap, ax_p.y0, diagram_width, ax_p.height), sharey=axs[ax_order[0]])
     
     plot_outcome_diagrams(order, pool.target_info,
                           num_outcomes=len(order),
@@ -828,3 +953,90 @@ def plot_gene_scatter(pool, gene):
         plot_guide_scatter(pool, gene, i, ax=ax)
 
     return fig
+
+def gene_significance(pool, outcomes, draw_outcomes=False):
+    df, nt_fraction, p_df = get_outcome_statistics(pool, outcomes)
+
+    labels = list(pool.guides)
+
+    gene_to_color = {g: 'C{}'.format(i % 10) for i, g in enumerate(pool.genes)}
+
+    fig = plt.figure(figsize=(36, 12))
+
+    axs = {}
+    gs = matplotlib.gridspec.GridSpec(2, 4, hspace=0.03)
+    axs['up'] = plt.subplot(gs[0, :-1])
+    axs['down'] = plt.subplot(gs[1, :-1])
+    axs['outcomes'] = plt.subplot(gs[:, -1])
+
+    significant = {}
+    global_max_y = 0
+    for direction in ['up',
+                      'down',
+                     ]:
+        ax = axs[direction]
+        ordered = p_df[direction].sort_values()
+        genes_to_label = set(ordered.index[:50])
+        subset =  ordered
+        subset_df = pd.DataFrame({'gene': subset.index, 'p_val': list(subset)}, index=np.arange(1, len(subset) + 1))
+        significant[direction] = subset_df
+        
+        guides_to_label = {g for g in pool.guides if pool.guide_to_gene(g) in genes_to_label}
+
+        colors = [gene_to_color[pool.guide_to_gene(guide)] for guide in labels]
+        colors = matplotlib.colors.to_rgba_array(colors)
+        alpha = [0.95 if pool.guide_to_gene(guide) in genes_to_label else 0.15 for guide in pool.guides]
+        colors[:, 3] = alpha
+
+        ax.scatter(np.arange(len(df)), df['frequency'], s=25, c=colors, linewidths=(0,))
+        ax.set_xlim(-10, len(pool.guides) + 10)
+
+        for x, (y, label) in enumerate(zip(df['frequency'], labels)):
+            if label in guides_to_label:
+                ax.annotate(label,
+                            xy=(x, y),
+                            xytext=(2, 0),
+                            textcoords='offset points',
+                            size=6,
+                            color=colors[x],
+                            va='center',
+                           )
+
+        ax.axhline(nt_fraction, color='black', alpha=0.5)
+        ax.annotate('{:0.3f}'.format(nt_fraction),
+                    xy=(1, nt_fraction),
+                    xycoords=('axes fraction', 'data'),
+                    xytext=(5, 0),
+                    textcoords='offset points',
+                    ha='left',
+                    size=10,
+                    va='center',
+                   )
+
+        relevant_ys = df.loc[guides_to_label]['frequency']
+
+        max_y = max(nt_fraction * 2, relevant_ys.max() * 1.1)
+        global_max_y = max(global_max_y, max_y)
+        ax.set_xticklabels([])
+
+        for x, (_, row) in enumerate(df.iterrows()):
+            below, above = utilities.clopper_pearson(row['outcome_count'], row['total_UMIs'])
+            ax.plot([x, x], [row['frequency'] - below, row['frequency'] + above], color=colors[x])
+
+    for direction in ['up', 'down']:
+        axs[direction].set_ylim(0, global_max_y)
+
+    axs['up'].set_title('most significant suppressing genes', y=0.92)
+    axs['down'].set_title('most significant promoting genes', y=0.92)
+
+    if draw_outcomes:
+        n = 40
+        outcome_order = pool.non_targeting_fractions('perfect').loc[outcomes].sort_values(ascending=False).index[:n]
+        plot_outcome_diagrams(outcome_order, pool.target_info, num_outcomes=n, window=(-60, 20), flip_if_reverse=True, ax=axs['outcomes'])
+        add_frequencies(fig, axs['outcomes'], pool, outcome_order[:n], text_only=True)
+    else:
+        fig.delaxes(axs['outcomes'])
+
+    fig.suptitle(pool.group, size=16)
+    
+    return fig, significant
