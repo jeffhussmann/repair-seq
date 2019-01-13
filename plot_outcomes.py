@@ -66,6 +66,44 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
     block_alpha = 0.1
     wt_height = 0.6
 
+    def draw_sequence(y, xs_to_skip=None, alpha=0.15):
+        if xs_to_skip is None:
+            xs_to_skip = set()
+
+        for x, b in zip(range(window_left, window_right + 1), seq):
+            if x not in xs_to_skip:
+                ax.annotate(transform_seq(b),
+                            xy=(x, y),
+                            xycoords='data', 
+                            ha='center',
+                            va='center',
+                            size=text_size,
+                            alpha=alpha,
+                           )
+
+    def draw_deletion(y, deletion, color='black'):
+        starts = np.array(deletion.starts_ats) - offset
+        if len(starts) > 1:
+            for x, b in zip(range(window_left, window_right + 1), seq):
+                if (starts[0] <= x < starts[-1]) or (starts[0] + deletion.length <= x < starts[-1] + deletion.length):
+                    ax.annotate(transform_seq(b),
+                                xy=(x, y),
+                                xycoords='data', 
+                                ha='center',
+                                va='center',
+                                size=text_size,
+                               )
+
+        del_height = 0.15
+        
+        del_start = starts[0] - 0.5
+        del_end = starts[0] + deletion.length - 1 + 0.5
+        
+        draw_rect(del_start, del_end, y - del_height / 2, y + del_height / 2, 0.4, color=color)
+        draw_rect(window_left - 0.5, del_start, y - wt_height / 2, y + wt_height / 2, block_alpha)
+        draw_rect(del_end, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+
+
     guide_start = guide.start - 0.5 - offset
     guide_end = guide.end + 0.5 - offset
     
@@ -74,26 +112,8 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
             
         if category == 'deletion':
             deletion = degenerate_indel_from_string(details)
-            starts = np.array(deletion.starts_ats) - offset
-            if len(starts) > 1:
-                for x, b in zip(range(window_left, window_right + 1), seq):
-                    if (starts[0] <= x < starts[-1]) or (starts[0] + deletion.length <= x < starts[-1] + deletion.length):
-                        ax.annotate(transform_seq(b),
-                                    xy=(x, y),
-                                    xycoords='data', 
-                                    ha='center',
-                                    va='center',
-                                    size=text_size,
-                                   )
-
-            del_height = 0.15
-            
-            del_start = starts[0] - 0.5
-            del_end = starts[0] + deletion.length - 1 + 0.5
-            
-            draw_rect(del_start, del_end, y - del_height / 2, y + del_height / 2, 0.4)
-            draw_rect(window_left - 0.5, del_start, y - wt_height / 2, y + wt_height / 2, block_alpha)
-            draw_rect(del_end, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+            draw_deletion(y, deletion)
+            draw_sequence(y)
         
         elif category == 'insertion':
             insertion = degenerate_indel_from_string(details)
@@ -119,38 +139,33 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                                     color=Visualize.igv_colors[b],
                                     weight='bold',
                                 )
+            
+            draw_sequence(y)
                 
         elif category == 'wild type':
             if subcategory == 'wild type':
                 guide_start = guide.start - 0.5 - offset
                 guide_end = guide.end + 0.5 - offset
-                
+
+                PAM_start = target_info.PAM_slice.start - 0.5 - offset
+                PAM_end = target_info.PAM_slice.stop + 0.5 - 1 - offset
+
                 draw_rect(guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='blue')
         
-                if guide.strand == '+':
-                    PAM_start = guide_end
-                    draw_rect(window_left - 0.5, guide_start, y - wt_height / 2, y + wt_height / 2, block_alpha)
-                    draw_rect(PAM_start + 3, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
-                else:
-                    PAM_start = guide_start - 3
-                    draw_rect(window_left - 0.5, PAM_start, y - wt_height / 2, y + wt_height / 2, block_alpha)
-                    draw_rect(guide_end, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+                draw_rect(window_left - 0.5, min(PAM_start, guide_start), y - wt_height / 2, y + wt_height / 2, block_alpha)
+                draw_rect(max(PAM_end, guide_end), window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
 
-                draw_rect(PAM_start, PAM_start + 3, y - wt_height / 2, y + wt_height / 2, 0.3, color='green')
+                draw_rect(PAM_start, PAM_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='green')
 
-                for x, b in zip(range(window_left, window_right + 1), seq):
-                    ax.annotate(transform_seq(b),
-                                xy=(x, y),
-                                xycoords='data', 
-                                ha='center',
-                                va='center',
-                                size=text_size,
-                            )
+                draw_sequence(y, alpha=1)
+
             else:
+                SNV_xs = set()
                 draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
                 snvs = SNVs.from_string(details) 
                 for snv in snvs:
                     x = snv.position - offset
+                    SNV_xs.add(x)
                     if window_left <= x <= window_right:
                         ax.annotate(transform_seq(snv.basecall),
                                     xy=(x, y),
@@ -161,12 +176,18 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                                     color=Visualize.igv_colors[snv.basecall.upper()],
                                     weight='bold',
                                 )
-                
+                draw_sequence(y, xs_to_skip=SNV_xs)
+
         elif category == 'donor':
-            for ((strand, position), ref_base), read_base in zip(target_info.fingerprints[target_info.target], details):
+            SNP_xs = set()
+            variable_locii_details, deletion_details = details.split(';', 1)
+
+            for ((strand, position), ref_base), read_base in zip(target_info.fingerprints[target_info.target], variable_locii_details):
                 if ref_base != read_base and read_base != '_':
+                    x = position - offset
+                    SNP_xs.add(x)
                     ax.annotate(transform_seq(read_base),
-                                xy=(position - offset, y),
+                                xy=(x, y),
                                 xycoords='data', 
                                 ha='center',
                                 va='center',
@@ -174,10 +195,22 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                                 color=Visualize.igv_colors[read_base],
                                 weight='bold',
                                )
+            
+                draw_rect(position - offset - 0.5, position - offset + 0.5, y - wt_height / 2, y + wt_height / 2, 0.3, color='grey')
 
-                draw_rect(position - offset - 0.5, position - offset + 0.5, y - wt_height / 2, y + wt_height / 2, 0.2, color='grey')
-                
-            draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+            deletion_strings = deletion_details.split(';')
+            if len(deletion_strings) > 1:
+                raise NotImplementedError
+            elif len(deletion_strings) == 1:
+                deletion_string = deletion_strings[0]
+                if deletion_string == '':
+                    # no deletion
+                    draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+                else:
+                    deletion = degenerate_indel_from_string(deletion_string)
+                    draw_deletion(y, deletion, color='red')
+
+            draw_sequence(y, xs_to_skip=SNP_xs)
 
         else:
             if category == 'uncategorized':
