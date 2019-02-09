@@ -45,16 +45,21 @@ def get_outcome_statistics(pool, outcomes):
 
     UMI_counts = pool.UMI_counts('perfect')
     outcome_counts = pool.outcome_counts('perfect').loc[outcomes].sum()
-    frequencies = outcome_counts / UMI_counts
-    nt_fraction = outcome_counts.loc[pool.non_targeting_guides].sum() / UMI_counts.loc[pool.non_targeting_guides].sum()
+    frequencies = pool.outcome_fractions('perfect').loc[outcomes].sum().drop('non_targeting')
+    
+    nt_fraction = pool.non_targeting_fractions('perfect').loc[outcomes].sum()
+
     ps_down = np.array([pval_down(o, u, nt_fraction) for o, u in zip(outcome_counts, UMI_counts)])
     ps_up = np.array([pval_up(o, u, nt_fraction) for o, u in zip(outcome_counts, UMI_counts)])
 
     genes = [pool.guide_to_gene(g) for g in pool.guides]
 
+    capped_fc = np.minimum(2**5, np.maximum(2**-5, frequencies / nt_fraction))
+
     df = pd.DataFrame({'total_UMIs': UMI_counts,
                        'outcome_count': outcome_counts,
                        'frequency': frequencies,
+                       'log2_fold_change': np.log2(capped_fc),
                        'p_down': ps_down,
                        'p_up': ps_up,
                        'gene': genes,
@@ -63,16 +68,22 @@ def get_outcome_statistics(pool, outcomes):
     
     ps = defaultdict(list)
 
+    max_k = 9
+
     for direction in ('down', 'up'):
         for gene in pool.genes:
             sorted_ps = df[df['gene'] == gene]['p_{}'.format(direction)].sort_values()
             n = len(sorted_ps)
-            for k in range(1, 10):
+            for k in range(1, max_k + 1):
                 ps[direction, k].append(p_k_of_n_less(n, k, sorted_ps))
             
     p_df = pd.DataFrame(ps, index=pool.genes).min(axis=1, level=0)
 
-    return df, nt_fraction, p_df
+    guides_per_gene = df.groupby('gene').size()
+    bonferonni_factor = np.minimum(max_k, guides_per_gene)
+    corrected_ps = np.minimum(1, p_df.multiply(bonferonni_factor, axis=0))
+
+    return df, nt_fraction, corrected_ps
 
 def compute_table(base_dir, pool_names, outcome_groups, pickle_fn, initial_dataset=None, initial_outcome=None, progress=None):
     if progress is None:
@@ -136,7 +147,10 @@ def compute_table(base_dir, pool_names, outcome_groups, pickle_fn, initial_datas
     with open(pickle_fn, 'wb') as fh:
         pickle.dump(to_pickle, fh)
 
-def scatter(pickle_fn):
+def scatter(pickle_fn,
+            plot_width=2000,
+            plot_height=800,
+           ):
     with open(pickle_fn, 'rb') as fh:
         data = pickle.load(fh)
 
@@ -174,8 +188,9 @@ def scatter(pickle_fn):
         'save',
     ]
 
-    fig = bokeh.plotting.figure(plot_width=2000, plot_height=800, tools=tools, active_drag='box_select', active_scroll='wheel_zoom',
-                            )
+    fig = bokeh.plotting.figure(plot_width=plot_width, plot_height=plot_height,
+                                tools=tools, active_drag='box_select', active_scroll='wheel_zoom',
+                               )
     fig.x_range = bokeh.models.Range1d(x_min, x_max, name='x_range')
     fig.y_range = bokeh.models.Range1d(y_min, y_max, name='y_range')
 

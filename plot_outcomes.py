@@ -1,4 +1,5 @@
-from itertools import starmap
+from itertools import starmap, repeat
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.gridspec
@@ -7,37 +8,65 @@ import numpy as np
 import scipy.stats
 import seaborn as sns
 import h5py
+import bokeh.plotting
 import bokeh.palettes
 from matplotlib.patches import ConnectionPatch
 
 from collections import Counter, defaultdict
-from knockin.target_info import degenerate_indel_from_string, SNVs
+from knockin.target_info import degenerate_indel_from_string, SNVs, effectors
 from knockin import quantiles as quantiles_module
 from sequencing import Visualize, utilities
 
-def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=None, window=70, ax=None, flip_if_reverse=True):
-    outcome_order = outcome_order[:num_outcomes]
-    num_outcomes = len(outcome_order)
-    if ax is None:
-        fig, ax = plt.subplots(figsize=(0.8 * 20, 0.8 * num_outcomes / 3))
-    else:
-        fig = ax.figure
-
+def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=None, window=70,
+                          ax=None,
+                          flip_if_reverse=True,
+                          center_at_PAM=False,
+                          draw_cut_afters=True,
+                          size_multiple=0.8,
+                          draw_all_sequence=True,
+                          draw_imperfect_MH=False,
+                          ):
     if isinstance(window, int):
         window_left, window_right = -window, window
     else:
         window_left, window_right = window
 
-    ax.plot([0.5, 0.5], [-0.5, num_outcomes - 0.5], color='black', linestyle='--', alpha=0.3)
-    
-    offset = target_info.cut_after
+    window_size = window_right - window_left
+
+    outcome_order = outcome_order[:num_outcomes]
+    num_outcomes = len(outcome_order)
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(size_multiple * 20 * window_size / 140, size_multiple * num_outcomes / 3))
+    else:
+        fig = ax.figure
+
     guide = target_info.features[target_info.target, target_info.sgRNA]
+
     if flip_if_reverse and guide.strand == '-':
         flip = True
         transform_seq = utilities.complement
+        cut_offset_sign = -1
     else:
         flip = False
         transform_seq = utilities.identity
+        cut_offset_sign = 1
+    
+    if center_at_PAM:
+        if guide.strand == '+':
+            offset = target_info.PAM_slice.start
+        else:
+            offset = target_info.PAM_slice.stop - 1
+    else:
+        if guide.strand == '-':
+            offset = max(target_info.cut_afters.values())
+        else:
+            offset = max(target_info.cut_afters.values())
+
+    if draw_cut_afters:
+        for cut_after in target_info.cut_afters.values():
+            x = (cut_after + 0.5 * cut_offset_sign) - offset
+
+            ax.plot([x, x], [-0.5, num_outcomes - 0.5], color='black', linestyle='--', alpha=0.3)
     
     if flip:
         window_left, window_right = -window_right, -window_left
@@ -45,6 +74,12 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
     seq = target_info.target_sequence[offset + window_left:offset + window_right + 1]
 
     def draw_rect(x0, x1, y0, y1, alpha, color='black'):
+        if x0 > window_right or x1 < window_left:
+            return
+
+        x0 = max(x0, window_left - 0.5)
+        x1 = min(x1, window_right + 0.5)
+
         path = [
             [x0, y0],
             [x0, y1],
@@ -57,7 +92,6 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                             closed=True,
                             alpha=alpha,
                             color=color,
-                            clip_on=True,
                             linewidth=0,
                            )
         ax.add_patch(patch)
@@ -82,6 +116,8 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                            )
 
     def draw_deletion(y, deletion, color='black'):
+        xs_to_skip = set()
+
         starts = np.array(deletion.starts_ats) - offset
         if len(starts) > 1:
             for x, b in zip(range(window_left, window_right + 1), seq):
@@ -92,7 +128,37 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                                 ha='center',
                                 va='center',
                                 size=text_size,
+                                color=Visualize.igv_colors[transform_seq(b)],
+                                weight='bold',
                                )
+
+                    xs_to_skip.add(x)
+
+        if draw_imperfect_MH:
+            before_MH = np.arange(starts.min() - 5, starts.min())
+            after_MH = np.arange(starts.max(), starts.max() + 5)
+            left_xs = np.concatenate((before_MH, after_MH))
+            for left_x in left_xs:
+                right_x = left_x + deletion.length
+
+                # Ignore if overlaps perfect MH as a heuristic for whether interesting 
+                if right_x < starts.max() or left_x >= starts.min() + deletion.length:
+                    continue
+
+                if all(0 <= x - window_left < len(seq) for x in [left_x, right_x]):
+                    left_b = seq[left_x - window_left]
+                    right_b = seq[right_x - window_left]
+                    if left_b == right_b:
+                        for x, b in ((left_x, left_b), (right_x, right_b)):
+                            ax.annotate(transform_seq(b),
+                                        xy=(x, y),
+                                        xycoords='data', 
+                                        ha='center',
+                                        va='center',
+                                        size=text_size,
+                                        color=Visualize.igv_colors[b],
+                                    )
+                            xs_to_skip.add(x)
 
         del_height = 0.15
         
@@ -103,6 +169,7 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
         draw_rect(window_left - 0.5, del_start, y - wt_height / 2, y + wt_height / 2, block_alpha)
         draw_rect(del_end, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
 
+        return xs_to_skip
 
     guide_start = guide.start - 0.5 - offset
     guide_end = guide.end + 0.5 - offset
@@ -112,8 +179,9 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
             
         if category == 'deletion':
             deletion = degenerate_indel_from_string(details)
-            draw_deletion(y, deletion)
-            draw_sequence(y)
+            xs_to_skip = draw_deletion(y, deletion)
+            if draw_all_sequence:
+                draw_sequence(y, xs_to_skip)
         
         elif category == 'insertion':
             insertion = degenerate_indel_from_string(details)
@@ -136,14 +204,15 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                                     ha='center',
                                     va='center',
                                     size=text_size * 1,
-                                    color=Visualize.igv_colors[b],
+                                    color=Visualize.igv_colors[transform_seq(b)],
                                     weight='bold',
                                 )
             
-            draw_sequence(y)
+            if draw_all_sequence:
+                draw_sequence(y)
                 
         elif category == 'wild type':
-            if subcategory == 'wild type':
+            if subcategory in ['wild type', 'clean']:
                 guide_start = guide.start - 0.5 - offset
                 guide_end = guide.end + 0.5 - offset
 
@@ -173,14 +242,22 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                                     ha='center',
                                     va='center',
                                     size=text_size,
-                                    color=Visualize.igv_colors[snv.basecall.upper()],
+                                    color=Visualize.igv_colors[transform_seq(snv.basecall.upper())],
                                     weight='bold',
                                 )
-                draw_sequence(y, xs_to_skip=SNV_xs)
+
+                if draw_all_sequence:
+                    draw_sequence(y, xs_to_skip=SNV_xs)
 
         elif category == 'donor':
             SNP_xs = set()
-            variable_locii_details, deletion_details = details.split(';', 1)
+
+            # backwards compatibility with old verion without deletion_details
+            if ';' in details:
+                variable_locii_details, deletion_details = details.split(';', 1)
+            else:
+                variable_locii_details = details
+                deletion_details = ''
 
             for ((strand, position), ref_base), read_base in zip(target_info.fingerprints[target_info.target], variable_locii_details):
                 if ref_base != read_base and read_base != '_':
@@ -192,7 +269,7 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                                 ha='center',
                                 va='center',
                                 size=text_size,
-                                color=Visualize.igv_colors[read_base],
+                                color=Visualize.igv_colors[transform_seq(read_base)],
                                 weight='bold',
                                )
             
@@ -210,13 +287,11 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=30, title=Non
                     deletion = degenerate_indel_from_string(deletion_string)
                     draw_deletion(y, deletion, color='red')
 
-            draw_sequence(y, xs_to_skip=SNP_xs)
+            if draw_all_sequence:
+                draw_sequence(y, xs_to_skip=SNP_xs)
 
         else:
-            if category == 'uncategorized':
-                label = 'uncategorized'
-            else:
-                label = '{}, {}'.format(category, subcategory)
+            label = '{}, {}, {}'.format(category, subcategory, details)
             ax.annotate(label,
                         xy=(0, y),
                         xycoords='data', 
@@ -263,7 +338,7 @@ def add_frequencies(fig, ax, pool, outcome_order, text_only=False):
     ys = np.arange(len(outcome_order) - 1, -1, -1)
     
     for y, freq, count in zip(ys, freqs, counts):
-        ax.annotate('{:> 5.2%} {:>8s}'.format(freq, '({:,})'.format(count)),
+        ax.annotate('{:> 7.2%} {:>8s}'.format(freq, '({:,})'.format(count)),
                     xy=(1, y),
                     xycoords=('axes fraction', 'data'),
                     xytext=(6, 0),
@@ -306,11 +381,10 @@ def add_frequencies(fig, ax, pool, outcome_order, text_only=False):
         
         ax.set_ylim(-0.5, len(outcome_order) - 0.5)
 
-def outcome_diagrams_with_frequencies(pool, outcomes, **kwargs):
+def outcome_diagrams_with_frequencies(pool, outcomes, text_only=False, **kwargs):
     fig = plot_outcome_diagrams(outcomes, pool.target_info, **kwargs)
     num_outcomes = kwargs.get('num_outcomes')
-    add_frequencies(fig, fig.axes[0], pool, outcomes[:num_outcomes])
-    fig.suptitle(pool.group)
+    add_frequencies(fig, fig.axes[0], pool, outcomes[:num_outcomes], text_only=text_only)
     return fig
 
 def plot_guide_specific_frequencies(outcome,
@@ -526,6 +600,7 @@ def plot_guide_specific_frequencies(outcome,
                           window=(-50, 20),
                           ax=diagram_ax,
                           flip_if_reverse=True,
+                          draw_all_sequence=False,
                          )
 
     if num_to_label is not None:
@@ -575,15 +650,26 @@ def plot_guide_specific_frequencies(outcome,
 
     return g, df
 
-colors_list = [
-    bokeh.palettes.Greens9[2:],
-    bokeh.palettes.Purples9[2:],
-    bokeh.palettes.PuRd9[2:],
-    bokeh.palettes.Blues9[2:],
-    bokeh.palettes.Oranges9[2:],
-] * 2
+single_colors = [
+    bokeh.palettes.Greens9,
+    bokeh.palettes.Purples9,
+    bokeh.palettes.PuRd9,
+    bokeh.palettes.Blues9,
+    bokeh.palettes.Oranges9,
+]
+colors_list = [color[2:2 + 3] + [color[2 + 3]]*6 for color in single_colors]*2
+#colors_list = [
+#    bokeh.palettes.Greens9[2:],
+#    bokeh.palettes.Purples9[2:],
+#    bokeh.palettes.PuRd9[2:],
+#    bokeh.palettes.Blues9[2:],
+#    bokeh.palettes.Oranges9[2:],
+#] * 2
 
-def plot_genes(pool, genes, guide_status='perfect', zoom=False):
+def plot_genes(pool, genes, guide_status='perfect', outcomes=None, zoom=False, just_percentages=False, log_2=True, layout_kwargs=None, v_min=-2, v_max=2):
+    if layout_kwargs is None:
+        layout_kwargs = {'draw_all_sequence': False}
+
     guides_df = pool.guides_df
     
     if len(genes) > 1:
@@ -597,31 +683,44 @@ def plot_genes(pool, genes, guide_status='perfect', zoom=False):
         else:
             gene_to_colors = {gene: [colors_list[1][0], colors_list[2][0], colors_list[3][0]]}
         
-    if zoom:
+    if just_percentages:
+        ax_order = [
+            'frequency',
+        ]
+    elif zoom:
         ax_order = [
             'frequency_zoom',
             'change_zoom',
-            'log2_fold_change',
+            'log2_fold_change' if log_2 else 'fold_change',
         ]
     else:
         ax_order = [
             'frequency',
             'change',
-            'log2_fold_change',
+            'log2_fold_change' if log_2 else 'fold_change',
         ]
 
-    num_outcomes = len(pool.most_frequent_outcomes)
-    #num_outcomes = 20
+    if outcomes is None:
+        order, sizes = pool.rational_outcome_order()
+    elif isinstance(outcomes, int):
+        order, sizes = pool.rational_outcome_order(outcomes)
+    else:
+        order = outcomes
+        sizes = [len(order)]
 
-    fig, ax_array = plt.subplots(1, len(ax_order), figsize=(8, 48 * num_outcomes / 200), sharey=True, gridspec_kw={'wspace': 0.05})
-    axs = dict(zip(ax_order, ax_array))
-
-    order, sizes = pool.rational_outcome_order()
-    #order = pool.most_frequent_outcomes[:num_outcomes]
-    sizes = [len(order)]
+    num_outcomes = len(order)
 
     ys = np.arange(len(order))[::-1]
-
+    
+    fig, ax_array = plt.subplots(1, len(ax_order),
+                                 figsize=(8 * len(ax_order) / 3, 48 * num_outcomes / 200),
+                                 sharey=True,
+                                 gridspec_kw={'wspace': 0.05},
+                                )
+    if len(ax_order) == 1:
+        ax_array = [ax_array]
+    axs = dict(zip(ax_order, ax_array))
+    
     for ax in axs.values():
         ax.xaxis.tick_top()
 
@@ -631,7 +730,7 @@ def plot_genes(pool, genes, guide_status='perfect', zoom=False):
         ax.plot(list(xs), ys, 'o', markersize=marker_size, color=color, alpha=marker_alpha, label=label)
         ax.plot(list(xs), ys, '-', linewidth=line_width, color=color, alpha=line_alpha)
     
-    nt_fracs = pool.common_non_targeting_fractions[order]
+    nt_fracs = pool.non_targeting_fractions('all')[order]
     for key in ('frequency', 'frequency_zoom'):
         if key in axs:
             dot_and_line(nt_fracs * 100, axs[key], 'grey', 'non-targeting', line_width=1.5, line_alpha=0.9, marker_alpha=1, marker_size=6)
@@ -644,8 +743,8 @@ def plot_genes(pool, genes, guide_status='perfect', zoom=False):
         return color
         
     for guide in guides:
-        fractions = pool.common_fractions(guide_status)[guide]
-        absolute_change = fractions - pool.common_non_targeting_fractions
+        fractions = pool.outcome_fractions(guide_status)[guide]
+        absolute_change = fractions - pool.non_targeting_fractions('all')
         fold_changes = pool.fold_changes(guide_status)[guide]
         log2_fold_changes = pool.log2_fold_changes(guide_status)[guide]
         
@@ -667,10 +766,10 @@ def plot_genes(pool, genes, guide_status='perfect', zoom=False):
     
     for key, line_x, title, x_lims in [('change', 0, 'change in percentage', (-8, 8)),
                                        ('change_zoom', 0, 'change in percentage\n(zoomed)', (-0.75, 0.75)),
-                                       #('fold_change', 1, 'fold change', (0, 5)),
+                                       ('fold_change', 1, 'fold change', (0, 5)),
                                        ('log2_fold_change', 0, 'log2 fold change', (-3, 3)),
                                        ('frequency', None, 'percentage', (0, nt_fracs.max() * 100 * 1.05)),
-                                       ('frequency_zoom', None, 'percentage\n(zoomed)', (0, 0.75)),
+                                       ('frequency_zoom', None, 'percentage\n(zoomed)', (0, nt_fracs.max() * 100 * 0.3)),
                                       ]:
         if key not in axs:
             continue
@@ -696,11 +795,9 @@ def plot_genes(pool, genes, guide_status='perfect', zoom=False):
             flipped_y = len(order) - y - 0.5
             axs[key].axhline(flipped_y, color='black', alpha=0.1)
     
-    plt.draw()
-    
     width, height = fig.get_size_inches()
     
-    ax_p = axs['log2_fold_change'].get_position()
+    ax_p = axs[ax_order[-1]].get_position()
     
     start_x = ax_p.x1 + 0.05 * ax_p.width
     
@@ -713,9 +810,9 @@ def plot_genes(pool, genes, guide_status='perfect', zoom=False):
         num_rows, num_cols = vals.shape
     
         heatmap_width = ax_p.height * num_cols / num_rows * height / width
-        heatmap_ax = fig.add_axes((start_x, ax_p.y0, heatmap_width , ax_p.height), sharey=axs[ax_order[0]])
+        heatmap_ax = fig.add_axes((start_x, ax_p.y0, heatmap_width, ax_p.height), sharey=axs[ax_order[0]])
                  
-        im = heatmap_ax.imshow(vals, cmap=plt.get_cmap('RdBu_r'), vmin=-2, vmax=2, origin='lower')
+        im = heatmap_ax.imshow(vals, cmap=plt.get_cmap('RdBu_r'), vmin=v_min, vmax=v_max, origin='lower')
 
         heatmap_ax.xaxis.tick_top()
         heatmap_ax.set_xticks(np.arange(len(gene_guides)))
@@ -741,34 +838,49 @@ def plot_genes(pool, genes, guide_status='perfect', zoom=False):
 
     ax_p = axs[ax_order[0]].get_position()
 
-    diagram_width = ax_p.width * 3
+    if 'window' in layout_kwargs:
+        window = layout_kwargs['window']
+    else:
+        window = 70
+
+    if isinstance(window, tuple):
+        window_start, window_end = window
+    else:
+        window_start, window_end = -window, window
+
+    window_size = window_end - window_start
+
+    diagram_width = ax_p.width * window_size / 20
     diagram_gap = diagram_width * 0.02
 
     diagram_ax = fig.add_axes((ax_p.x0 - diagram_width - diagram_gap, ax_p.y0, diagram_width, ax_p.height), sharey=axs[ax_order[0]])
     
     plot_outcome_diagrams(order, pool.target_info,
                           num_outcomes=len(order),
-                          window=(-50, 50),
                           ax=diagram_ax,
-                         )
+                          **layout_kwargs)
 
     heatmap_p = heatmap_axs[genes[0]].get_position()
     heatmap_x0 = heatmap_p.x0
     heatmap_x1 = heatmap_axs[genes[-1]].get_position().x1
     heatmap_height = heatmap_p.height
 
-    log2_p = axs['log2_fold_change'].get_position()
+    ax_p = axs[ax_order[-1]].get_position()
 
-    bar_x0 = np.mean([heatmap_x0, heatmap_x1]) - log2_p.width / 2
+    bar_x0 = np.mean([heatmap_x0, heatmap_x1]) - ax_p.width / 2
 
     cbar_offset = heatmap_height * 7 / len(order)
     cbar_height = heatmap_height * 1 / len(order)
-    cbar_ax = fig.add_axes((bar_x0, heatmap_p.y1 + cbar_offset, log2_p.width, cbar_height)) 
+    cbar_ax = fig.add_axes((bar_x0, heatmap_p.y1 + cbar_offset, ax_p.width, cbar_height)) 
 
     cbar = plt.colorbar(im, cax=cbar_ax, orientation='horizontal')
 
-    cbar.set_ticks([-2, -1, 0, 1, 2])
-    cbar.set_ticklabels(['$\leq$-2', '-1', '0', '1', '$\geq$2'])
+    ticks = np.arange(v_min, v_max + 1)
+    cbar.set_ticks(ticks)
+    tick_labels = [str(t) for t in ticks]
+    tick_labels[0] = '$\leq$' + tick_labels[0]
+    tick_labels[-1] = '$\geq$' + tick_labels[-1]
+    cbar.set_ticklabels(tick_labels)
     cbar_ax.xaxis.tick_top()
 
     cbar_ax.annotate('gene activity\npromotes outcome',
@@ -790,6 +902,16 @@ def plot_genes(pool, genes, guide_status='perfect', zoom=False):
                     va='top',
                     size=8,
                     )
+
+    diagram_ax.annotate(pool.group,
+                        xy=(0.5, 1),
+                        xycoords='axes fraction',
+                        xytext=(0, 25),
+                        textcoords='offset points',
+                        ha='center',
+                        va='bottom',
+                        size=12,
+    )
 
     return fig
 
@@ -895,6 +1017,7 @@ def plot_guide_scatter(pool, gene, number, ax=None, outcomes_to_draw=15):
                               ax=up_ax,
                               num_outcomes=outcomes_to_draw,
                               window=(-50, 50),
+                              draw_all_sequence=False,
                              )
         left, right = up_ax.get_xlim()
         
@@ -921,6 +1044,7 @@ def plot_guide_scatter(pool, gene, number, ax=None, outcomes_to_draw=15):
                               ax=down_ax,
                               num_outcomes=outcomes_to_draw,
                               window=(-50, 50),
+                              draw_all_sequence=False,
                              )
         left, right = down_ax.get_xlim()
 
@@ -1073,3 +1197,269 @@ def gene_significance(pool, outcomes, draw_outcomes=False):
     fig.suptitle(pool.group, size=16)
     
     return fig, significant
+
+def big_heatmap(pool_list, genes=None, guides=None, outcomes_list=None, windows=40, cluster_guides=False, cluster_outcomes=False, title=None, layout_kwargs=None):
+    if layout_kwargs is None:
+        layout_kwargs = dict(draw_all_sequence=False)
+
+    def expand_window(window):
+        if isinstance(window, int):
+            window_start, window_stop = -window, window
+        else:
+            window_start, window_stop = window
+
+        window_size = window_stop - window_start
+
+        return window_start, window_stop, window_size
+
+    if isinstance(windows, (int, tuple)):
+        windows = repeat(windows)
+
+    pool = pool_list[0]
+    rows = len(outcomes_list[0])
+
+    if guides is None:
+        if genes is None:
+            genes = pool.genes
+            guides = pool.guides
+        else:
+            guides = []
+            for gene in genes:
+                guides.extend(pool.gene_guides(gene))
+    
+    max_cols = None
+    
+    inches_per_col = 0.15
+    cols_for_percentage = 6
+    width = inches_per_col * cols_for_percentage
+    height = width * rows / cols_for_percentage * len(pool_list)
+
+    fig, percentage_axs = plt.subplots(len(pool_list), 1,
+                                       figsize=(width, height),
+                                       gridspec_kw=dict(left=0, right=1, bottom=0, top=1),
+                                      )
+
+    if not isinstance(percentage_axs, np.ndarray):
+        percentage_axs = [percentage_axs]
+
+    for pool, p_ax, window, outcome_order in zip(pool_list, percentage_axs, windows, outcomes_list):
+        window_start, window_stop, window_size = expand_window(window)
+        
+        fold_changes = pool.log2_fold_changes('perfect').loc[outcome_order, guides]
+
+        if cluster_guides:
+            guide_correlations = fold_changes.corr()
+
+            linkage = scipy.cluster.hierarchy.linkage(guide_correlations)
+            dendro = scipy.cluster.hierarchy.dendrogram(linkage,
+                                                        no_plot=True,
+                                                        labels=guide_correlations.index, 
+                                                        )
+
+            guide_order = dendro['ivl']
+        else:
+            guide_order = guides
+
+        if cluster_outcomes:
+            outcome_correlations = fold_changes.T.corr()
+
+            linkage = scipy.cluster.hierarchy.linkage(outcome_correlations)
+            dendro = scipy.cluster.hierarchy.dendrogram(linkage,
+                                                        no_plot=True,
+                                                        labels=outcome_correlations.index, 
+                                                        )
+
+            outcome_order = dendro['ivl']
+
+        colors = pool.log2_fold_changes('perfect').loc[outcome_order, guide_order]
+        to_plot = colors.iloc[:, :max_cols]
+        rows, cols = to_plot.shape
+
+        nt_fracs = pool.non_targeting_fractions('all')[outcome_order]
+        xs = list(nt_fracs * 100)
+        ys = np.arange(len(outcome_order))[::-1]
+
+        p_ax.plot(list(xs), ys, 'o', markersize=3, color='grey', alpha=1)
+        p_ax.plot(list(xs), ys, '-', linewidth=1.5, color='grey', alpha=0.9)
+        p_ax.set_xlim(0)
+        p_ax.xaxis.tick_top()
+        p_ax.annotate('percentage',
+                            xy=(0.5, 1),
+                            xycoords='axes fraction',
+                            xytext=(0, 18),
+                            textcoords='offset points',
+                            size=8,
+                            ha='center',
+                            va='bottom',
+                           )
+
+        p_ax.spines['left'].set_alpha(0.3)
+        p_ax.spines['right'].set_alpha(0.3)
+        p_ax.tick_params(labelsize=6)
+        p_ax.grid(axis='x', alpha=0.3)
+        
+        p_ax.spines['bottom'].set_visible(False)
+
+        plt.draw()
+        fig_width, fig_height = fig.get_size_inches()
+        percentage_p = p_ax.get_position()
+        p_height_inches = percentage_p.height * fig_height
+        heatmap_height_inches = p_height_inches
+        heatmap_width_inches = p_height_inches * cols / rows
+        heatmap_width = heatmap_width_inches / fig_width
+        heatmap_height = heatmap_height_inches / fig_height
+        heatmap_gap = percentage_p.width * 1 / cols_for_percentage
+        heatmap_ax = fig.add_axes((percentage_p.x1 + heatmap_gap, percentage_p.y0, heatmap_width, heatmap_height), sharey=p_ax)
+
+        im = heatmap_ax.imshow(to_plot[::-1], cmap=plt.get_cmap('RdBu_r'), vmin=-2, vmax=2, origin='lower')
+
+        heatmap_ax.set_yticks([])
+
+        heatmap_ax.set_xticks(np.arange(cols))
+        heatmap_ax.set_xticklabels(guide_order, rotation=90, size=6)
+        heatmap_ax.xaxis.set_tick_params(labeltop=True)
+
+        if cluster_guides:
+            heatmap_ax.xaxis.set_ticks_position('both')
+        else:
+            heatmap_ax.xaxis.set_ticks_position('top')
+            heatmap_ax.xaxis.set_tick_params(labelbottom=False)
+            
+        for spine in heatmap_ax.spines.values():
+            spine.set_visible(False)
+
+        heatmap_p = heatmap_ax.get_position()
+
+        diagram_width = heatmap_p.width * (0.75 * window_size / cols)
+        diagram_gap = heatmap_gap
+
+        diagram_ax = fig.add_axes((percentage_p.x0 - diagram_width - diagram_gap, heatmap_p.y0, diagram_width, heatmap_p.height), sharey=heatmap_ax)
+
+        _ = plot_outcome_diagrams(outcome_order, pool.target_info,
+                                  num_outcomes=len(outcome_order),
+                                  ax=diagram_ax,
+                                  window=(window_start, window_stop),
+                                  **layout_kwargs)
+        
+        diagram_ax.annotate(pool.group,
+                            xy=(0.5, 1),
+                            xycoords='axes fraction',
+                            xytext=(0, 28),
+                            textcoords='offset points',
+                            size=10,
+                            ha='center',
+                            va='bottom',
+                           )
+
+    if title is not None:
+        ax = percentage_axs[0]
+        ax.annotate(title,
+                    xy=(0.5, 1),
+                    xycoords='axes fraction',
+                    xytext=(0, 70),
+                    textcoords='offset points',
+                    ha='center',
+                    va='bottom',
+                    size=26,
+                )
+
+    #cbar_ax = fig.add_axes((heatmap_p.x0, heatmap_p.y1 + heatmap_p.height * (3 / rows), heatmap_p.width * (20 / cols), heatmap_p.height * (1 / rows)))
+
+    #cbar = plt.colorbar(im, cax=cbar_ax, orientation='horizontal')
+
+    #cbar.set_ticks([-2, -1, 0, 1, 2])
+    #cbar.set_ticklabels(['$\leq$-2', '-1', '0', '1', '$\geq$2'])
+    #cbar_ax.xaxis.tick_top()
+
+    #cbar_ax.set_title('log2 fold change from non-targeting guides', y=3) 
+
+    #cbar_ax.annotate('gene activity\npromotes outcome',
+    #                    xy=(0, 0),
+    #                    xycoords='axes fraction',
+    #                    xytext=(0, -5),
+    #                    textcoords='offset points',
+    #                    ha='center',
+    #                    va='top',
+    #                    size=8,
+    #                )
+
+    #cbar_ax.annotate('gene activity\nsuppresses outcome',
+    #                    xy=(1, 0),
+    #                    xycoords='axes fraction',
+    #                    xytext=(0, -5),
+    #                    textcoords='offset points',
+    #                    ha='center',
+    #                    va='top',
+    #                    size=8,
+    #                )
+
+    return fig
+
+def bokeh_heatmap(pool, num_outcomes=50, num_guides=None, optimal_ordering=True):
+    relevant_outcomes = pool.most_frequent_outcomes[:num_outcomes]
+
+    l2_fcs = pool.log2_fold_changes('perfect').loc[relevant_outcomes]
+
+    phenotype_strengths = pool.chi_squared_per_guide(relevant_outcomes).sort_values(ascending=False)
+
+    guides = phenotype_strengths.index[:num_guides]
+
+    guide_correlations = l2_fcs[guides].corr()
+    linkage = scipy.cluster.hierarchy.linkage(guide_correlations, optimal_ordering=optimal_ordering)
+    dendro = scipy.cluster.hierarchy.dendrogram(linkage,
+                                                no_plot=True,
+                                                labels=guide_correlations.index, 
+                                               )
+
+    guide_order = dendro['ivl']
+
+    to_plot = guide_correlations.loc[guide_order, guide_order]
+
+    c_map = plt.get_cmap('RdBu_r')
+
+    normed = (to_plot + 1) / 2
+    rgba_float = c_map(normed)
+    rgba_int = (rgba_float * 255).astype(np.uint8)[::-1] # flip row order for plotting
+
+    fig = bokeh.plotting.figure(height=1000, width=1050, active_scroll='wheel_zoom')
+    lower_bound = -0.5
+    upper_bound = lower_bound + len(guide_order)
+
+    fig.image_rgba(image=[rgba_int], x=lower_bound, y=lower_bound, dw=len(guide_order), dh=(len(guide_order)))
+
+    top_axis = bokeh.models.axes.LinearAxis()
+    right_axis = bokeh.models.axes.LinearAxis()
+    fig.add_layout(top_axis, 'above')
+    fig.add_layout(right_axis, 'right')
+
+    for axis in [fig.yaxis, fig.xaxis]:
+        axis.ticker = np.arange(len(guide_order))
+        axis.major_label_text_font_size = "6pt"
+
+    fig.xaxis.major_label_overrides = {i: guide for i, guide in enumerate(guide_order)}
+    fig.yaxis.major_label_overrides = {i: guide for i, guide in enumerate(guide_order[::-1])}
+
+    fig.xaxis.major_label_orientation = 'vertical'
+    fig.yaxis.major_label_text_font_size = '6pt'
+
+    fig.x_range = bokeh.models.Range1d(lower_bound, upper_bound, name='x_range', tags=[upper_bound - lower_bound])
+    fig.y_range = bokeh.models.Range1d(lower_bound, upper_bound, name='y_range')
+
+    fig.grid.visible = False
+
+    #range_callback = bokeh.models.CustomJS.from_coffeescript(code=Path('heatmap_range.coffee').read_text().format(lower_bound=lower_bound, upper_bound=upper_bound))
+    range_callback = bokeh.models.CustomJS.from_coffeescript(code=f'''
+cb_obj.start = {lower_bound} if cb_obj.start < {lower_bound}
+cb_obj.end = {upper_bound} if cb_obj.end > {upper_bound}
+''')
+
+    for r in (fig.x_range, fig.y_range):
+        r.callback = range_callback
+
+    fig.axis.major_tick_in = 0
+    
+    fig.title.text = pool.group
+
+    bokeh.io.show(fig)
+    
+    return guide_order, relevant_outcomes
