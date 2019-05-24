@@ -1,7 +1,3 @@
-data
-results
-targets
-figures
 build
 __pycache__
 *.c

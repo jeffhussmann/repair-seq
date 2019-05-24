@@ -8,9 +8,9 @@ import numpy as np
 import bokeh.palettes
 import bokeh.models
 
-from knockin import pooled_screen
-from sequencing import utilities
-from sequencing.Visualize.interactive.external_coffeescript import build_callback
+from . import pooled_screen
+from hits import utilities
+from hits.Visualize.interactive.external_coffeescript import build_callback
 
 def get_outcome_statistics(pool, outcomes):
     def pval_down(outcome_count, UMI_count, nt_fraction):
