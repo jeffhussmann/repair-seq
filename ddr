@@ -7,9 +7,9 @@ from pathlib import Path
 import yaml
 import tqdm
 
-from ddr import pooled_screen
-
 def parallel(args):
+    from ddr import pooled_screen
+
     pool = pooled_screen.PooledScreen(args.base_dir, args.pool, progress=tqdm.tqdm)
 
     # Create parent results dir to avoid race condition
@@ -24,10 +24,10 @@ def parallel(args):
             '--max-procs', str(args.max_procs),
             'ddr',
             '--base_dir', str(args.base_dir),
-            '--process', ':::',
+            'process', ':::',
         ]
 
-        arg_tuples = [(args.pool, guide, str(args.stage)) for guide in pool.guides]
+        arg_tuples = [(args.pool, guide, str(stage)) for guide in pool.guides]
         for t in sorted(arg_tuples):
             parallel_command.extend(t)
         
@@ -46,6 +46,8 @@ def parallel(args):
     pool.merge_special_alignments()
 
 def parallel_common_sequences(args):
+    from ddr import pooled_screen
+
     pool = pooled_screen.PooledScreen(args.base_dir, args.pool)
     
     parallel_command = [
@@ -55,16 +57,18 @@ def parallel_common_sequences(args):
         '--max-procs', str(args.max_procs),
         'ddr',
         '--base_dir', str(args.base_dir),
-        '--process_common_sequences', ':::',
+        'process_common_sequences', ':::',
     ]
 
-    arg_pairs = [(args.group, chunk_name) for chunk_name in pool.common_sequence_chunk_names]
+    arg_pairs = [(args.pool, chunk_name) for chunk_name in pool.common_sequence_chunk_names]
     for pair in sorted(arg_pairs):
         parallel_command.extend(pair)
     
     subprocess.check_call(parallel_command)
 
 def process(args):
+    from ddr import pooled_screen
+
     sample_sheet_fn = args.base_dir / 'data' / args.pool / 'sample_sheet.yaml'
     description = yaml.load(sample_sheet_fn.read_text())
 
@@ -73,11 +77,14 @@ def process(args):
     exp.process(args.stage)
 
 def process_common_sequences(args):
-    exp = pooled_screen.CommonSequenceExperiment(args.base_dir, args.group, args.chunk, progress=args.progress)
+    from ddr import pooled_screen
+
+    exp = pooled_screen.CommonSequenceExperiment(args.base_dir, args.pool, args.chunk, progress=args.progress)
     exp.process()
 
 parser = argparse.ArgumentParser()
-subparsers = parser.add_subparsers()
+subparsers = parser.add_subparsers(dest='subcommand', title='subcommands')
+subparsers.required = True
 
 parser_process = subparsers.add_parser('process')
 parser_process.add_argument('pool')
@@ -97,7 +104,7 @@ parser_process_cs.add_argument('chunk')
 parser_process_cs.add_argument('--progress', const=tqdm.tqdm, action='store_const')
 parser_process_cs.set_defaults(func=process_common_sequences)
 
-parser.add_argument('--base_dir', type=Path, required=True)
+parser.add_argument('--base_dir', type=Path, default=Path.home() / 'projects' / 'ddr')
 
 args = parser.parse_args()
 args.func(args)
