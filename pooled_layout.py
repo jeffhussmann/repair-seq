@@ -1760,10 +1760,10 @@ def outcome_to_sanitized_string(outcome):
     c, s = order(outcome)
     return f'category{c:03d}_subcategory{s:03d}'
 
-def sanitized_string_to_outcome(escaped_string):
-    match = re.match('category(\d+)_subcategory(\d+)', escaped_string)
+def sanitized_string_to_outcome(sanitized_string):
+    match = re.match('category(\d+)_subcategory(\d+)', sanitized_string)
     if not match:
-        raise ValueError(escaped_string)
+        raise ValueError(sanitized_string)
 
     c, s = map(int, match.groups())
     category, subcats = category_order[c]
