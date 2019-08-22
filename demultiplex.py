@@ -40,7 +40,7 @@ class FastqQuartetSplitter(object):
         fns = {}
         chunk_string = chunk_to_string(self.next_chunk_number)
         for which in ['R1', 'R2']:
-            fns[which] = self.base_path / '{}.{}.{}.fastq.gz'.format(which, self.quartet_name, chunk_string)
+            fns[which] = self.base_path / f'{which}.{self.quartet_name}.{chunk_string}.fastq.gz'
 
         self.chunk_fhs = {which: gzip.open(str(fn), 'wt', compresslevel=4) for which, fn in fns.items()}
         
@@ -78,7 +78,7 @@ class UMISorters(object):
         for guide in self.progress(sorted(self.sorters)):
             sorted_reads = sorted(self.sorters[guide], key=lambda r: r.name)
 
-            fn = self.output_dir / '{}_R2.fastq.gz'.format(guide)
+            fn = self.output_dir / f'{guide}_R2.fastq.gz'
             with gzip.open(str(fn), 'wt') as zfh:
                 for read in sorted_reads:
                     zfh.write(str(read))
@@ -87,7 +87,7 @@ class UMISorters(object):
             del sorted_reads
 
 def chunk_to_string(chunk):
-    return '{:05d}'.format(int(chunk))
+    return f'{chunk:05d}'
 
 def demux_samples(sample_dir, quartet_name):
     sample_dir = Path(sample_dir)
@@ -106,7 +106,7 @@ def demux_samples(sample_dir, quartet_name):
     to_skip = set(sample_sheet.get('samples_to_skip', []))
 
     def get_sample_input_dir(sample_name):
-        return sample_dir.parent / '{}_{}'.format(group_name, sample_name) / 'input'
+        return sample_dir.parent / f'{group_name}_{sample_name}' / 'input'
 
     for sample_name in sample_names:
         if sample_name not in to_skip:
@@ -133,16 +133,8 @@ def demux_samples(sample_dir, quartet_name):
     for splitter in splitters.values():
         splitter.close()
 
-    #for sample_name in sample_names:
-    #    if sample_name not in to_skip:
-    #        stats = {
-    #            'num_reads': sample_counts[sample_name],
-    #        }
-    #        stats_fn = get_sample_input_dir(sample_name) / 'stats.yaml'
-    #        stats_fn.write_text(yaml.dump(stats, default_flow_style=False))
-
     counts = pd.Series(sample_counts).sort_values(ascending=False)
-    counts.to_csv(sample_dir / 'sample_counts_{}.txt'.format(quartet_name), sep='\t')
+    counts.to_csv(sample_dir / f'sample_counts_{quartet_name}.txt', sep='\t')
 
     expected_indices = set()
     for seqs in sample_sheet['sample_indices'].values():
@@ -150,7 +142,7 @@ def demux_samples(sample_dir, quartet_name):
             seqs = [seqs]
         expected_indices.update(seqs)
 
-    with (sample_dir / 'index_stats_{}.txt'.format(quartet_name)).open('w') as fh:
+    with (sample_dir / f'index_stats_{quartet_name}.txt').open('w') as fh:
         total = sum(index_counts.values())
         for index, count in index_counts.most_common(50):
             name = index_to_sample_name.get(index, '')
@@ -164,19 +156,19 @@ def demux_samples(sample_dir, quartet_name):
 
             fraction = float(count) / total
 
-            fh.write('{0}\t{2: >10,}\t({3: >6.2%})\t{4}{1}\n'.format(index, mismatches, count, fraction, name))
+            fh.write(f'{index}\t{count: >10,}\t({fraction: >6.2%})\t{name}{mismatches}\n')
 
 def demux_all_sample_guides(sample_dir, max_procs):
     sample_dir = Path(sample_dir)
 
-    sample_sheet = yaml.load((sample_dir / 'sample_sheet.yaml').read_text())
+    sample_sheet = yaml.safe_load((sample_dir / 'sample_sheet.yaml').read_text())
 
     samples = {str(s) for s in sample_sheet['sample_indices']}
     group_name = sample_sheet['group_name']
 
     for sample in sorted(samples):
         print(sample)
-        sample_dir = sample_dir.parent / '{}_{}'.format(group_name, sample)
+        sample_dir = sample_dir.parent / f'{group_name}_{sample}'
         demux_guides_parallel(sample_dir, max_procs)
 
 def demux_guides_parallel(sample_dir, max_procs):
@@ -212,7 +204,7 @@ def demux_guides_parallel(sample_dir, max_procs):
 
     series_list = [pd.read_csv(fn, index_col=0, header=None, squeeze=True) for fn in guide_count_fns]
 
-    summed = pd.concat(series_list, axis=1).sum(axis=1).astype(int)
+    summed = pd.concat(series_list, axis=1, sort=True).sum(axis=1).astype(int)
     summed.to_csv(sample_dir / 'guide_counts.txt')
 
     # Start the most abundant first to help maximize parallelization.
@@ -276,14 +268,16 @@ if __name__ == '__main__':
     elif args.demux_guides_chunk is not None:
         chunk_name = args.demux_guides_chunk
 
-        R1_fn = sample_dir / 'input' / 'R1.{}.fastq.gz'.format(chunk_name)
-        R2_fn = sample_dir / 'input' / 'R2.{}.fastq.gz'.format(chunk_name)
+        R1_fn = sample_dir / 'input' / f'R1.{chunk_name}.fastq.gz'
+        R2_fn = sample_dir / 'input' / f'R2.{chunk_name}.fastq.gz'
 
-        STAR_index = '/home/jah/projects/britt/guides/STAR_index'
+        sample_sheet = yaml.safe_load((sample_dir / 'sample_sheet.yaml').read_text())
+
+        STAR_index = Path('/home/jah/projects/ddr/guides') / sample_sheet['guide_library']
 
         output_dir = sample_dir / 'guide_mapping'
         output_dir.mkdir(exist_ok=True)
-        STAR_output_prefix = output_dir / '{}.'.format(chunk_name)
+        STAR_output_prefix = output_dir / f'{chunk_name}.'
 
         bam_fn = mapping_tools.map_STAR(R1_fn, STAR_index, STAR_output_prefix,
                                         sort=False,
@@ -295,7 +289,7 @@ if __name__ == '__main__':
             fn = STAR_output_prefix.parent / (STAR_output_prefix.name + suffix)
             fn.unlink()
 
-        bad_guides_fn = output_dir / '{}.bad_guides.bam'.format(chunk_name)
+        bad_guides_fn = output_dir / f'{chunk_name}.bad_guides.bam'
 
         by_guide_dir = sample_dir / 'by_guide'
         by_guide_dir.mkdir(exist_ok=True)
@@ -376,8 +370,8 @@ if __name__ == '__main__':
     elif args.merge_chunks:
         guide = args.merge_chunks
         by_guide_dir = sample_dir / 'by_guide'
-        chunk_fns = sorted(by_guide_dir.glob('*/{}_R2.fastq.gz'.format(guide)))
-        merged_fn = by_guide_dir / '{}_R2.fastq.gz'.format(guide)
+        chunk_fns = sorted(by_guide_dir.glob(f'*/{guide}_R2.fastq.gz'))
+        merged_fn = by_guide_dir / f'{guide}_R2.fastq.gz'
 
         chunks = [fastq.reads(fn) for fn in chunk_fns]
         
