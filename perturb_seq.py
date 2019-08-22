@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 import pysam
 import scanpy as sc 
+import scipy.sparse
 
 from hits import utilities, mapping_tools, fasta, fastq, bus, sam
 
@@ -54,20 +55,28 @@ def build_guide_index(guides_fn, index_dir):
         for i, name in enumerate(guides_df.index):
             fh.write(f'{name}\n')
 
+def load_bustools_counts(prefix):
+    prefix = str(prefix)
+    data = sc.read_mtx(str(prefix) + '.mtx')
+    data.obs.index = pd.read_csv(prefix + '.barcodes.txt', header=None)[0].values
+    data.var.index = pd.read_csv(prefix + '.genes.txt', header=None)[0].values
+
+    return data
+
 class PerturbseqLane():
     def __init__(self, full_sample_sheet, name):
         self.name = name
         self.barcode_length = 16
         self.UMI_length = 10
 
-        sample_sheet = full_sample_sheet[name]
+        sample_sheet = full_sample_sheet['lanes'][name]
 
-        self.output_dir = Path(sample_sheet['output_dir'])
+        self.output_dir = Path(full_sample_sheet['output_dir']) / name
         self.sgRNA_dir  = self.output_dir / 'sgRNA'
         self.GEX_dir  = self.output_dir / 'GEX'
 
-        self.guide_index = Path(sample_sheet['guide_index'])
-        self.whitelist_fn = Path(sample_sheet['whitelist_fn'])
+        self.guide_index = Path(full_sample_sheet['guide_index'])
+        self.whitelist_fn = Path(full_sample_sheet['whitelist_fn'])
 
         self.sgRNA_fns = {
             'dir': self.sgRNA_dir,
@@ -92,8 +101,8 @@ class PerturbseqLane():
             'bus': self.GEX_dir / 'output.bus',
             'counts': self.GEX_dir / 'counts',
 
-            'kallisto_index': Path(sample_sheet['kallisto_index']),
-            'genemap': Path(sample_sheet['kallisto_genemap']),
+            'kallisto_index': Path(full_sample_sheet['kallisto_index']),
+            'genemap': Path(full_sample_sheet['kallisto_genemap']),
             'ecmap': self.GEX_dir / 'matrix.ec',
             'txnames': self.GEX_dir / 'transcripts.txt',
         }
@@ -234,14 +243,6 @@ class PerturbseqLane():
                 
             ENSG_to_name[ENSG] = name_to_use
 
-        def load_bustools_counts(prefix):
-            prefix = str(prefix)
-            data = sc.read_mtx(str(prefix) + '.mtx')
-            data.obs.index = pd.read_csv(prefix + '.barcodes.txt', header=None)[0].values
-            data.var.index = pd.read_csv(prefix + '.genes.txt', header=None)[0].values
-            
-            return data
-
         gex_data = load_bustools_counts(self.GEX_fns['counts'])
         gex_data.var['name'] = [ENSG_to_name[g] for g in gex_data.var.index.values]
 
@@ -272,6 +273,39 @@ class PerturbseqLane():
         #self.convert_bus_to_counts(self.GEX_fns)
 
         self.combine_sgRNA_and_GEX_counts()
+
+class MultipleLanes():
+    def __init__(self, full_sample_sheet):
+        if isinstance(full_sample_sheet, (str, Path)):
+            full_sample_sheet = yaml.safe_load(Path(full_sample_sheet).read_text())
+
+        self.lanes = [PerturbseqLane(full_sample_sheet, name) for name in full_sample_sheet['lanes']]
+
+        self.output_dir = Path(full_sample_sheet['output_dir'])
+
+        self.fns = {
+            'all_cells': self.output_dir / 'all_cells.h5ad',
+        }
+
+    def combine_counts(self):
+        all_cells = {}
+        for lane in self.lanes:
+            gex_data = sc.read_h5ad(lane.fns['annotated_counts'])
+            good_cell_query = 'num_UMIs > 0.5e4 and sgRNA_num_UMIs > 1e2 and sgRNA_highest_count / sgRNA_num_UMIs > 0.9'
+            good_cells = gex_data.obs.query(good_cell_query).index
+            good_cells_with_lane = [f'{cell_bc}-{lane.name[-1]}' for cell_bc in good_cells]
+            all_cells[lane.name] = gex_data[good_cells]
+            all_cells[lane.name].obs.index = good_cells_with_lane
+            
+        all_Xs = scipy.sparse.vstack([all_cells[name].X for name in sorted(all_cells)])
+        all_obs = pd.concat([all_cells[name].obs for name in sorted(all_cells)])
+        all_var = all_cells[sorted(all_cells)[0]].var
+
+        all_cells = sc.AnnData(all_Xs, all_obs, all_var)
+        all_cells.write(self.fns['all_cells'])
+
+    def load_cells(self):
+        return sc.read_h5ad(self.fns['all_cells'])
 
 def process_in_pool(lane):
     lane.process()
