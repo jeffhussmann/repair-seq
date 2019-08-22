@@ -13,10 +13,11 @@ import bokeh.plotting
 import bokeh.palettes
 from matplotlib.patches import ConnectionPatch
 
-from . import quantiles as quantiles_module
 from knock_knock.target_info import degenerate_indel_from_string, SNVs, effectors
-from hits import Visualize, utilities
+from hits import utilities
+import hits.visualize
 
+from . import quantiles as quantiles_module
 from .pooled_layout import HDROutcome, DeletionOutcome, HDRPlusDeletionOutcome, DeletionPlusMismatchOutcome
 
 def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=None, window=70,

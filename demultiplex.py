@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python3.6
 
 import argparse
 import subprocess
@@ -17,8 +17,8 @@ import tqdm; progress = tqdm.tqdm
 
 from hits import mapping_tools, fastq, sam, utilities
 
-from knock_knock import collapse
-from knock_knock.collapse_cython import hamming_distance
+from ddr import collapse
+from ddr.collapse_cython import hamming_distance
 
 class FastqQuartetSplitter(object):
     def __init__(self, base_path, quartet_name, reads_per_chunk=5000000):

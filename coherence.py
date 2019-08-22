@@ -5,10 +5,11 @@ import yaml
 import numpy as np
 import pandas as pd
 
-from . import experiment, collapse
+from knock_knock import experiment
 from hits import fastq
 from hits.utilities import group_by
 
+from . import collapse
 from .collapse_cython import hamming_distance_matrix, register_corrections
 
 class UMI_Outcome(object):

@@ -9,7 +9,7 @@ import numpy as np
 import h5py
 import tqdm
 
-from knock_knock import coherence, experiment
+from knock_knock import experiment
 from hits import utilities
 
 progress = tqdm.tqdm

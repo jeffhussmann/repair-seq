@@ -16,9 +16,9 @@ import nbconvert
 import nbformat
 
 from hits import utilities, sam, fastq, mapping_tools, annotation
-from knock_knock import experiment, target_info, collapse, coherence, visualize
+from knock_knock import experiment, target_info, visualize
 
-from . import pooled_layout
+from . import pooled_layout, collapse, coherence
 
 memoized_property = utilities.memoized_property
 memoized_with_key = utilities.memoized_with_key
