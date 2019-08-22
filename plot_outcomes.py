@@ -20,7 +20,10 @@ import hits.visualize
 from . import quantiles as quantiles_module
 from .pooled_layout import HDROutcome, DeletionOutcome, HDRPlusDeletionOutcome, DeletionPlusMismatchOutcome
 
-def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=None, window=70,
+def plot_outcome_diagrams(outcome_order, target_info,
+                          num_outcomes=None,
+                          title=None,
+                          window=70,
                           ax=None,
                           flip_if_reverse=True,
                           center_at_PAM=False,
@@ -52,7 +55,7 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=N
     if flip_if_reverse and guide.strand == '-':
         flip = True
         transform_seq = utilities.complement
-        cut_offset_sign = -1
+        cut_offset_sign = 1
     else:
         flip = False
         transform_seq = utilities.identity
@@ -140,7 +143,7 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=N
                                 ha='center',
                                 va='center',
                                 size=text_size,
-                                color=Visualize.igv_colors[transform_seq(b)],
+                                color=hits.visualize.igv_colors[transform_seq(b)],
                                 weight='bold',
                                )
 
@@ -168,7 +171,7 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=N
                                         ha='center',
                                         va='center',
                                         size=text_size,
-                                        color=Visualize.igv_colors[b],
+                                        color=hits.visualize.igv_colors[b],
                                     )
                             xs_to_skip.add(x)
 
@@ -195,6 +198,76 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=N
             draw_rect(max(PAM_end, guide_end), window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
 
         draw_sequence(y, alpha=1)
+
+    def draw_donor(y, HDR_outcome, deletion_outcome, on_top=False):
+        SNP_xs = set()
+
+        for ((strand, position), ref_base), read_base in zip(target_info.fingerprints[target_info.target], HDR_outcome.donor_SNV_read_bases):
+            x = position - offset
+            if window_left <= x <= window_right:
+                # Note: read base of '-' means it was deleted
+                if ref_base != read_base and read_base != '_' and read_base != '-':
+                    SNP_xs.add(x)
+                    ax.annotate(transform_seq(read_base),
+                                xy=(x, y),
+                                xycoords='data', 
+                                ha='center',
+                                va='center',
+                                size=text_size,
+                                alpha=0.35,
+                                #color=hits.visualize.igv_colors[transform_seq(read_base)],
+                                #weight='bold',
+                                annotation_clip=False,
+                                )
+            
+                if read_base != '-':
+                    if  read_base == '_':
+                        color = 'grey'
+                        alpha = 0.3
+                    else:
+                        color = hits.visualize.igv_colors[transform_seq(read_base)]
+                        alpha = 0.7
+
+                    draw_rect(x - 0.5, x + 0.5, y - wt_height / 2, y + wt_height / 2, alpha, color=color)
+
+        all_deletions = [(d, 'red', False) for d in HDR_outcome.donor_deletions]
+        if deletion_outcome is not None:
+            all_deletions.append((deletion_outcome.deletion, 'black', True))
+
+        if len(all_deletions) == 0:
+            draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+        elif len(all_deletions) == 1:
+            deletion, color, draw_MH = all_deletions[0]
+            draw_deletion(y, deletion, color=color, draw_MH=draw_MH)
+        elif len(all_deletions) > 1:
+            raise NotImplementedError
+
+        if draw_all_sequence:
+            draw_sequence(y, xs_to_skip=SNP_xs)
+
+        if on_top:
+            strands = set(SNV['strand'] for SNV in target_info.donor_SNVs['donor'].values())
+            if len(strands) > 1:
+                raise ValueError('donor strand is weird')
+            else:
+                strand = strands.pop()
+
+            arrow_ys = [y + wt_height * 0.4, y, y - wt_height * 0.4]
+
+            for x in range(window_left, window_right + 1, 1):
+                if x in SNP_xs:
+                    continue
+
+                if strand == '+':
+                    arrow_xs = [x - 0.5, x + 0.5, x - 0.5]
+                else:
+                    arrow_xs = [x + 0.5, x - 0.5, x + 0.5]
+
+                ax.plot(arrow_xs, arrow_ys,
+                        color='black',
+                        alpha=0.2,
+                        clip_on=False,
+                )
 
     for i, (category, subcategory, details) in enumerate(outcome_order):
         y = num_outcomes - i - 1
@@ -226,7 +299,7 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=N
                                     ha='center',
                                     va='center',
                                     size=text_size * 1,
-                                    color=Visualize.igv_colors[transform_seq(b)],
+                                    color=hits.visualize.igv_colors[transform_seq(b)],
                                     weight='bold',
                                 )
             
@@ -250,7 +323,7 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=N
                                 ha='center',
                                 va='center',
                                 size=text_size,
-                                color=Visualize.igv_colors[transform_seq(snv.basecall.upper())],
+                                color=hits.visualize.igv_colors[transform_seq(snv.basecall.upper())],
                                 weight='bold',
                             )
             
@@ -276,16 +349,13 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=N
                                 ha='center',
                                 va='center',
                                 size=text_size,
-                                color=Visualize.igv_colors[transform_seq(snv.basecall.upper())],
+                                color=hits.visualize.igv_colors[transform_seq(snv.basecall.upper())],
                                 weight='bold',
                             )
             if draw_all_sequence:
                 draw_sequence(y, xs_to_skip)
 
-
         elif category == 'donor' or category == 'donor + deletion':
-            SNP_xs = set()
-
             if category == 'donor':
                 HDR_outcome = HDROutcome.from_string(details)
                 deletion_outcome = None
@@ -293,48 +363,9 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=N
                 HDR_plus_deletion_outcome = HDRPlusDeletionOutcome.from_string(details)
                 HDR_outcome = HDR_plus_deletion_outcome.HDR_outcome
                 deletion_outcome = HDR_plus_deletion_outcome.deletion_outcome
-
-            for ((strand, position), ref_base), read_base in zip(target_info.fingerprints[target_info.target], HDR_outcome.donor_SNV_read_bases):
-                # Note: read base of '-' means it was deleted
-                if ref_base != read_base and read_base != '_' and read_base != '-':
-                    x = position - offset
-                    SNP_xs.add(x)
-                    ax.annotate(transform_seq(read_base),
-                                xy=(x, y),
-                                xycoords='data', 
-                                ha='center',
-                                va='center',
-                                size=text_size,
-                                alpha=0.35,
-                                #color=Visualize.igv_colors[transform_seq(read_base)],
-                                #weight='bold',
-                               )
+    
+            draw_donor(y, HDR_outcome, deletion_outcome, False)
             
-                if read_base != '-':
-                    if  read_base == '_':
-                        color = 'grey'
-                        alpha = 0.3
-                    else:
-                        color = Visualize.igv_colors[transform_seq(read_base)]
-                        alpha = 0.7
-
-                    draw_rect(position - offset - 0.5, position - offset + 0.5, y - wt_height / 2, y + wt_height / 2, alpha, color=color)
-
-            all_deletions = [(d, 'red', False) for d in HDR_outcome.donor_deletions]
-            if deletion_outcome is not None:
-                all_deletions.append((deletion_outcome.deletion, 'black', True))
-
-            if len(all_deletions) == 0:
-                draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
-            elif len(all_deletions) == 1:
-                deletion, color, draw_MH = all_deletions[0]
-                draw_deletion(y, deletion, color=color, draw_MH=draw_MH)
-            elif len(all_deletions) > 1:
-                raise NotImplementedError
-
-            if draw_all_sequence:
-                draw_sequence(y, xs_to_skip=SNP_xs)
-
         else:
             label = '{}, {}, {}'.format(category, subcategory, details)
             ax.annotate(label,
@@ -344,6 +375,10 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=N
                         va='center',
                         size=text_size,
                         )
+
+    donor_SNV_read_bases = ''.join(d['base'] for name, d in sorted(target_info.donor_SNVs['donor'].items()))
+    HDR_outcome = HDROutcome(donor_SNV_read_bases, [])
+    draw_donor(num_outcomes + 0.75, HDR_outcome, None, on_top=True)
 
     if draw_wild_type_on_top:
         draw_wild_type(num_outcomes, on_top=True)
@@ -362,7 +397,7 @@ def plot_outcome_diagrams(outcome_order, target_info, num_outcomes=None, title=N
         ax.annotate(title,
                     xy=(0, 1),
                     xycoords=('data', 'axes fraction'),
-                    xytext=(0, 22),
+                    xytext=(0, 28),
                     textcoords='offset points',
                     ha='center',
                     va='bottom',
@@ -721,16 +756,16 @@ def plot_guide_specific_frequencies(outcome,
 
         vector = ['upper right' if v == 'up' else 'lower right' for v in to_label['direction']]
 
-        Visualize.label_scatter_plot(g.ax_joint, 'num_cells', 'fraction', 'alias',
-                                     data=to_label,
-                                     vector=vector,
-                                     text_kwargs=dict(size=8),
-                                     initial_distance=5,
-                                     distance_increment=5,
-                                     arrow_alpha=0.2,
-                                     avoid=True,
-                                     avoid_axis_labels=True,
-                                    )
+        hits.visualize.label_scatter_plot(g.ax_joint, 'num_cells', 'fraction', 'alias',
+                                          data=to_label,
+                                          vector=vector,
+                                          text_kwargs=dict(size=8),
+                                          initial_distance=5,
+                                          distance_increment=5,
+                                          arrow_alpha=0.2,
+                                          avoid=True,
+                                          avoid_axis_labels=True,
+                                         )
 
     if guides_to_label is not None or genes_to_label is not None:
         if guides_to_label is not None:
@@ -750,19 +785,20 @@ def plot_guide_specific_frequencies(outcome,
             kwargs = dict(color=None,
                           text_kwargs=dict(size=guide_label_size),
                          )
-        Visualize.label_scatter_plot(g.ax_joint, 'num_cells', 'fraction', 'alias',
-                                     data=to_label,
-                                     vector=vector,
-                                     initial_distance=initial_label_offset,
-                                     distance_increment=5,
-                                     arrow_alpha=0.2,
-                                     avoid=True,
-                                     avoid_axis_labels=True,
-                                     avoid_existing=True,
-                                     min_arrow_distance=0,
-                                     **kwargs)
+        hits.visualize.label_scatter_plot(g.ax_joint, 'num_cells', 'fraction', 'alias',
+                                          data=to_label,
+                                          vector=vector,
+                                          initial_distance=initial_label_offset,
+                                          distance_increment=5,
+                                          arrow_alpha=0.2,
+                                          avoid=True,
+                                          avoid_axis_labels=True,
+                                          avoid_existing=True,
+                                          min_arrow_distance=0,
+                                          **kwargs,
+                                         )
 
-    Visualize.add_commas_to_ticks(g.ax_joint, which='x')
+    hits.visualize.add_commas_to_ticks(g.ax_joint, which='x')
     g.ax_joint.tick_params(labelsize=tick_label_size)
 
     if not draw_marginals:
@@ -792,7 +828,8 @@ good_colors = (colors[2:7] + colors[8:])*100
 
 colors_list = [[c]*10 for c in good_colors]
 
-def plot_genes(pool, genes,
+def plot_genes(pool,
+               genes,
                only_best_promoter=False,
                guide_status='perfect',
                outcomes=None,
@@ -888,7 +925,7 @@ def plot_genes(pool, genes,
         ax.plot(list(xs), ys, 'o', markeredgewidth=0, markersize=marker_size, color=color, alpha=marker_alpha, label=label, clip_on=False)
         ax.plot(list(xs), ys, '-', linewidth=line_width, color=color, alpha=line_alpha, clip_on=False)
     
-    nt_fracs = pool.non_targeting_fractions('all')[order]
+    nt_fracs = pool.non_targeting_fractions('all').reindex(order, fill_value=0)
 
     if draw_nt_fracs:
         for key in ('frequency', 'frequency_zoom'):
@@ -897,15 +934,15 @@ def plot_genes(pool, genes,
     
     def guide_to_color(guide):
         gene = guides_df['gene'][guide]
-        i = list(pool.gene_guides(gene)).index(guide)
+        i = list(pool.gene_guides(gene, only_best_promoter)).index(guide)
         color = gene_to_colors[gene][i]
         
         return color
 
-    fractions = pool.outcome_fractions(guide_status).loc[order]
-    absolute_change = fractions.sub(pool.non_targeting_fractions('all')[order], axis=0)
-    fold_changes = pool.fold_changes(guide_status).loc[order]
-    log2_fold_changes = pool.log2_fold_changes(guide_status).loc[order]
+    fractions = pool.outcome_fractions(guide_status).reindex(order, fill_value=0)
+    absolute_change = fractions.sub(pool.non_targeting_fractions('all').reindex(order, fill_value=0), axis=0)
+    fold_changes = pool.fold_changes(guide_status).reindex(order, fill_value=1)
+    log2_fold_changes = pool.log2_fold_changes(guide_status).reindex(order, fill_value=0)
 
     for guide in guides:
         if genes_to_draw is not None:
@@ -1017,7 +1054,7 @@ def plot_genes(pool, genes,
             if first_gene is None:
                 first_gene = gene
             
-            vals = pool.log2_fold_changes(guide_status).loc[order[::-1], gene_guides]
+            vals = pool.log2_fold_changes(guide_status).reindex(order[::-1], fill_value=0)[gene_guides]
             
             num_rows, num_cols = vals.shape
         
@@ -1438,7 +1475,16 @@ def gene_significance(pool, outcomes, draw_outcomes=False):
     
     return fig, significant
 
-def big_heatmap(pool_list, genes=None, guides=None, outcomes_list=None, windows=40, cluster_guides=False, cluster_outcomes=False, title=None, layout_kwargs=None):
+def big_heatmap(pool_list,
+                genes=None,
+                guides=None,
+                outcomes_list=None,
+                windows=40,
+                cluster_guides=False,
+                cluster_outcomes=False,
+                title=None,
+                layout_kwargs=None,
+               ):
     if layout_kwargs is None:
         layout_kwargs = dict(draw_all_sequence=False)
 
@@ -1559,7 +1605,8 @@ def big_heatmap(pool_list, genes=None, guides=None, outcomes_list=None, windows=
         heatmap_ax.set_xticklabels(guide_order, rotation=90, size=6)
         heatmap_ax.xaxis.set_tick_params(labeltop=True)
 
-        if cluster_guides:
+        #if cluster_guides:
+        if False:
             heatmap_ax.xaxis.set_ticks_position('both')
         else:
             heatmap_ax.xaxis.set_ticks_position('top')
