@@ -273,7 +273,7 @@ if __name__ == '__main__':
 
         sample_sheet = yaml.safe_load((sample_dir / 'sample_sheet.yaml').read_text())
 
-        STAR_index = Path('/home/jah/projects/ddr/guides') / sample_sheet['guide_library']
+        STAR_index = Path('/home/jah/projects/ddr/guides') / sample_sheet['guide_library'] / 'STAR_index'
 
         output_dir = sample_dir / 'guide_mapping'
         output_dir.mkdir(exist_ok=True)
