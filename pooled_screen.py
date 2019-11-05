@@ -1380,12 +1380,6 @@ class BrittIlluminaExperiment(experiment.IlluminaExperiment):
 def explore(base_dir, group,
             initial_guide=None,
             by_outcome=True,
-            ref_centric=True,
-            highlight_SNPs=True,
-            draw_mismatches=True,
-            split_at_indels=True,
-            draw_sequence=True,
-            force_left_aligned=True,
             **kwargs):
     pool = PooledScreen(base_dir, group)
 
@@ -1400,38 +1394,27 @@ def explore(base_dir, group,
         'guide': Select(options=guides, value=initial_guide, layout=Layout(height='200px', width='450px')),
         'read_id': Select(options=[], layout=Layout(height='200px', width='600px')),
         'outcome': Select(options=[], continuous_update=False, layout=Layout(height='200px', width='450px')),
-        #'zoom_in': ipywidgets.FloatRangeSlider(value=[-0.02, 1.02], min=-0.02, max=1.02, step=0.001, continuous_update=False, layout=ipywidgets.Layout(width='1200px')),
-        'save': ipywidgets.Button(description='Save'),
+    }
+    
+    non_widgets = {
         'file_name': ipywidgets.Text(value=str(Path(base_dir) / 'figures')),
+        'save': ipywidgets.Button(description='Save snapshot'),
     }
 
-    kwargs['ref_centric'] = ref_centric
-    kwargs['highlight_SNPs'] = highlight_SNPs
-    kwargs['draw_mismatches'] = draw_mismatches
-    kwargs['split_at_indels'] = split_at_indels
-    kwargs['draw_sequence'] = draw_sequence
-    kwargs['force_left_aligned'] = force_left_aligned
-
     toggles = [
-        'parsimonious',
-        'relevant',
-        'ref_centric',
-        'draw_sequence',
-        'force_left_aligned',
-        'draw_qualities',
-        'draw_mismatches',
-        'highlight_SNPs',
-        'split_at_indels',
+        ('parsimonious', False),
+        ('relevant', True),
+        ('ref_centric', True),
+        ('draw_sequence', False),
+        ('draw_qualities', False),
+        ('draw_mismatches', True),
+        ('draw_read_pair', False),
+        ('force_left_aligned', False),
+        ('split_at_indels', False),
+        ('highlight_SNPs', True),
     ]
-    for toggle in toggles:
-        widgets[toggle] = ipywidgets.ToggleButton(value=kwargs.get(toggle, False))
-
-    def save(change):
-        fig = interactive.result
-        fn = widgets['file_name'].value
-        fig.savefig(fn, bbox_inches='tight')
-
-    widgets['save'].on_click(save)
+    for key, default_value in toggles:
+        widgets[key] = ipywidgets.ToggleButton(value=kwargs.pop(key, default_value))
 
     # For some reason, the target widget doesn't get a label without this.
     for k, v in widgets.items():
@@ -1522,11 +1505,10 @@ def explore(base_dir, group,
             als = l.relevant_alignments
 
         diagram = visualize.ReadDiagram(als, exp.target_info,
-                                        size_multiple=kwargs.get('size_multiple', 1),
                                         max_qual=exp.max_qual,
                                         flip_target=True,
                                         target_on_top=True,
-                                        features_to_hide=['ssODN_Cpf1_deletion'],
+                                        #features_to_hide=['ssODN_Cpf1_deletion'],
                                         **plot_kwargs)
         fig = diagram.fig
 
@@ -1539,29 +1521,31 @@ def explore(base_dir, group,
 
         return fig
 
-    # Make a version of the widgets dictionary that excludes non-plot arguments.
-    most_widgets = widgets.copy()
-    most_widgets.pop('save')
-    most_widgets.pop('file_name')
+    all_kwargs = {**{k: ipywidgets.fixed(v) for k, v in kwargs.items()}, **widgets}
 
-    interactive = ipywidgets.interactive(plot, **most_widgets)
+    interactive = ipywidgets.interactive(plot, **all_kwargs)
     interactive.update()
 
     def make_row(keys):
-        return ipywidgets.HBox([widgets[k] for k in keys])
+        return ipywidgets.HBox([widgets[k] if k in widgets else non_widgets[k] for k in keys])
 
     if by_outcome:
         top_row_keys = ['guide', 'outcome', 'read_id']
     else:
         top_row_keys = ['guide', 'read_id']
 
+    @output.capture(clear_output=False)
+    def save(change):
+        fig = interactive.result
+        fn = widgets['file_name'].value
+        fig.savefig(fn, bbox_inches='tight')
+
+    non_widgets['save'].on_click(save)
+
     layout = ipywidgets.VBox(
         [make_row(top_row_keys),
-         make_row(toggles),
-         make_row(['save',
-                   'file_name',
-                  ]),
-         #widgets['zoom_in'],
+         make_row([k for k, d in toggles]),
+         make_row(['save', 'file_name']),
          interactive.children[-1],
          output,
         ],
