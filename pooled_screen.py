@@ -139,6 +139,8 @@ class SingleGuideExperiment(experiment.Experiment):
 
         collapsed_fn = self.fns_by_read_type['fastq']['collapsed_R2']
 
+        UMIs_seen = defaultdict(list)
+
         with collapsed_fn.open('w') as collapsed_fh:
             groups = utilities.group_by(self.reads, UMI_key)
             for UMI, UMI_group in groups:
@@ -149,6 +151,8 @@ class SingleGuideExperiment(experiment.Experiment):
                     annotation = collapse.Annotations['collapsed_UMI'].from_identifier(cluster.name)
                     annotation['UMI'] = UMI
                     annotation['cluster_id'] = i
+
+                    UMIs_seen[UMI].append(annotation['num_reads'])
 
                     if annotation['num_reads'] >= self.min_reads_per_cluster:
                         total += 1
@@ -181,8 +185,11 @@ class SingleGuideExperiment(experiment.Experiment):
         mismatch_rates = mismatch_counts / (max(total, 1))
         np.savetxt(self.fns['guide_mismatch_rates'], mismatch_rates)
 
-        return total
-    
+        with open(self.fns['UMIs_seen'], 'w') as fh:
+            for UMI in sorted(UMIs_seen):
+                cluster_sizes = ','.join(str(size) for size in UMIs_seen[UMI])
+                fh.write(f'{UMI}\t{cluster_sizes}\n')
+
     @property
     def collapsed_reads(self):
         fn = self.fns_by_read_type['fastq']['collapsed_R2']
