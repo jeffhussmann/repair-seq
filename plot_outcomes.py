@@ -482,19 +482,24 @@ def plot_guide_specific_frequencies(outcome,
                                     num_to_label=20,
                                     genes_to_label=None,
                                     guides_to_label=None,
-                                    y_lims=None,
+                                    fraction_lims=None,
+                                    num_cells_lims=None,
                                     p_val_method='binomial',
                                     outcome_name=None,
                                     guide_status='perfect',
                                     guide_subset=None,
-                                    draw_marginals=True,
+                                    draw_marginals='hist',
                                     draw_diagram=True,
                                     gene_to_color=None,
                                     color_labels=False,
                                     initial_label_offset=7,
-                                    only_color_best_promoter=False,
+                                    only_best_promoter=False,
                                     guide_aliases=None,
                                     big_labels=False,
+                                    as_percentage=False,
+                                    non_targeting_label_location='floating',
+                                    avoid_label_overlap=True,
+                                    flip_axes=False,
                                    ):
     if guide_aliases is None:
         guide_aliases = {}
@@ -502,11 +507,29 @@ def plot_guide_specific_frequencies(outcome,
     if big_labels:
         axis_label_size = 20
         tick_label_size = 14
-        guide_label_size = 18
+        big_guide_label_size = 18
+        small_guide_label_size = 8
     else:
         axis_label_size = 12
         tick_label_size = 10
-        guide_label_size = 12
+        big_guide_label_size = 12
+        small_guide_label_size = 10
+
+    fraction_scaling_factor = 100 if as_percentage else 1
+    fraction_key = 'percentage' if as_percentage else 'fraction'
+
+    if flip_axes:
+        axis_to_quantity = {
+            'y': 'num_cells',
+            'x': fraction_key,
+        }
+    else:
+        axis_to_quantity = {
+            'x': 'num_cells',
+            'y': fraction_key,
+        }
+
+    quantity_to_axis = utilities.reverse_dictionary(axis_to_quantity)
 
     max_cells = max(pool.UMI_counts(guide_status))
 
@@ -523,11 +546,11 @@ def plot_guide_specific_frequencies(outcome,
         outcome_counts = granular_df.loc[outcome].sum()
 
     if p_val_method == 'binomial':
-        boundary_xs = np.arange(0, 40000)
-        boundary_xs[0] = 1
-        lower, upper = scipy.stats.binom.interval(1 - 2 * 10**-p_cutoff, boundary_xs, nt_fraction)
-        boundary_lower = lower / boundary_xs
-        boundary_upper = upper / boundary_xs
+        boundary_cells = np.arange(0, 60000)
+        boundary_cells[0] = 1
+        lower, upper = scipy.stats.binom.interval(1 - 2 * 10**-p_cutoff, boundary_cells, nt_fraction)
+        boundary_lower = lower / boundary_cells
+        boundary_upper = upper / boundary_cells
 
     #with h5py.File(pool.fns['quantiles']) as f:
     #    outcome_string = '_'.join(outcome)
@@ -571,6 +594,7 @@ def plot_guide_specific_frequencies(outcome,
     df = pd.DataFrame(data)
     df.index.name = 'guide'
     df['fraction'] = df['count'] / df['num_cells']
+    df['percentage'] = df['fraction'] * 100
 
     df['gene'] = pool.guides_df.loc[df.index]['gene']
     
@@ -618,35 +642,125 @@ def plot_guide_specific_frequencies(outcome,
     d_and_ps = starmap(direction_and_pval, zip(df['count'], df['num_cells']))
     df['direction'], df['pval'] = zip(*d_and_ps)
 
-    significant = df[df['pval'] <= 10**-p_cutoff]
+    df['significant'] = df['pval'] <= 10**-p_cutoff
 
     df['color'] = 'silver'
+    df['label_color'] = 'black'
+    df.loc[df.query('significant').index, 'color'] = 'C1'
     df.loc[non_targeting, 'color'] = 'C0'
-    df.loc[significant.index, 'color'] = 'C1'
 
     if gene_to_color is not None:
         for gene, color in gene_to_color.items():
-            guides = df.index.intersection(pool.gene_guides(gene, only_color_best_promoter))
+            guides = df.index.intersection(pool.gene_guides(gene, only_best_promoter))
             df.loc[guides, 'color'] = color
+            df.loc[guides, 'label_color'] = color
 
-    if y_lims is None:
-        y_max = significant['fraction'].max() * 1.1
-        y_min = significant['fraction'].min() * 0.9
-        if y_min < 0.1:
-            y_min = 0
+    if fraction_lims is None:
+        fraction_max = df.query('significant')['fraction'].max() * 1.1 * fraction_scaling_factor
+        fraction_min = df.query('significant')['fraction'].min() * 0.9 * fraction_scaling_factor
+        if fraction_min < 0.1 * fraction_scaling_factor:
+            fraction_min = 0
     else:
-        y_min, y_max = y_lims
+        fraction_min, fraction_max = fraction_lims
 
-    g = sns.JointGrid('num_cells', 'fraction',
+    if num_cells_lims is None:
+        num_cells_min, num_cells_max = (max(0, -0.01 * max_cells), 1.05 * max_cells)
+    else:
+        num_cells_min, num_cells_max = num_cells_lims
+
+    lims = {
+        'num_cells': (num_cells_min, num_cells_max),
+        fraction_key: (fraction_min, fraction_max),
+    }
+
+    g = sns.JointGrid(x=axis_to_quantity['x'],
+                      y=axis_to_quantity['y'],
                       data=df,
                       height=10,
-                      xlim=(-0.01 * max_cells, 1.01 * max_cells),
-                      ylim=(y_min, y_max),
+                      xlim=lims[axis_to_quantity['x']],
+                      ylim=lims[axis_to_quantity['y']],
                       space=0,
+                      ratio=8,
                      )
 
     if draw_marginals:
-        g.plot_marginals(sns.distplot, kde=False, color='silver')
+
+        marg_axs_by_axis = {
+            'x': g.ax_marg_x,
+            'y': g.ax_marg_y,
+        }
+
+        marg_axs = {
+            'num_cells': marg_axs_by_axis[quantity_to_axis['num_cells']],
+            fraction_key: marg_axs_by_axis[quantity_to_axis[fraction_key]],
+        }
+
+        if draw_marginals == 'kde':
+
+            vertical = {k: axis == 'y' for k, axis in quantity_to_axis.items()}
+
+            fraction_kwargs = dict(
+                ax=marg_axs[fraction_key],
+                vertical=vertical[fraction_key],
+                legend=False,
+                linewidth=2,
+                shade=True,
+            )
+            sns.kdeplot(df[fraction_key], color='grey', **fraction_kwargs)
+            sns.kdeplot(df.query('gene == "negative_control"')[fraction_key], color='C0', alpha=0.4, **fraction_kwargs)
+
+            num_cells_kwargs = dict(
+                ax=marg_axs['num_cells'],
+                vertical=vertical['num_cells'],
+                legend=False,
+                linewidth=1.5,
+                shade=True,
+            )
+            sns.kdeplot(df['num_cells'], color='grey', **num_cells_kwargs)
+            #sns.kdeplot(df.query('gene == "negative_control"')['num_cells'], color='C0', **num_cells_kwargs)
+
+        elif draw_marginals == 'hist':
+            orientation = {k: 'horizontal' if axis == 'y' else 'vertical' for k, axis in quantity_to_axis.items()}
+
+            bins = np.linspace(fraction_min, fraction_max, 100)
+            hist_kwargs = dict(orientation=orientation[fraction_key], alpha=0.5, density=True, bins=bins, linewidth=2)
+            marg_axs[fraction_key].hist(fraction_key, data=df, color='silver', **hist_kwargs)
+            #g.ax_marg_y.hist(y_key, data=df.query('gene == "negative_control"'), color='C0', **hist_kwargs)
+
+            bins = np.linspace(0, max_cells, 30)
+            hist_kwargs = dict(orientation=orientation['num_cells'], alpha=0.5, density=True, bins=bins, linewidth=2)
+            marg_axs['num_cells'].hist('num_cells', data=df, color='silver', **hist_kwargs)
+            #g.ax_marg_x.hist('num_cells', data=df.query('gene == "negative_control"'), color='C0', **hist_kwargs)
+
+        median_UMIs = int(df['num_cells'].median())
+
+        if quantity_to_axis['num_cells'] == 'x':
+            line_func = marg_axs['num_cells'].axvline
+            annotate_kwargs = dict(
+                s=f'median = {median_UMIs:,} cells / guide',
+                xy=(median_UMIs, 1.1),
+                xycoords=('data', 'axes fraction'),
+                xytext=(3, 0),
+                va='top',
+                ha='left',
+            )
+
+        else:
+            line_func = marg_axs['num_cells'].axhline
+            annotate_kwargs = dict(
+                s=f'median = {median_UMIs:,}\ncells / guide',
+                xy=(1, median_UMIs),
+                xycoords=('axes fraction', 'data'),
+                xytext=(-5, 5),
+                va='bottom',
+                ha='center',
+            )
+
+        line_func(median_UMIs, color='black', linestyle='--', alpha=0.7)
+        marg_axs['num_cells'].annotate(textcoords='offset points',
+                                       size=12,
+                                       **annotate_kwargs,
+                                      )
 
     #for q in [10**-p_cutoff, 1 - 10**-p_cutoff]:
     #    ys = quantiles[q] / num_cells_list
@@ -666,50 +780,170 @@ def plot_guide_specific_frequencies(outcome,
     if p_val_method == 'binomial':
         # Draw grey lines at significance thresholds away from the bulk non-targeting fraction.
         
-        to_plot = boundary_xs[1:]
-        g.ax_joint.plot(to_plot, boundary_lower[to_plot], color='black', alpha=0.3)
-        g.ax_joint.plot(to_plot, boundary_upper[to_plot], color='black', alpha=0.3)
+        cells = boundary_cells[1:]
+
+        for fractions in [boundary_lower, boundary_upper]:
+            vals = {
+                'num_cells': cells,
+                fraction_key: fractions[cells] * fraction_scaling_factor,
+            }
+
+            xs = vals[axis_to_quantity['x']]
+            ys = vals[axis_to_quantity['y']]
+            
+            g.ax_joint.plot(xs, ys, color='black', alpha=0.3)
 
         # Annotate the lines with their significance level.
-        #x = int(np.floor(1.01 * max_cells))
-        #for q, y in [(10**-p_cutoff, boundary_lower[x]),
-        #             (1 - 10**-p_cutoff, boundary_upper[x]),
-        #            ]:
-        #    g.ax_joint.annotate(str(q),
-        #                        xy=(x, y),
-        #                        xytext=(-10, -5 if q < 0.5 else 5),
-        #                        textcoords='offset points',
-        #                        ha='right',
-        #                        va='top' if q < 0.5 else 'bottom',
-        #                        clip_on=False,
-        #                        size=6,
-        #                    )
+        x = int(np.floor(1.01 * max_cells))
 
-    for text, offset, color in [('non-targeting guides', -10, 'C0'),
-                                #('{} p-value < 1e-{}'.format(p_val_method, p_cutoff), -25, 'C1'),
-                               ]:
-        g.ax_joint.annotate(text,
-                            xy=(1, 1),
-                            xycoords='axes fraction',
-                            xytext=(-5, offset),
+        cells = int(np.floor(0.8 * num_cells_max))
+        vals = {
+            'num_cells': cells,
+            fraction_key: boundary_upper[cells] * fraction_scaling_factor,
+        }
+        x = vals[axis_to_quantity['x']]
+        y = vals[axis_to_quantity['y']]
+
+        if flip_axes:
+            annotate_kwargs = dict(
+                xytext=(20, 0),
+                ha='left',
+                va='center',
+            )
+        else:
+            annotate_kwargs = dict(
+                xytext=(0, 30),
+                ha='center',
+                va='bottom',
+            )
+
+        g.ax_joint.annotate(f'p = $10^{{-{p_cutoff}}}$ significance threshold',
+                            xy=(x, y),
+                            xycoords='data',
                             textcoords='offset points',
-                            color=color,
-                            ha='right',
-                            va='top',
-                            #size=18,
-                           )
+                            color='black',
+                            size=10,
+                            arrowprops={'arrowstyle': '-',
+                                        'alpha': 0.5,
+                                        'color': 'black',
+                                        },
+                            **annotate_kwargs,
+                        )
+        
+    if non_targeting_label_location is None:
+        pass
+    else:
+        if non_targeting_label_location == 'floating':
+            floating_labels = [
+                ('individual non-targeting guides', 20, 'C0'),
+                #('{} p-value < 1e-{}'.format(p_val_method, p_cutoff), -25, 'C1'),
+            ]
+            for text, offset, color in floating_labels:
+                g.ax_joint.annotate(text,
+                                    xy=(1, nt_fraction * fraction_scaling_factor),
+                                    xycoords=('axes fraction', 'data'),
+                                    xytext=(-5, offset),
+                                    textcoords='offset points',
+                                    color=color,
+                                    ha='right',
+                                    va='bottom',
+                                    size=14,
+                                )
 
-    g.ax_joint.scatter('num_cells', 'fraction',
+        else:
+            highest_nt_guide = df.query('gene == "negative_control"').sort_values('num_cells').iloc[-1]
+
+            vals = {
+                'num_cells': highest_nt_guide['num_cells'],
+                fraction_key: highest_nt_guide[fraction_key],
+            }
+            x = vals[axis_to_quantity['x']]
+            y = vals[axis_to_quantity['y']]
+
+            if flip_axes:
+                annotate_kwargs = dict(
+                    s='individual non-targeting guides',
+                    xytext=(-40, 0),
+                    ha='right',
+                    va='center',
+                )
+            else:
+                annotate_kwargs = dict(
+                    s='individual\nnon-targeting guides',
+                    xytext=(0, 30),
+                    ha='center',
+                    va='bottom',
+                )
+
+            g.ax_joint.annotate(xy=(x, y),
+                                xycoords='data',
+                                textcoords='offset points',
+                                color='C0',
+                                size=10,
+                                arrowprops={'arrowstyle': '-',
+                                            'alpha': 0.5,
+                                            'color': 'C0',
+                                            },
+                                **annotate_kwargs,
+                            )
+            
+            vals = {
+                'num_cells': num_cells_max * 0.9,
+                fraction_key: nt_fraction * fraction_scaling_factor,
+            }
+            x = vals[axis_to_quantity['x']]
+            y = vals[axis_to_quantity['y']]
+
+            if flip_axes:
+                annotate_kwargs = dict(
+                    s='average of all non-targeting guides',
+                    xytext=(-40, 0),
+                    ha='right',
+                    va='center',
+                )
+            else:
+                annotate_kwargs = dict(
+                    s='average of all\nnon-targeting guides',
+                    xytext=(0, 30),
+                    ha='center',
+                    va='bottom',
+                )
+    
+            g.ax_joint.annotate(xy=(x, y),
+                                xycoords='data',
+                                textcoords='offset points',
+                                color='black',
+                                size=10,
+                                arrowprops={'arrowstyle': '-',
+                                            'alpha': 0.5,
+                                            'color': 'black',
+                                            },
+                                **annotate_kwargs,
+                            )
+
+    g.ax_joint.scatter(x=axis_to_quantity['x'],
+                       y=axis_to_quantity['y'],
                        data=df,
                        s=25,
                        alpha=0.9,
                        color='color',
                        linewidths=(0,),
-                       )
+                      )
 
-    g.ax_joint.axhline(nt_fraction, color='black')
+    if quantity_to_axis[fraction_key] == 'y':
+        line_func = g.ax_joint.axhline
+    else:
+        line_func = g.ax_joint.axvline
 
-    g.ax_joint.set_xlabel('number of cells per CRISPRi guide', size=axis_label_size)
+    line_func(nt_fraction * fraction_scaling_factor, color='black')
+
+    axis_label_funcs = {
+        'x': g.ax_joint.set_xlabel,     
+        'y': g.ax_joint.set_ylabel,     
+    }
+
+    num_cells_label = 'number of cells per CRISPRi guide'
+    axis_label_funcs[quantity_to_axis['num_cells']](num_cells_label, size=axis_label_size)
 
     if outcome_name is None:
         try:
@@ -717,7 +951,8 @@ def plot_guide_specific_frequencies(outcome,
         except TypeError:
             outcome_name = 'PH'
 
-    g.ax_joint.set_ylabel('fraction of cells with {}'.format(outcome_name), size=axis_label_size)
+    fraction_label = f'{fraction_key} of CRISPRi-guide-containing cells with {outcome_name}'
+    axis_label_funcs[quantity_to_axis[fraction_key]](fraction_label, size=axis_label_size)
 
     if draw_diagram:
         ax_marg_x_p = g.ax_marg_x.get_position()
@@ -744,26 +979,33 @@ def plot_guide_specific_frequencies(outcome,
                              )
 
     if num_to_label is not None:
-        up = significant.query('direction == "up"').sort_values('fraction', ascending=False)[:num_to_label]
-        down = significant.query('direction == "down"').sort_values('fraction')[:num_to_label]
+        up = df.query('significant and direction == "up"').sort_values('fraction', ascending=False)[:num_to_label]
+        down = df.query('significant and direction == "down"').sort_values('fraction')[:num_to_label]
         to_label = pd.concat([up, down])
 
         # Don't label any points that will be labeled by gene-labeling below.
         if genes_to_label is not None:
             to_label = to_label[~to_label['gene'].isin(genes_to_label)]
 
-        to_label = to_label.query('fraction > @y_min and fraction < @y_max')
+        to_label = to_label.query(f'{fraction_key} >= @fraction_min and {fraction_key} <= @fraction_max')
 
-        vector = ['upper right' if v == 'up' else 'lower right' for v in to_label['direction']]
+        if flip_axes:
+            vector = ['upper right' if v == 'up' else 'upper left' for v in to_label['direction']]
+        else:
+            vector = ['upper right' if v == 'up' else 'lower right' for v in to_label['direction']]
 
-        hits.visualize.label_scatter_plot(g.ax_joint, 'num_cells', 'fraction', 'alias',
+        hits.visualize.label_scatter_plot(g.ax_joint,
+                                          axis_to_quantity['x'],
+                                          axis_to_quantity['y'],
+                                          'alias',
+                                          color='label_color',
                                           data=to_label,
                                           vector=vector,
-                                          text_kwargs=dict(size=8),
+                                          text_kwargs=dict(size=small_guide_label_size),
                                           initial_distance=5,
                                           distance_increment=5,
                                           arrow_alpha=0.2,
-                                          avoid=True,
+                                          avoid=avoid_label_overlap,
                                           avoid_axis_labels=True,
                                          )
 
@@ -773,32 +1015,38 @@ def plot_guide_specific_frequencies(outcome,
         elif genes_to_label is not None:
             to_label = df[df['gene'].isin(genes_to_label)]
 
-        to_label = to_label.query('fraction > @y_min and fraction < @y_max')
+        to_label = to_label.query(f'{fraction_key} >= @fraction_min and {fraction_key} <= @fraction_max')
 
-        vector = ['upper right' if v == 'up' else 'lower right' for v in to_label['direction']]
+        if flip_axes:
+            vector = ['upper right' if v == 'up' else 'upper left' for v in to_label['direction']]
+        else:
+            vector = ['upper right' if v == 'up' else 'lower right' for v in to_label['direction']]
 
         if color_labels:
             kwargs = dict(color='color',
-                          text_kwargs=dict(size=guide_label_size),
                          )
         else:
             kwargs = dict(color=None,
-                          text_kwargs=dict(size=guide_label_size),
                          )
-        hits.visualize.label_scatter_plot(g.ax_joint, 'num_cells', 'fraction', 'alias',
+
+        hits.visualize.label_scatter_plot(g.ax_joint,
+                                          axis_to_quantity['x'],
+                                          axis_to_quantity['y'],
+                                          'alias',
                                           data=to_label,
                                           vector=vector,
                                           initial_distance=initial_label_offset,
                                           distance_increment=5,
                                           arrow_alpha=0.2,
-                                          avoid=True,
+                                          avoid=avoid_label_overlap,
                                           avoid_axis_labels=True,
                                           avoid_existing=True,
                                           min_arrow_distance=0,
+                                          text_kwargs=dict(size=big_guide_label_size),
                                           **kwargs,
                                          )
 
-    hits.visualize.add_commas_to_ticks(g.ax_joint, which='x')
+    hits.visualize.add_commas_to_ticks(g.ax_joint, which=quantity_to_axis['num_cells'])
     g.ax_joint.tick_params(labelsize=tick_label_size)
 
     if not draw_marginals:
