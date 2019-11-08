@@ -1,19 +1,14 @@
-from pathlib import Path
-from collections import Counter, defaultdict
+from collections import Counter
 
-import yaml
-import numpy as np
 import pandas as pd
 
-from knock_knock import experiment
-from hits import fastq
+from knock_knock import experiment, read_outcome
 from hits.utilities import group_by
 
-from . import collapse
 from .collapse_cython import hamming_distance_matrix, register_corrections
 
-class UMI_Outcome(object):
-    columns = [
+UMI_Outcome = read_outcome.Outcome_factory(
+    columns_arg=[
         'cell_BC',
         'UMI',
         'num_reads',
@@ -21,27 +16,14 @@ class UMI_Outcome(object):
         'subcategory',
         'details',
         'query_name',
-    ]
+    ],
+    converters_arg={
+        'num_reads': int,
+    },
+)
 
-    def __init__(self, *args):
-        for name, arg in zip(self.__class__.columns, args):
-            setattr(self, name, arg)
-
-    @classmethod
-    def from_line(cls, line):
-        fields = line.strip().split('\t')
-        return cls(**dict(zip(self.__class__.columns, fields)))
-    
-    @property
-    def outcome(self):
-        return (self.category, self.subcategory, self.details)        
-
-    def __str__(self):
-        row = [str(getattr(self, k)) for k in UMI_Outcome.columns]
-        return '\t'.join(row)
-
-class Pooled_UMI_Outcome(object):
-    columns = [
+Pooled_UMI_Outcome = read_outcome.Outcome_factory(
+    columns_arg=[
         'UMI',
         'guide_mismatch',
         'cluster_id',
@@ -50,27 +32,12 @@ class Pooled_UMI_Outcome(object):
         'subcategory',
         'details',
         'original_name',
-    ]
-
-    def __init__(self, *args):
-        for name, arg in zip(self.__class__.columns, args):
-            setattr(self, name, arg)
-
-        self.num_reads = int(self.num_reads)
-        self.guide_mismatch = int(self.guide_mismatch)
-
-    @classmethod
-    def from_line(cls, line):
-        fields = line.strip().split('\t')
-        return cls(*fields)
-    
-    @property
-    def outcome(self):
-        return (self.category, self.subcategory, self.details)        
-
-    def __str__(self):
-        row = [str(getattr(self, k)) for k in Pooled_UMI_Outcome.columns]
-        return '\t'.join(row)
+    ],
+    converters_arg={
+        'num_reads': int,
+        'guide_mismatch': int,
+    },
+)
 
 def load_UMI_outcomes(fn, pooled=True):
     if pooled:
