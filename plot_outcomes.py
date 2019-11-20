@@ -79,7 +79,12 @@ def plot_outcome_diagrams(outcome_order, target_info,
         for cut_after in target_info.cut_afters.values():
             x = (cut_after + 0.5 * cut_offset_sign) - offset
 
-            ax.plot([x, x], [-0.5, num_outcomes - 0.5], color='black', linestyle='--', alpha=0.3)
+            if draw_wild_type_on_top:
+                ys = [-0.5, num_outcomes + 0.5]
+            else:
+                ys = [-0.5, num_outcomes - 0.5]
+
+            ax.plot([x, x], ys, color='black', linestyle='--', alpha=0.5, clip_on=False)
     
     if flip:
         window_left, window_right = -window_right, -window_left
