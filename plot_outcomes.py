@@ -32,6 +32,7 @@ def plot_outcome_diagrams(outcome_order, target_info,
                           draw_all_sequence=False,
                           draw_imperfect_MH=False,
                           draw_wild_type_on_top=False,
+                          draw_donor_on_top=False,
                           ):
     if isinstance(window, int):
         window_left, window_right = -window, window
@@ -418,9 +419,10 @@ def plot_outcome_diagrams(outcome_order, target_info,
                         size=text_size,
                         )
 
-    donor_SNV_read_bases = ''.join(d['base'] for name, d in sorted(target_info.donor_SNVs['donor'].items()))
-    HDR_outcome = HDROutcome(donor_SNV_read_bases, [])
-    draw_donor(num_outcomes + 0.75, HDR_outcome, None, on_top=True)
+    if draw_donor_on_top and len(target_info.donor_SNVs['target']) > 0:
+        donor_SNV_read_bases = ''.join(d['base'] for name, d in sorted(target_info.donor_SNVs['donor'].items()))
+        HDR_outcome = HDROutcome(donor_SNV_read_bases, [])
+        draw_donor(num_outcomes + 0.75, HDR_outcome, None, on_top=True)
 
     if draw_wild_type_on_top:
         draw_wild_type(num_outcomes, on_top=True)
