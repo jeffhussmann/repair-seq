@@ -1266,13 +1266,13 @@ def plot_genes(pool,
             for key in ('frequency', 'frequency_zoom', 'log10_frequency'):
                 if key in axs:
                     xs = get_nt_fractions(heatmap_pool)
-                    stds = heatmap_pool.outcome_fractions('perfect').loc[outcome_order, heatmap_pool.non_targeting_guides].std(axis=1)
+                    stds = heatmap_pool.outcome_fractions('perfect').reindex(outcome_order, fill_value=0)[heatmap_pool.non_targeting_guides].std(axis=1)
                     lowers, uppers = xs - stds, xs + stds
 
                     if 'log10_frequency' in key:
-                        xs = np.log10(xs)
-                        lowers = np.log10(lowers)
-                        uppers = np.log10(uppers)
+                        xs = np.log10(np.maximum(xs, 1e-3))
+                        lowers = np.log10(np.maximum(lowers, 1e-4))
+                        uppers = np.log10(np.maximum(uppers, 1e-4))
                     else:
                         xs = xs * 100
                         lowers = lowers * 100
