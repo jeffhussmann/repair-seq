@@ -357,6 +357,12 @@ def plot_outcome_diagrams(outcome_order, target_info,
                                 color=hits.visualize.igv_colors[transform_seq(snv.basecall.upper())],
                                 weight='bold',
                             )
+
+                # Draw box around mismatch to distinguish from MH.
+                x_buffer = 0.7
+                y_buffer = 0.7
+                draw_rect(x - x_buffer, x + x_buffer, y - y_buffer * wt_height, y + y_buffer * wt_height, 0.5, fill=False)
+
             if draw_all_sequence:
                 draw_sequence(y, xs_to_skip)
 
