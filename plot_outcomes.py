@@ -1371,9 +1371,10 @@ def plot_genes(pool,
         axs[key].set_xlim(*x_lims)
         
         # Draw lines separating categories.
-        for y in np.cumsum(outcome_group_sizes):
-            flipped_y = len(outcome_order) - y - 0.5
-            axs[key].axhline(flipped_y, color='black', alpha=0.1)
+        if gene_to_sort_by is None:
+            for y in np.cumsum(outcome_group_sizes):
+                flipped_y = len(outcome_order) - y - 0.5
+                axs[key].axhline(flipped_y, color='black', alpha=0.1)
     
         # Apply specific visual styling to log10_frequency panel.
         if key == 'log10_frequency':
