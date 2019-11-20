@@ -120,7 +120,7 @@ def plot_outcome_diagrams(outcome_order, target_info,
     block_alpha = 0.1
     wt_height = 0.6
 
-    def draw_sequence(y, xs_to_skip=None, alpha=0.15):
+    def draw_sequence(y, xs_to_skip=None, alpha=0.1):
         if xs_to_skip is None:
             xs_to_skip = set()
 
@@ -374,11 +374,12 @@ def plot_outcome_diagrams(outcome_order, target_info,
 
         elif category == 'deletion + adjacent mismatch':
             outcome = DeletionPlusMismatchOutcome.from_string(details)
-            xs_to_skip = draw_deletion(y, outcome.deletion_outcome.deletion, draw_MH=False)
+            xs_to_skip = draw_deletion(y, outcome.deletion_outcome.deletion, draw_MH=True)
             
             for snv in outcome.mismatch_outcome.snvs:
                 x = snv.position - offset
                 xs_to_skip.add(x)
+
                 if window_left <= x <= window_right:
                     ax.annotate(transform_seq(snv.basecall),
                                 xy=(x, y),
@@ -1881,7 +1882,7 @@ def big_heatmap(pool_list,
             guides = []
             for gene in genes:
                 guides.extend(pool.gene_guides(gene))
-    
+
     max_cols = None
     
     inches_per_col = 0.15
@@ -2151,7 +2152,7 @@ cb_obj.end = {upper_bound} if cb_obj.end > {upper_bound}
              source=quad_source,
             )
     
-    search_code = Path('heatmap_search.coffee').read_text().format(guides=list(guide_order), lower_bound=lower_bound, upper_bound=upper_bound)
+    search_code = Path('/home/jah/projects/ddr/code/heatmap_search.coffee').read_text().format(guides=list(guide_order), lower_bound=lower_bound, upper_bound=upper_bound)
     search_callback = bokeh.models.CustomJS.from_coffeescript(search_code)
     text_input = bokeh.models.TextInput(title='Search:', name='search')
     text_input.js_on_change('value', search_callback)
@@ -2245,3 +2246,4 @@ cb_obj.end = {upper_bound} if cb_obj.end > {upper_bound}
     layout = bokeh.layouts.column([bokeh.layouts.row(row) for row in rows])
 
     bokeh.io.show(layout)
+    return guide_order, outcome_order
