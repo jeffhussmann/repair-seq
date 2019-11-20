@@ -91,7 +91,7 @@ def plot_outcome_diagrams(outcome_order, target_info,
 
     seq = target_info.target_sequence[offset + window_left:offset + window_right + 1]
 
-    def draw_rect(x0, x1, y0, y1, alpha, color='black'):
+    def draw_rect(x0, x1, y0, y1, alpha, color='black', fill=True):
         if x0 > window_right or x1 < window_left:
             return
 
@@ -106,11 +106,11 @@ def plot_outcome_diagrams(outcome_order, target_info,
         ]
 
         patch = plt.Polygon(path,
-                            fill=True,
+                            fill=fill,
                             closed=True,
                             alpha=alpha,
                             color=color,
-                            linewidth=0,
+                            linewidth=0 if fill else 1.5,
                             clip_on=False,
                            )
         ax.add_patch(patch)
@@ -205,7 +205,13 @@ def plot_outcome_diagrams(outcome_order, target_info,
         draw_sequence(y, alpha=1)
 
     def draw_donor(y, HDR_outcome, deletion_outcome, on_top=False):
+        SNP_ps = sorted(p for (s, p), b in target_info.fingerprints[target_info.target])
+
+        p_to_i = SNP_ps.index
+        i_to_p = dict(enumerate(SNP_ps))
+
         SNP_xs = set()
+        observed_SNP_idxs = set()
 
         for ((strand, position), ref_base), read_base in zip(target_info.fingerprints[target_info.target], HDR_outcome.donor_SNV_read_bases):
             x = position - offset
@@ -213,6 +219,8 @@ def plot_outcome_diagrams(outcome_order, target_info,
                 # Note: read base of '-' means it was deleted
                 if ref_base != read_base and read_base != '_' and read_base != '-':
                     SNP_xs.add(x)
+                    observed_SNP_idxs.add(p_to_i(position))
+
                     ax.annotate(transform_seq(read_base),
                                 xy=(x, y),
                                 xycoords='data', 
@@ -235,6 +243,29 @@ def plot_outcome_diagrams(outcome_order, target_info,
 
                     draw_rect(x - 0.5, x + 0.5, y - wt_height / 2, y + wt_height / 2, alpha, color=color)
 
+        if not on_top:
+            # Draw rectangles around blocks of consecutive incorporated donor SNVs. 
+            observed_SNP_idxs = sorted(observed_SNP_idxs)
+            if observed_SNP_idxs:
+                # no SNPs if just a donor deletion
+                blocks = []
+                block = [observed_SNP_idxs[0]]
+
+                for i in observed_SNP_idxs[1:]:
+                    if block == [] or i == block[-1] + 1:
+                        block.append(i)
+                    else:
+                        blocks.append(block)
+                        block = [i]
+
+                blocks.append(block)
+                for block in blocks:
+                    start = i_to_p[block[0]] - offset
+                    end = i_to_p[block[-1]] - offset
+                    x_buffer = 0.7
+                    y_buffer = 0.7
+                    draw_rect(start - x_buffer, end + x_buffer, y - y_buffer * wt_height, y + y_buffer * wt_height, 0.5, fill=False)
+        
         all_deletions = [(d, 'red', False) for d in HDR_outcome.donor_deletions]
         if deletion_outcome is not None:
             all_deletions.append((deletion_outcome.deletion, 'black', True))
