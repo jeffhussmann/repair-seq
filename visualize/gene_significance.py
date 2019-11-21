@@ -11,6 +11,7 @@ import bokeh.palettes
 import bokeh.models
 
 from . import pooled_screen
+from ddr.visualize import outcome_diagrams
 from hits import utilities
 from hits.visualize.interactive.external_coffeescript import build_callback
 
@@ -57,7 +58,7 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True):
     ps_down = np.array([pval_down(o, u, nt_fraction) for o, u in zip(outcome_counts, UMI_counts)])
     ps_up = np.array([pval_up(o, u, nt_fraction) for o, u in zip(outcome_counts, UMI_counts)])
 
-    genes = [pool.guide_to_gene(g) for g in pool.guides]
+    genes = [pool.guide_library.guide_to_gene(g) for g in pool.guide_library.guides]
 
     capped_fc = np.minimum(2**5, np.maximum(2**-5, frequencies / nt_fraction))
 
@@ -76,13 +77,13 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True):
     max_k = 9
 
     for direction in ('down', 'up'):
-        for gene in pool.genes:
+        for gene in pool.guide_library.genes:
             sorted_ps = df[df['gene'] == gene][f'p_{direction}'].sort_values()
             n = len(sorted_ps)
             for k in range(1, max_k + 1):
                 ps[direction, k].append(p_k_of_n_less(n, k, sorted_ps))
             
-    p_df = pd.DataFrame(ps, index=pool.genes).min(axis=1, level=0)
+    p_df = pd.DataFrame(ps, index=pool.guide_library.genes).min(axis=1, level=0)
 
     guides_per_gene = df.groupby('gene').size()
     bonferonni_factor = np.minimum(max_k, guides_per_gene)
@@ -325,12 +326,12 @@ def scatter(pickle_fn,
     bokeh.io.show(bokeh.layouts.column([fig, bokeh.layouts.row([table, bokeh.layouts.Spacer(width=40), widgets])]))
 
 def gene_significance(pool, outcomes, draw_outcomes=False, p_val_threshold=0.05):
-    df, nt_fraction, p_df = get_outcome_statistics(pool, outcomes, omit_bad_guides=False)
+    df, nt_fraction, p_df = get_outcome_statistics(pool, outcomes, omit_bad_guides=True)
     df['x'] = np.arange(len(df))
 
-    labels = list(pool.guides)
+    labels = list(df.index)
 
-    gene_to_color = {g: f'C{i % 10}' for i, g in enumerate(pool.genes)}
+    gene_to_color = {g: f'C{i % 10}' for i, g in enumerate(pool.guide_library.genes)}
 
     fig = plt.figure(figsize=(36, 12))
 
@@ -375,15 +376,15 @@ def gene_significance(pool, outcomes, draw_outcomes=False, p_val_threshold=0.05)
                         ha='center',
                        )
 
-        guides_to_label = {g for g in pool.guides if pool.guide_to_gene(g) in genes_to_label}
+        guides_to_label = {g for g in df.index if pool.guide_library.guide_to_gene(g) in genes_to_label}
 
-        colors = [gene_to_color[pool.guide_to_gene(guide)] for guide in labels]
+        colors = [gene_to_color[pool.guide_library.guide_to_gene(guide)] for guide in labels]
         colors = matplotlib.colors.to_rgba_array(colors)
-        alpha = [0.95 if pool.guide_to_gene(guide) in genes_to_label else 0.15 for guide in pool.guides]
+        alpha = [0.95 if guide in guides_to_label else 0.15 for guide in df.index]
         colors[:, 3] = alpha
 
         ax.scatter(np.arange(len(df)), df['frequency'], s=25, c=colors, linewidths=(0,))
-        ax.set_xlim(-10, len(pool.guides) + 10)
+        ax.set_xlim(-10, len(pool.guide_library.guides) + 10)
 
         for x, (y, label) in enumerate(zip(df['frequency'], labels)):
             if label in guides_to_label:
@@ -425,8 +426,8 @@ def gene_significance(pool, outcomes, draw_outcomes=False, p_val_threshold=0.05)
     if draw_outcomes:
         n = 40
         outcome_order = pool.non_targeting_fractions('perfect').loc[outcomes].sort_values(ascending=False).index[:n]
-        plot_outcome_diagrams(outcome_order, pool.target_info, num_outcomes=n, window=(-60, 20), flip_if_reverse=True, ax=axs['outcomes'])
-        add_frequencies(fig, axs['outcomes'], pool, outcome_order[:n], text_only=True)
+        outcome_diagrams.plot(outcome_order, pool.target_info, num_outcomes=n, window=(-60, 20), flip_if_reverse=True, ax=axs['outcomes'])
+        outcome_diagrams.add_frequencies(fig, axs['outcomes'], pool, outcome_order[:n], text_only=True)
     else:
         fig.delaxes(axs['outcomes'])
 

@@ -19,7 +19,7 @@ import nbformat
 from hits import utilities, sam, fastq, mapping_tools, annotation
 from knock_knock import experiment, target_info, visualize
 
-from . import pooled_layout, collapse, coherence
+from . import pooled_layout, collapse, coherence, guide_library
 
 memoized_property = utilities.memoized_property
 memoized_with_key = utilities.memoized_with_key
@@ -678,7 +678,7 @@ class PooledScreen():
         }
 
     def single_guide_experiments(self, no_progress=False):
-        for guide in self.guides:
+        for guide in self.guide_library.guides:
             yield self.single_guide_experiment(guide, no_progress=no_progress)
 
     def single_guide_experiment(self, guide, no_progress=False):
@@ -689,76 +689,9 @@ class PooledScreen():
 
         return SingleGuideExperiment(self.base_dir, self.group, guide, progress=progress)
 
-    @memoized_property
-    def guides_df(self):
-        guides_df = pd.read_table(self.fns['guides'], index_col='short_name')
-
-        if 'promoter' in guides_df.columns:
-            guides_df.loc[guides_df['promoter'].isnull(), 'promoter'] = 'P1P2'
-        else:
-            guides_df['promoter'] = 'P1P2'
-
-        guides_df['best_promoter'] = True
-
-        for gene, promoter in self.best_promoters.items():
-            not_best = guides_df.query('gene == @gene and promoter != @promoter').index
-            guides_df.loc[not_best, 'best_promoter'] = False
-
-        return guides_df
-
-    @memoized_property
-    def old_gene_to_new_gene(self):
-        updated_gene_names = pd.read_table(self.fns['updated_gene_names'], index_col=0, squeeze=True)
-        return updated_gene_names
-    
-    @memoized_property
-    def new_gene_to_old_gene(self):
-        new_to_old_dict = utilities.reverse_dictionary(self.old_gene_to_new_gene)
-        def new_gene_to_old_gene(new_gene):
-            return new_to_old_dict.get(new_gene, new_gene)
-
-        return new_gene_to_old_gene
-    
-    @memoized_property
-    def best_promoters(self):
-        if self.fns['best_promoters'].exists():
-            best_promoters = pd.read_table(self.fns['best_promoters'], index_col='gene', squeeze=True)
-        else:
-            best_promoters = {}
-        return best_promoters
-
-    @memoized_property
-    def guides(self):
-        guides = self.guides_df.index.values
-        return guides
-
-    @memoized_property
-    def non_targeting_guides(self):
-        return [g for g in self.guides if 'non-targeting' in g]
-
-    @memoized_property
-    def targeting_guides(self):
-        return [g for g in self.guides if 'non-targeting' not in g and 'eGFP' not in g]
-
-    @memoized_property
-    def genes(self):
-        return sorted(set(self.guides_df['gene']))
-
-    def gene_guides(self, gene, only_best_promoter=False):
-        query = 'gene == @gene'
-        if only_best_promoter:
-            query += ' and best_promoter'
-
-        gene_guides = self.guides_df.query(query)
-
-        return gene_guides.index
-
-    def guide_to_gene(self, guide):
-        return self.guides_df.loc[guide]['gene']
-
     def make_outcome_counts(self):
         all_counts = {}
-        guides = self.guides
+        guides = self.guide_library.guides
 
         for guide in self.progress(guides):
             exp = SingleGuideExperiment(self.base_dir, self.group, guide)
@@ -813,7 +746,7 @@ class PooledScreen():
 
     @memoized_with_key
     def outcome_counts_df(self, collapsed):
-        guides = self.guides
+        guides = self.guide_library.guides
 
         if collapsed:
             prefix = 'collapsed_'
@@ -854,7 +787,7 @@ class PooledScreen():
     @memoized_property
     def non_targeting_outcomes(self):
         guide_outcomes = {}
-        for nt_guide in self.non_targeting_guides:
+        for nt_guide in self.guide_library.non_targeting_guides:
             exp = SingleGuideExperiment(self.base_dir, self.group, nt_guide)
             fn = exp.fns['filtered_cell_outcomes']
 
@@ -873,7 +806,7 @@ class PooledScreen():
 
     @memoized_with_key
     def non_targeting_counts(self, guide_status):
-        counts = self.outcome_counts(guide_status)[self.non_targeting_guides]
+        counts = self.outcome_counts(guide_status)[self.guide_library.non_targeting_guides]
         return counts.sum(axis=1).sort_values(ascending=False)
     
     @memoized_with_key
@@ -898,7 +831,7 @@ class PooledScreen():
     
     @memoized_property
     def common_non_targeting_counts(self):
-        return self.common_counts('perfect')[self.non_targeting_guides].sum(axis=1)
+        return self.common_counts('perfect')[self.guide_library.non_targeting_guides].sum(axis=1)
     
     @memoized_property
     def common_non_targeting_fractions(self):
@@ -1016,7 +949,7 @@ class PooledScreen():
 
     def merge_filtered_bams(self):
         input_fns = []
-        for guide in self.non_targeting_guides:
+        for guide in self.guide_library.non_targeting_guides:
             exp = SingleGuideExperiment(self.base_dir, self.group, guide)
             input_fns.append(exp.fns['filtered_cell_bam'])
 
@@ -1095,7 +1028,7 @@ class PooledScreen():
         nonzero_guides = guide_counts[guide_counts > 0].index
         counts = counts[nonzero_guides]
         
-        non_targeting_guides = sorted(set(self.non_targeting_guides) & set(nonzero_guides))
+        non_targeting_guides = sorted(set(self.guide_library.non_targeting_guides) & set(nonzero_guides))
         
         UMI_counts = counts.sum()
         nt_totals = counts[non_targeting_guides].sum(axis=1)
