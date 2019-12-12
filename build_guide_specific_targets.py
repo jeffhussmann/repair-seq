@@ -1,5 +1,6 @@
 import warnings
 import multiprocessing
+import argparse
 
 import pandas as pd
 import Bio.SeqIO
@@ -7,27 +8,29 @@ import tqdm
 
 from knock_knock import target_info
 from hits import fasta, mapping_tools, utilities
-from ddr import guide_library
+from ddr.guide_library import GuideLibrary
 
-def build_guide_specific_target(original_target, guide_library, guide_row):
-    print(guide_library, guide_row.name)
-
-    guide = guide_row.name
-    
+def build_guide_specific_target(original_target,
+                                guide_library,
+                                guide,
+                                tasks_queue=None,
+                               ):
     warnings.simplefilter('ignore')
 
-    new_name = f'pooled_vector_{guide_library}_{guide}'
+    new_name = f'pooled_vector_{guide_library.name}_{guide}'
 
     new_dir = original_target.dir.parent / new_name
     new_dir.mkdir(exist_ok=True)
 
     ps = original_target.features['pooled_vector', 'protospacer']
 
-    gb = Bio.SeqIO.read('/home/jah/projects/ddr/targets/pooled_vector/pooled_vector.gb', 'genbank')
+    gb_fn = original_target.dir / f'{original_target.name}.gb'
+    gb = Bio.SeqIO.read(str(gb_fn), 'genbank')
 
-    gb.seq = gb.seq[:ps.start] + guide_row['protospacer'] + gb.seq[ps.end + 1:]
+    ps_seq = guide_library.guides_df.loc[guide, 'protospacer']
+    gb.seq = gb.seq[:ps.start] + ps_seq + gb.seq[ps.end + 1:]
 
-    Bio.SeqIO.write(gb, str(new_dir / 'pooled_vector.gb'), 'genbank')
+    Bio.SeqIO.write(gb, str(new_dir / f'{original_target.name}.gb'), 'genbank')
 
     for fn in ['phiX.gb', 'donors.gb', 'manifest.yaml']:
         try:
@@ -39,6 +42,9 @@ def build_guide_specific_target(original_target, guide_library, guide_row):
 
     new_ti.make_references()
     new_ti.identify_degenerate_indels()
+
+    if tasks_queue is not None:
+        tasks_queue.put(guide)
 
 def build_doubles_guide_specific_target(original_target,
                                         fixed_guide_library,
@@ -53,7 +59,6 @@ def build_doubles_guide_specific_target(original_target,
 
     new_dir = original_target.dir.parent / new_name
     new_dir.mkdir(exist_ok=True)
-
 
     gb_fn = original_target.dir / f'{original_target.name}.gb'
     gb = Bio.SeqIO.read(str(gb_fn), 'genbank')
@@ -88,27 +93,41 @@ def build_doubles_guide_specific_target(original_target,
     if tasks_queue is not None:
         tasks_queue.put((fixed_guide, variable_guide))
 
-#if __name__ == '__main__':
-#    base_dir = '/home/jah/projects/ddr'
-#    original_target = target_info.TargetInfo(base_dir, 'pooled_vector')
-#
-#    original_target.make_references()
-#    original_target.identify_degenerate_indels()
-#
-#    args = []
-#
-#    for guide_library in [
-#        'DDR_library',
-#        'DDR_sublibrary',
-#    ]:
-#        guides = pd.read_table(f'/home/jah/projects/ddr/guides/{guide_library}/guides.txt', index_col='short_name')
-#        for guide in guides.index:
-#            args.append((original_target, guide_library, guides.loc[guide]))
-#
-#    pool = multiprocessing.Pool(processes=18)
-#    pool.starmap(build_guide_specific_target, args)
+def build_all_singles():
+    warnings.simplefilter('ignore')
 
-if __name__ == '__main__':
+    base_dir = '/home/jah/projects/ddr'
+    original_target = target_info.TargetInfo(base_dir, 'pooled_vector')
+
+    original_target.make_references()
+    original_target.identify_degenerate_indels()
+
+    args_list = []
+
+    manager = multiprocessing.Manager()
+    tasks_done_queue = manager.Queue()
+
+    for guide_library_name in [
+        'DDR_library',
+        'DDR_sublibrary',
+    ]:
+        guide_library = GuideLibrary(base_dir, guide_library_name)
+        for guide in guide_library.guides:
+            args_list.append((original_target, guide_library, guide, tasks_done_queue))
+
+    #args_list = args_list[:10]
+    #for args in tqdm.tqdm(args_list):
+    #    build_guide_specific_target(*args)
+
+    progress = tqdm.tqdm(desc='Making targets', total=len(args_list))
+    pool = multiprocessing.Pool(processes=18)
+    pool.starmap_async(build_guide_specific_target, args_list)
+
+    while progress.n != len(args_list):
+        tasks_done_queue.get()
+        progress.update()
+
+def build_all_doubles():
     warnings.simplefilter('ignore')
 
     base_dir = '/home/jah/projects/ddr'
@@ -119,8 +138,8 @@ if __name__ == '__main__':
 
     args_list = []
 
-    fixed_guide_library = guide_library.GuideLibrary(base_dir, 'DDR_skinny')
-    variable_guide_library = guide_library.GuideLibrary(base_dir, 'DDR_sublibrary')
+    fixed_guide_library = GuideLibrary(base_dir, 'DDR_skinny')
+    variable_guide_library = GuideLibrary(base_dir, 'DDR_sublibrary')
 
     manager = multiprocessing.Manager()
     tasks_done_queue = manager.Queue()
@@ -131,13 +150,24 @@ if __name__ == '__main__':
             args_list.append(args)
 
     #args_list = args_list[:10]
+    #for args in tqdm.tqdm(args_list):
+    #    build_doubles_guide_specific_target(*args)
+
     progress = tqdm.tqdm(desc='Making doubles_vector targets', total=len(args_list))
     pool = multiprocessing.Pool(processes=18)
     pool.starmap_async(build_doubles_guide_specific_target, args_list)
 
     while progress.n != len(args_list):
-        message = tasks_done_queue.get()
+        tasks_done_queue.get()
         progress.update()
 
-    #for args in tqdm.tqdm(args_list[:10]):
-    #    build_doubles_guide_specific_target(*args)
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('vector')
+
+    args = parser.parse_args()
+
+    if args.vector == 'singles':
+        build_all_singles()
+    elif args.vector == 'doubles':
+        build_all_doubles()
