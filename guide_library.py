@@ -65,7 +65,6 @@ class GuideLibrary():
 
         return new_gene_to_old_gene
     
-
     def make_protospacer_fasta(self):
         with open(self.fns['protospacers'], 'w') as fh:
             for name, seq in self.guides_df['protospacer'].items():
