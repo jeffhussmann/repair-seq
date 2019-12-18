@@ -1,6 +1,5 @@
 import argparse
 import gzip
-import itertools
 import multiprocessing
 
 from pathlib import Path
@@ -8,6 +7,7 @@ from collections import defaultdict, Counter
 
 import numpy as np
 import pandas as pd
+idx = pd.IndexSlice
 import yaml
 import tqdm
 
@@ -26,7 +26,7 @@ def load_sample_sheet(base_dir, group):
 def load_pool_details(base_dir, group):
     pool_details_fn = Path(base_dir) / 'data' / group / 'pool_details.csv'
     if pool_details_fn.exists():
-        pool_details = pd.read_csv(pool_details_fn, index_col='pool_name')
+        pool_details = pd.read_csv(pool_details_fn, index_col='pool_name').replace({np.nan: None})
         pool_details['index'] = [s.split(';') for s in pool_details['index']]
         pool_details = pool_details.T.to_dict()
     else:
@@ -103,7 +103,6 @@ class FastqChunker():
         
     def split_into_chunks(self):
         line_groups = fastq.get_line_groups(self.input_fn)
-        line_groups = itertools.islice(line_groups, int(1e7))
         
         for read_number, line_group in enumerate(line_groups):
             if read_number % self.reads_per_chunk == 0:
@@ -181,8 +180,8 @@ def get_resolvers(base_dir, group):
 
     else:
         fixed_guide_library = ddr.guide_library.GuideLibrary(base_dir, sample_sheet['fixed_guide_library'])
-        resolvers['fixed_guide'] = utilities.get_one_mismatch_resolver(fixed_guide_library.guide_barcodes).get
-        expected_seqs['fixed_guide'] = set(fixed_guide_library.guide_barcodes)
+        resolvers['fixed_guide_barcode'] = utilities.get_one_mismatch_resolver(fixed_guide_library.guide_barcodes).get
+        expected_seqs['fixed_guide_barcode'] = set(fixed_guide_library.guide_barcodes)
 
     variable_guide_library = ddr.guide_library.GuideLibrary(base_dir, sample_sheet['variable_guide_library'])
     guides = fasta.to_dict(variable_guide_library.fns['guides_fasta'])
@@ -202,6 +201,17 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
 
     counts = defaultdict(Counter)
 
+    sample_sheet = load_sample_sheet(base_dir, group)
+
+    guide_barcode_slice = idx[:22]
+
+    if 'fixed_guide_library' in sample_sheet:
+        # If a guide barcode is present, remove it from R2 before passing along
+        # to simplify analysis of common sequences in pool.
+        after_guide_barcode_slice = idx[22:] 
+    else:
+        after_guide_barcode_slice = idx[:]
+
     for quartet in fastq.read_quartets(fastq_fns, up_to_space=True):
         if len({r.name for r in quartet}) != 1:
             raise ValueError('quartet out of sync')
@@ -211,8 +221,7 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
 
         variable_guide = resolvers['variable_guide'](quartet.R1.seq, 'unknown')
 
-        R2_guide_barcode_slice = slice(None, 22)
-        guide_barcode = quartet.R2.seq[R2_guide_barcode_slice]
+        guide_barcode = quartet.R2.seq[guide_barcode_slice]
         fixed_guide = resolvers['fixed_guide_barcode'](guide_barcode, 'unknown')
         counts['fixed_guide_barcode'][guide_barcode] += 1
 
@@ -234,7 +243,7 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
                                )
         quartet.R2.name = str(annotation)
 
-        sorters[sample, fixed_guide, variable_guide].append(quartet.R2)
+        sorters[sample, fixed_guide, variable_guide].append(quartet.R2[after_guide_barcode_slice])
 
     sorters.sort_and_write()
 
@@ -283,6 +292,9 @@ def merge_seq_counts(base_dir, group, k):
 
             fh.write(f'{seq}\t{count: >10,}\t({fraction: >6.2%})\t{name}{mismatches}\n')
 
+    for fn in count_fns:
+        fn.unlink()
+    
 def merge_ids(base_dir, group):
     chunk_dir = Path(base_dir) / 'data' / group / 'chunks'
     count_fns = chunk_dir.glob('id*.txt')
@@ -297,6 +309,9 @@ def merge_ids(base_dir, group):
 
     counts = pd.Series(counts).sort_index()
     counts.to_csv(merged_fn, sep='\t', header=False)
+
+    for fn in count_fns:
+        fn.unlink()
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -368,6 +383,7 @@ if __name__ == '__main__':
             elif task_type == 'demux':
                 demux_progress.update()
 
+
         while demux_progress.n < chunk_progress.n:
             task_type, *task_info = tasks_done_queue.get()
             if task_type == 'demux':
@@ -388,6 +404,11 @@ if __name__ == '__main__':
             if not demux_result.successful():
                 print(demux_result.get())
 
+    chunk_progress.close()
+    demux_progress.close()
+
+    print('Merging statistics...')
+
     merge_pool = multiprocessing.Pool(processes=3)
     merge_results = []
     merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'sample')))
@@ -400,3 +421,6 @@ if __name__ == '__main__':
     for merge_result in merge_results:
         if not merge_result.successful():
             print(merge_result.get())
+
+    chunk_dir = base_dir / 'data' / group / 'chunks'
+    chunk_dir.rmdir()

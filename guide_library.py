@@ -17,6 +17,7 @@ class GuideLibrary():
 
         self.fns = {
             'guides': self.full_dir / 'guides.txt',
+            'guides_fasta': self.full_dir / 'guides.fasta',
             'best_promoters': self.full_dir / 'best_promoters.txt',
             'updated_gene_names': self.full_dir / 'updated_gene_names.txt',
 
@@ -108,3 +109,7 @@ class GuideLibrary():
 
     def guide_to_gene(self, guide):
         return self.guides_df.loc[guide]['gene']
+
+    @memoized_property
+    def guide_barcodes(self):
+        return self.guides_df['guide_barcode']
