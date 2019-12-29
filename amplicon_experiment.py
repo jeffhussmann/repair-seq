@@ -1,5 +1,4 @@
 import shutil
-import itertools
 import gzip
 from collections import defaultdict
 
@@ -8,7 +7,7 @@ import pandas as pd
 
 from hits import fastq, utilities
 from knock_knock import experiment, read_outcome, visualize, svg
-from ddr import pooled_layout
+from ddr import prime_editing_layout
 
 class AmpliconExperiment(experiment.Experiment):
     def __init__(self, base_dir, group, name, **kwargs):
@@ -18,15 +17,15 @@ class AmpliconExperiment(experiment.Experiment):
             'trimmed',
         ]
 
-        self.layout_mode = 'illumina'
-        self.layout_module = pooled_layout
+        self.layout_mode = 'amplicon'
+        self.layout_module = prime_editing_layout
         self.max_qual = 41
 
         self.fns['fastq'] = self.data_dir / self.description['fastq_fn']
 
         self.outcome_fn_keys = ['outcome_list']
 
-        self.max_relevant_length = 300
+        self.max_relevant_length = 325
         self.length_to_store_unknown = None
         self.length_plot_smooth_window = 0
         self.x_tick_multiple = 50
@@ -35,7 +34,7 @@ class AmpliconExperiment(experiment.Experiment):
         trimmed_fn = self.fns_by_read_type['fastq']['trimmed']
         with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
             reads = fastq.reads(self.fns['fastq'])
-            for read in self.progress(reads):
+            for read in self.progress(reads, desc='Trimming reads'):
                 try:
                     start = read.seq.index('GCCTTT', 0, 20)
                     trimmed_fh.write(str(read[start:]))
@@ -52,8 +51,11 @@ class AmpliconExperiment(experiment.Experiment):
             self.categorize_outcomes(read_type='trimmed')
             self.count_read_lengths()
         elif stage == 'visualize':
+            lengths_fig = self.length_distribution_figure()
+            lengths_fig.savefig(self.fns['lengths_figure'], bbox_inches='tight')
             self.generate_all_outcome_length_range_figures()
             svg.decorate_outcome_browser(self)
+            self.generate_all_outcome_example_figures(num_examples=5, split_at_indels=True, flip_donor=True, highlight_SNPs=True)
 
     def categorize_outcomes(self, fn_key='bam_by_name', read_type=None):
         if self.fns['outcomes_dir'].is_dir():
@@ -131,8 +133,12 @@ class AmpliconExperiment(experiment.Experiment):
         for outcome, fh in bam_fhs.items():
             fh.close()
 
-    def get_read_alignments(self, read_id, fn_key=None, outcome=None, read_type=None):
-        return super().get_read_alignments(read_id, fn_key='bam_by_name', outcome=outcome, read_type='trimmed')
+    def get_read_alignments(self, read_id, fn_key=None, outcome=None, read_type='trimmed'):
+        return super().get_read_alignments(read_id, fn_key='bam_by_name', outcome=outcome, read_type=read_type)
+
+    def alignment_groups(self, fn_key='bam_by_name', outcome=None, read_type='trimmed'):
+        groups = super().alignment_groups(fn_key=fn_key, outcome=outcome, read_type=read_type)
+        return groups
 
     generate_supplemental_alignments = experiment.IlluminaExperiment.generate_supplemental_alignments
 
@@ -163,7 +169,7 @@ class AmpliconExperiment(experiment.Experiment):
         items = self.progress(by_length.items(), desc=description, total=len(by_length))
 
         for length, sampler in items:
-            diagrams = self.alignment_groups_to_diagrams(sampler.sample, num_examples=num_examples, split_at_indels=True, flip_donor=True)
+            diagrams = self.alignment_groups_to_diagrams(sampler.sample, num_examples=num_examples, split_at_indels=True, flip_donor=True, highlight_SNPs=True)
             im = visualize.make_stacked_Image(diagrams, titles='')
             fn = fns['length_range_figure'](length, length)
             im.save(fn)
