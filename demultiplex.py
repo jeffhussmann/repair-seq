@@ -94,7 +94,7 @@ def demux_samples(sample_dir, quartet_name):
     sample_counts = Counter()
     index_counts = Counter()
 
-    sample_sheet = yaml.load((sample_dir / 'sample_sheet.yaml').read_text())
+    sample_sheet = yaml.safe_load((sample_dir / 'sample_sheet.yaml').read_text())
 
     index_to_sample_name = utilities.get_one_mismatch_resolver(sample_sheet['sample_indices'])
     sample_names = sorted(sample_sheet['sample_indices']) + ['unknown']
