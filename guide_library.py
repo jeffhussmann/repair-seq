@@ -6,7 +6,7 @@ from hits import utilities, fasta, mapping_tools
 
 memoized_property = utilities.memoized_property
 
-class GuideLibrary():
+class GuideLibrary:
     def __init__(self, base_dir, name):
         self.base_dir = Path(base_dir)
         self.name = name

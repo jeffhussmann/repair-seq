@@ -58,7 +58,7 @@ def make_pool_sample_sheets(base_dir, group):
 def chunk_number_to_string(chunk_number):
     return f'{chunk_number:06d}'
 
-class FastqChunker():
+class FastqChunker:
     def __init__(self, base_dir, group, quartet_name, which, reads_per_chunk=None, queue=None):
         self.base_dir = Path(base_dir)
         self.group = group
@@ -115,7 +115,7 @@ class FastqChunker():
         
         self.queue.put(('chunk', self.quartet_name, self.which, 'DONE'))
                 
-class UMISorters():
+class UMISorters:
     def __init__(self, base_dir, group, quartet_name, chunk_number):
         self.base_dir = Path(base_dir)
         

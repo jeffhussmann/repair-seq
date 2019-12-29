@@ -20,7 +20,7 @@ from hits import mapping_tools, fastq, sam, utilities
 from ddr import collapse
 from ddr.collapse_cython import hamming_distance
 
-class FastqQuartetSplitter(object):
+class FastqQuartetSplitter:
     def __init__(self, base_path, quartet_name, reads_per_chunk=5000000):
         self.base_path = base_path
         self.quartet_name = quartet_name
@@ -61,7 +61,7 @@ class FastqQuartetSplitter(object):
 
         self.next_read_number += 1
 
-class UMISorters(object):
+class UMISorters:
     def __init__(self, output_dir, progress=utilities.identity):
         self.output_dir = output_dir
         self.progress = progress

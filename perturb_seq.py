@@ -63,7 +63,7 @@ def load_bustools_counts(prefix):
 
     return data
 
-class PerturbseqLane():
+class PerturbseqLane:
     def __init__(self, full_sample_sheet, name):
         self.name = name
         self.barcode_length = 16
@@ -274,7 +274,7 @@ class PerturbseqLane():
 
         self.combine_sgRNA_and_GEX_counts()
 
-class MultipleLanes():
+class MultipleLanes:
     def __init__(self, full_sample_sheet):
         if isinstance(full_sample_sheet, (str, Path)):
             full_sample_sheet = yaml.safe_load(Path(full_sample_sheet).read_text())

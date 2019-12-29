@@ -59,7 +59,7 @@ def load_cell_outcomes(fn):
         cell_outcomes.append(cell_outcome)
     return cell_outcomes
 
-class cell_Outcome(object):
+class cell_Outcome:
     columns = [
         'cell_BC',
         'num_UMIs',
