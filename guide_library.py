@@ -106,9 +106,20 @@ class GuideLibrary:
 
         return gene_guides.index
 
-    def guide_to_gene(self, guide):
+    @memoized_property
+    def guide_to_gene(self):
+        return self.guides_df['gene']
+
+    #def guide_to_gene(self, guide):
         return self.guides_df.loc[guide]['gene']
 
     @memoized_property
     def guide_barcodes(self):
         return self.guides_df['guide_barcode']
+
+class DummyGuideLibrary:
+    def __init__(self):
+        self.guides = ['none']
+        self.non_targeting_guides = ['none']
+
+dummy_guide_library = DummyGuideLibrary()
