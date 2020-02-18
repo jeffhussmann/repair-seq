@@ -1,15 +1,16 @@
 import shutil
+import itertools
 import gzip
 from collections import defaultdict
 
 import pysam
 import pandas as pd
 
-from hits import fastq, utilities
+from hits import fastq, utilities, adapters
 from knock_knock import experiment, read_outcome, visualize, svg
 from ddr import prime_editing_layout
 
-class AmpliconExperiment(experiment.Experiment):
+class PrimeEditingExperiment(experiment.Experiment):
     def __init__(self, base_dir, group, name, **kwargs):
         super().__init__(base_dir, group, name, **kwargs)
 
@@ -34,6 +35,7 @@ class AmpliconExperiment(experiment.Experiment):
         trimmed_fn = self.fns_by_read_type['fastq']['trimmed']
         with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
             reads = fastq.reads(self.fns['fastq'])
+            #reads = itertools.islice(reads, 1000)
             for read in self.progress(reads, desc='Trimming reads'):
                 try:
                     start = read.seq.index('GCCTTT', 0, 20)
@@ -42,20 +44,29 @@ class AmpliconExperiment(experiment.Experiment):
                     pass
 
     def process(self, stage):
-        if stage == 'align':
-            self.preprocess()
-            self.generate_alignments(read_type='trimmed')
-            self.generate_supplemental_alignments(read_type='trimmed', min_length=20)
-            self.combine_alignments(read_type='trimmed')
-        elif stage == 'categorize':
-            self.categorize_outcomes(read_type='trimmed')
-            self.count_read_lengths()
-        elif stage == 'visualize':
-            lengths_fig = self.length_distribution_figure()
-            lengths_fig.savefig(self.fns['lengths_figure'], bbox_inches='tight')
-            self.generate_all_outcome_length_range_figures()
-            svg.decorate_outcome_browser(self)
-            self.generate_all_outcome_example_figures(num_examples=5, split_at_indels=True, flip_donor=True, highlight_SNPs=True)
+        try:
+            if stage == 'align':
+                self.preprocess()
+                self.generate_alignments(read_type='trimmed')
+                self.generate_supplemental_alignments(read_type='trimmed', min_length=20)
+                self.combine_alignments(read_type='trimmed')
+            elif stage == 'categorize':
+                self.categorize_outcomes(read_type='trimmed')
+                self.count_read_lengths()
+            elif stage == 'visualize':
+                lengths_fig = self.length_distribution_figure()
+                lengths_fig.savefig(self.fns['lengths_figure'], bbox_inches='tight')
+                self.generate_all_outcome_length_range_figures()
+                svg.decorate_outcome_browser(self)
+                self.generate_all_outcome_example_figures(num_examples=5,
+                                                          split_at_indels=True,
+                                                          flip_donor=True,
+                                                          flip_target=self.target_info.sequencing_start.strand == '-',
+                                                          highlight_SNPs=True,
+                                                         )
+        except:
+            print(self.group, self.name)
+            raise
 
     def categorize_outcomes(self, fn_key='bam_by_name', read_type=None):
         if self.fns['outcomes_dir'].is_dir():
@@ -67,6 +78,7 @@ class AmpliconExperiment(experiment.Experiment):
 
         with self.fns['outcome_list'].open('w') as fh:
             alignment_groups = self.alignment_groups(fn_key, read_type=read_type)
+            #alignment_groups = itertools.islice(alignment_groups, 1000)
 
             if read_type is None:
                 description = 'Categorizing reads'
@@ -136,6 +148,9 @@ class AmpliconExperiment(experiment.Experiment):
     def get_read_alignments(self, read_id, fn_key=None, outcome=None, read_type='trimmed'):
         return super().get_read_alignments(read_id, fn_key='bam_by_name', outcome=outcome, read_type=read_type)
 
+    def get_read_layout(self, read_id, fn_key=None, outcome=None, read_type='trimmed'):
+        return super().get_read_layout(read_id, fn_key='bam_by_name', outcome=outcome, read_type=read_type)
+
     def alignment_groups(self, fn_key='bam_by_name', outcome=None, read_type='trimmed'):
         groups = super().alignment_groups(fn_key=fn_key, outcome=outcome, read_type=read_type)
         return groups
@@ -169,7 +184,27 @@ class AmpliconExperiment(experiment.Experiment):
         items = self.progress(by_length.items(), desc=description, total=len(by_length))
 
         for length, sampler in items:
-            diagrams = self.alignment_groups_to_diagrams(sampler.sample, num_examples=num_examples, split_at_indels=True, flip_donor=True, highlight_SNPs=True)
+            diagrams = self.alignment_groups_to_diagrams(sampler.sample,
+                                                         num_examples=num_examples,
+                                                         split_at_indels=True,
+                                                         flip_donor=True,
+                                                         highlight_SNPs=True,
+                                                         flip_target=self.target_info.sequencing_start.strand == '-',
+                                                        )
             im = visualize.make_stacked_Image(diagrams, titles='')
             fn = fns['length_range_figure'](length, length)
             im.save(fn)
+
+class PrimeEditingFixedOffsetExperiment(PrimeEditingExperiment):
+    def preprocess(self):
+        offset = self.description['offset']
+        trimmed_fn = self.fns_by_read_type['fastq']['trimmed']
+
+        truseq_R2_rc = adapters.truseq_R2_rc.encode()
+
+        with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
+            reads = fastq.reads(self.fns['fastq'])
+            #reads = itertools.islice(reads, 10000)
+            for read in self.progress(reads, desc='Trimming reads'):
+                adapter_start = adapters.find_adapter(truseq_R2_rc, 2, read.seq.encode())
+                trimmed_fh.write(str(read[offset:adapter_start]))
