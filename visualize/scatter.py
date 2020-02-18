@@ -4,10 +4,11 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
-import statsmodels.stats.proportion
 import scipy.stats
+import bokeh.palettes
 
 from matplotlib.patches import ConnectionPatch
+from matplotlib.lines import Line2D
 
 import hits.visualize
 import hits.utilities
@@ -16,6 +17,7 @@ from . import outcome_diagrams
 
 def outcome(outcome,
             pool,
+            fixed_guide=None,
             p_cutoff=4,
             num_to_label=20,
             genes_to_label=None,
@@ -36,7 +38,7 @@ def outcome(outcome,
             big_labels=False,
             as_percentage=False,
             non_targeting_label_location='floating',
-            avoid_label_overlap=True,
+            avoid_label_overlap=False,
             flip_axes=False,
            ):
     if guide_aliases is None:
@@ -50,8 +52,8 @@ def outcome(outcome,
     else:
         axis_label_size = 12
         tick_label_size = 10
-        big_guide_label_size = 12
-        small_guide_label_size = 10
+        big_guide_label_size = 10
+        small_guide_label_size = 6
 
     fraction_scaling_factor = 100 if as_percentage else 1
     fraction_key = 'percentage' if as_percentage else 'fraction'
@@ -69,17 +71,18 @@ def outcome(outcome,
 
     quantity_to_axis = hits.utilities.reverse_dictionary(axis_to_quantity)
 
-    max_cells = max(pool.UMI_counts(guide_status))
+    UMI_counts = pool.UMI_counts(guide_status)#[fixed_guide]
+    max_cells = max(UMI_counts)
 
-    granular_df = pool.outcome_counts(guide_status)
-    non_targeting = pool.guide_library.non_targeting_guides
+    granular_df = pool.outcome_counts(guide_status)#[fixed_guide]
+    non_targeting = pool.variable_guide_library.non_targeting_guides
 
     if isinstance(outcome, tuple):
-        nt_fraction = pool.non_targeting_fractions(guide_status)[outcome]
+        nt_fraction = pool.non_targeting_fractions(guide_status, fixed_guide)[outcome]
         outcome_counts = granular_df.loc[outcome]
 
     else:
-        nt_counts = pool.non_targeting_counts(guide_status)
+        nt_counts = pool.non_targeting_counts(guide_status, fixed_guide)
         nt_fraction = nt_counts[outcome].sum() / nt_counts.sum()
         outcome_counts = granular_df.loc[outcome].sum()
 
@@ -125,7 +128,7 @@ def outcome(outcome,
     #        geqs[num_cells] = geq
     
     data = {
-        'num_cells': pool.UMI_counts(guide_status),
+        'num_cells': UMI_counts,
         'count': outcome_counts,
     }
 
@@ -134,7 +137,8 @@ def outcome(outcome,
     df['fraction'] = df['count'] / df['num_cells']
     df['percentage'] = df['fraction'] * 100
 
-    df['gene'] = pool.guide_library.guides_df.loc[df.index]['gene']
+    df['fixed_gene'] = [pool.fixed_guide_library.guide_to_gene[f_g] for f_g, v_g in df.index.values]
+    df['variable_gene'] = [pool.variable_guide_library.guide_to_gene[v_g] for f_g, v_g in df.index.values]
     
     if guide_subset is None:
         guide_subset = df.index
@@ -148,7 +152,13 @@ def outcome(outcome,
 
         return guide
 
-    df['alias'] = [convert_alias(g) for g in df.index]
+    if isinstance(df.index, pd.core.index.MultiIndex):
+        if pool.fixed_guide_library.guides == ['none']:
+            df['alias'] = [convert_alias(v) for f, v in df.index]
+        else:
+            df['alias'] = [f'{convert_alias(f)}-{convert_alias(v)}' for f, v in df.index.values]
+    else:
+        df['alias'] = [convert_alias(g) for g in df.index]
 
     #def direction_and_pval(actual_outcome_count, actual_num_cells):
     #    num_cells = closest_sampled[actual_num_cells]
@@ -184,14 +194,17 @@ def outcome(outcome,
 
     df['color'] = 'silver'
     df['label_color'] = 'black'
-    df.loc[df.query('significant').index, 'color'] = 'C1'
-    df.loc[non_targeting, 'color'] = 'C0'
+    #df.loc[df.query('significant').index, 'color'] = 'C1'
+    df.loc[df.query('significant').index, 'color'] = 'silver'
+    df.loc[pool.non_targeting_guide_pairs, 'color'] = 'C0'
 
     if gene_to_color is not None:
         for gene, color in gene_to_color.items():
-            guides = df.index.intersection(pool.gene_guides(gene, only_best_promoter))
-            df.loc[guides, 'color'] = color
-            df.loc[guides, 'label_color'] = color
+            # TODO: best promoter?
+            #gene_guides = df.query('fixed_gene == @gene or variable_gene == @gene').index
+            gene_guides = df.query('fixed_gene == @gene').index
+            df.loc[gene_guides, 'color'] = color
+            df.loc[gene_guides, 'label_color'] = color
 
     if fraction_lims is None:
         fraction_max = df.query('significant')['fraction'].max() * 1.1 * fraction_scaling_factor
@@ -373,7 +386,7 @@ def outcome(outcome,
     else:
         if non_targeting_label_location == 'floating':
             floating_labels = [
-                ('individual non-targeting guides', 20, 'C0'),
+                #('individual non-targeting guides', 20, 'C0'),
                 #('{} p-value < 1e-{}'.format(p_val_method, p_cutoff), -25, 'C1'),
             ]
             for text, offset, color in floating_labels:
@@ -468,6 +481,21 @@ def outcome(outcome,
                        linewidths=(0,),
                       )
 
+    if gene_to_color is not None:
+        g.ax_joint.scatter(x=axis_to_quantity['x'],
+                        y=axis_to_quantity['y'],
+                        data=df.query('fixed_gene in @gene_to_color'),
+                        s=25,
+                        alpha=0.9,
+                        color='color',
+                        linewidths=(0,),
+                        zorder=3,
+                        )
+
+        legend_elements = [Line2D([0], [0], marker='o', color=color, label=f'{gene} fixed guide', linestyle='none') for gene, color in gene_to_color.items()]
+        legend_elements.append(Line2D([0], [0], marker='o', color='C0', label=f'non-targeting in both positions', linestyle='none'))
+        g.ax_joint.legend(handles=legend_elements)
+
     if quantity_to_axis[fraction_key] == 'y':
         line_func = g.ax_joint.axhline
     else:
@@ -523,7 +551,7 @@ def outcome(outcome,
 
         # Don't label any points that will be labeled by gene-labeling below.
         if genes_to_label is not None:
-            to_label = to_label[~to_label['gene'].isin(genes_to_label)]
+            to_label = to_label[~to_label['variable_gene'].isin(genes_to_label)]
 
         to_label = to_label.query(f'{fraction_key} >= @fraction_min and {fraction_key} <= @fraction_max')
 
@@ -551,7 +579,7 @@ def outcome(outcome,
         if guides_to_label is not None:
             to_label = df[df.index.isin(guides_to_label)]
         elif genes_to_label is not None:
-            to_label = df[df['gene'].isin(genes_to_label)]
+            to_label = df.query('variable_gene in @genes_to_label')
 
         to_label = to_label.query(f'{fraction_key} >= @fraction_min and {fraction_key} <= @fraction_max')
 
@@ -593,10 +621,17 @@ def outcome(outcome,
 
     return g, df
 
-
-def guide(pool, gene, number, ax=None, outcomes_to_draw=15, subset_query=None):
+def guide(pool, gene, number,
+          ax=None,
+          fixed_guide='none',
+          outcomes_to_draw=15,
+          subset_query=None,
+          sort_by='log2_fc',
+          min_frequency=1e-4,
+          max_fc=6,
+         ):
     if ax is None:
-        fig, ax = plt.subplots(figsize=(20, 10))
+        fig, ax = plt.subplots(figsize=(10, 10))
     else:
         fig = ax.get_figure()
 
@@ -605,17 +640,14 @@ def guide(pool, gene, number, ax=None, outcomes_to_draw=15, subset_query=None):
 
     fig_width, fig_height = fig.get_size_inches()
 
-    max_fc = 6 
-    min_frequency = 5
+    guide = pool.variable_guide_library.gene_guides(gene)[number]
 
-    guide = pool.guide_library.gene_guides(gene)[number]
+    nt_fracs = pool.non_targeting_fractions('perfect', fixed_guide)
+    fracs = pool.outcome_fractions('perfect')[fixed_guide, guide]
+    counts = pool.outcome_counts('perfect')[fixed_guide, guide]
+    ratios = pool.fold_changes('perfect', fixed_guide)[fixed_guide, guide]
 
-    nt_fracs = pool.non_targeting_fractions('perfect')
-    fracs = pool.outcome_fractions('perfect')[guide]
-    counts = pool.outcome_counts('perfect')[guide]
-    ratios = pool.fold_changes('perfect')[guide]
-
-    num_UMIs = pool.UMI_counts('perfect')[guide]
+    num_UMIs = pool.UMI_counts('perfect')[fixed_guide, guide]
 
     ratios[nt_fracs == 0] = 2**max_fc
     ratios[fracs == 0] = 2**-max_fc
@@ -631,47 +663,52 @@ def guide(pool, gene, number, ax=None, outcomes_to_draw=15, subset_query=None):
         'log10_nt_frac': np.log10(np.maximum(10**-6, nt_fracs)),
     }
     data = pd.DataFrame(data)
-    data = data.query('nt_fracs >= 1e-5').copy()
+    data = data.query(f'nt_fracs >= {min_frequency}').copy()
 
-    data['lower'], data['upper'] = statsmodels.stats.proportion.proportion_confint(data['counts'], num_UMIs, method='beta')
-    data['log2_fc_lower'] = np.log2(np.maximum(data['lower'] / data['nt_fracs'], 2**-(max_fc + 0.1)))
-    data['log2_fc_upper'] = np.log2(np.minimum(data['upper'] / data['nt_fracs'], 2**(max_fc + 0.1)))
+    data['lower_0.05'], data['upper_0.05'] = hits.utilities.clopper_pearson_fast(data['counts'], num_UMIs)
+    data['log2_fc_lower_0.05'] = np.log2(np.maximum(data['lower_0.05'] / data['nt_fracs'], 2**-(max_fc + 0.1)))
+    data['log2_fc_upper_0.05'] = np.log2(np.minimum(data['upper_0.05'] / data['nt_fracs'], 2**(max_fc + 0.1)))
 
     data.index.name = 'outcome'
 
     ax.annotate('{:,} UMIs'.format(num_UMIs),
                 xy=(1, 1),
                 xycoords='axes fraction',
-                xytext=(-5, -5),
+                xytext=(-5, 5),
                 textcoords='offset points',
                 ha='right',
-                va='top',
+                va='bottom',
                )
 
     if num_UMIs == 0:
         return fig
 
-    nt_lows, nt_highs = scipy.stats.binom.interval(1 - 10**-4, num_UMIs, data['nt_fracs'])
-
-    nt_lows = nt_lows / num_UMIs
-    nt_highs = nt_highs / num_UMIs
-
-    data['color'] = 'grey'
-    data['up'] = data['fracs'] > nt_highs
-    data['down'] = (data['fracs'] < nt_lows) & (data['nt_fracs'] > 0)
-
-    data['significant_up'] = data['log2_fc_lower'] > 0
-    data['significant_down'] = data['log2_fc_upper'] < 0
-    data['significant'] = data['significant_up'] | data['significant_down']
+    data['lower_above_0'] = data['log2_fc_lower_0.05'] > 0
+    data['upper_below_0'] = data['log2_fc_upper_0.05'] < 0
+    data['nt_not_in_ci'] = data['lower_above_0'] | data['upper_below_0']
 
     data['up'] = data['fracs'] > data['nt_fracs']
     data['down'] = data['fracs'] < data['nt_fracs']
 
-    data.loc[data['significant_down'], 'color'] = 'C0'
-    data.loc[data['significant_up'], 'color'] = 'C3'
+    data['significant'] = False
+    #data.loc[data['significant_down'], 'color'] = 'C0'
+    #data.loc[data['significant_up'], 'color'] = 'C3'
+    colors = bokeh.palettes.Category10[10][1:3] + bokeh.palettes.Category10[10][4:]
+
+    categories = [
+        'wild type',
+        'insertion',
+        'deletion',
+    ]
+    category_to_color = {cat: color for cat, color in zip(categories, colors)}
+
+    legend_elements = [Line2D([0], [0], marker='o', color=category_to_color.get(cat, 'grey'), label=cat, linestyle='none') for cat in categories + ['other']]
+    ax.legend(handles=legend_elements)
+
+    data['color'] = [category_to_color.get(c, 'grey') for c, s, d in data.index.values]
 
     if subset_query is not None:
-        data['alpha'] = 0.2
+        data['alpha'] = 0.4
         data.loc[data.query(subset_query).index, 'alpha'] = 1
     else:
         data['alpha'] = 0.8
@@ -685,14 +722,15 @@ def guide(pool, gene, number, ax=None, outcomes_to_draw=15, subset_query=None):
                linewidths=(0,),
               )
 
-    # Plot binomial confidence intervals.
+    # Draw binomial confidence intervals for each guide.
     for _, row in data.query(subset_query).iterrows():
         x = row['log10_nt_frac']
-        ax.plot([x, x], [row['log2_fc_lower'], row['log2_fc_upper']], color='black', alpha=0.2)
+        ax.plot([x, x], [row['log2_fc_lower_0.05'], row['log2_fc_upper_0.05']], color='black', alpha=0.2)
 
     ax.axhline(0, color='black', alpha=0.8)
 
-    for cutoff in [0.05]:
+    # Draw binomial confidence interval around 0.
+    for cutoff in [1e-3]:
         ps = np.logspace(-7, 0, 10000)
         lows, highs = scipy.stats.binom.interval(1 - cutoff, num_UMIs, ps)
         interval_xs = np.log10(ps)
@@ -707,15 +745,15 @@ def guide(pool, gene, number, ax=None, outcomes_to_draw=15, subset_query=None):
     ys = np.log2((1. / num_UMIs) / nt_fracs)
     ax.plot(np.log10(nt_fracs), ys, linestyle='--', color='black', linewidth=2)
 
-    ax.set_xlim(-min_frequency - 0.1, data['log10_nt_frac'].max() + 0.1)
+    ax.set_xlim(np.log10(min_frequency) - 0.1, data['log10_nt_frac'].max() + 0.1)
     ax.set_ylim(-max_fc - 0.1, max_fc + 0.1)
 
     ax.set_xlabel('log10(fraction in non-targeting)', size=16)
-    ax.set_ylabel('log2(fold change upon knockdown)', size=16)
+    ax.set_ylabel('log2(fold change relative to non-targeting)', size=16)
 
     ax.set_yticks(np.arange(-max_fc, max_fc + 1, 1))
 
-    ax.set_title(guide, size=16)
+    ax.set_title(f'{pool.target_info.sgRNA}\n{guide}', size=16)
 
     plt.draw()
     ax_p = ax.get_position()
@@ -724,11 +762,14 @@ def guide(pool, gene, number, ax=None, outcomes_to_draw=15, subset_query=None):
         if direction == 'up':
             label = 'gene activity suppresses outcome'
             color = 'C3'
+            sorted_slice = slice(None, outcomes_to_draw)
         else:
             label = 'gene activity promotes outcome'
             color = 'C0'
+            sorted_slice = slice(-outcomes_to_draw, None)
 
-        rows = data.query(f'{direction} and {subset_query}').sort_values('log2_fc', ascending=False).iloc[:outcomes_to_draw]
+        outcome_subset = data.query(f'{direction} and {subset_query}')
+        rows = outcome_subset.sort_values(sort_by, ascending=False).iloc[sorted_slice]
         if len(rows) > 0:
             diagram_window = (-30, 30)
             outcomes = rows.index.values
@@ -787,21 +828,21 @@ def guide(pool, gene, number, ax=None, outcomes_to_draw=15, subset_query=None):
     labels = ax.get_xticklabels()
     for l in labels:
         x, y = l.get_position()
-        if x == -min_frequency:
-            l.set_text(r'$\leq${}'.format(min_frequency))
+        if x == np.log10(min_frequency):
+            l.set_text(r'$\leq${}'.format(np.log10(min_frequency)))
 
     ax.set_xticklabels(labels)
     
     return fig, data
 
 def gene(pool, gene, subset_query=None):
-    guides = pool.guide_library.gene_guides(gene)
+    guides = pool.variable_guide_library.gene_guides(gene)
 
     fig, axs = plt.subplots(len(guides), 1, figsize=(10, 10 * len(guides)))
     if len(guides) == 1:
         axs = [axs]
 
     for i, ax in enumerate(axs):
-        plot_guide_scatter(pool, gene, i, ax=ax, subset_query=subset_query)
+        guide(pool, gene, i, ax=ax, subset_query=subset_query)
 
     return fig

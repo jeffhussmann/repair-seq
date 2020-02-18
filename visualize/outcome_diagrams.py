@@ -3,8 +3,8 @@ import matplotlib.pyplot as plt
 
 import hits.utilities
 import hits.visualize
-from knock_knock.target_info import degenerate_indel_from_string, SNVs, effectors
-from ddr.pooled_layout import HDROutcome, DeletionOutcome, HDRPlusDeletionOutcome, DeletionPlusMismatchOutcome
+from knock_knock.target_info import degenerate_indel_from_string, SNV, SNVs, effectors
+from ddr.pooled_layout import HDROutcome, DeletionOutcome, InsertionOutcome, HDRPlusDeletionOutcome, DeletionPlusMismatchOutcome
 
 def plot(outcome_order,
          target_info,
@@ -20,6 +20,7 @@ def plot(outcome_order,
          draw_imperfect_MH=False,
          draw_wild_type_on_top=False,
          draw_donor_on_top=False,
+         text_size=8,
         ):
     if isinstance(window, int):
         window_left, window_right = -window, window
@@ -103,7 +104,6 @@ def plot(outcome_order,
                            )
         ax.add_patch(patch)
 
-    text_size = 8
     block_alpha = 0.1
     wt_height = 0.6
 
@@ -297,13 +297,13 @@ def plot(outcome_order,
         y = num_outcomes - i - 1
             
         if category == 'deletion':
-            deletion = degenerate_indel_from_string(details)
+            deletion = DeletionOutcome.from_string(details).undo_anchor_shift(target_info.anchor).deletion
             xs_to_skip = draw_deletion(y, deletion)
             if draw_all_sequence:
                 draw_sequence(y, xs_to_skip)
         
         elif category == 'insertion':
-            insertion = degenerate_indel_from_string(details)
+            insertion = InsertionOutcome.from_string(details).undo_anchor_shift(target_info.anchor).insertion
             starts = np.array(insertion.starts_afters) - offset
             draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
             for i, (start, bs) in enumerate(zip(starts, insertion.seqs)):
@@ -337,6 +337,10 @@ def plot(outcome_order,
             SNV_xs = set()
             draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
             snvs = SNVs.from_string(details) 
+
+            # Undo anchor shift.
+            snvs = SNVs([SNV(s.position + target_info.anchor, s.basecall, s.quality) for s in snvs])
+
             for snv in snvs:
                 x = snv.position - offset
                 SNV_xs.add(x)
@@ -360,7 +364,7 @@ def plot(outcome_order,
                 draw_sequence(y, xs_to_skip=SNV_xs)
 
         elif category == 'deletion + adjacent mismatch':
-            outcome = DeletionPlusMismatchOutcome.from_string(details)
+            outcome = DeletionPlusMismatchOutcome.from_string(details).undo_anchor_shift(target_info.anchor)
             xs_to_skip = draw_deletion(y, outcome.deletion_outcome.deletion, draw_MH=True)
             
             for snv in outcome.mismatch_outcome.snvs:
@@ -502,8 +506,33 @@ def add_frequencies(fig, ax, count_source, outcome_order, text_only=False):
         
         ax.set_ylim(-0.5, len(outcome_order) - 0.5)
 
+def add_values(fig, ax, vals):
+    ax_p = ax.get_position()
+    
+    width = 0.2
+    offset = 0.04
+
+    ys = np.arange(len(vals) - 1, -1, -1)
+    
+    val_ax = fig.add_axes((ax_p.x1 + offset, ax_p.y0, width, ax_p.height), sharey=ax)
+    
+    val_ax.plot(vals, ys, 'o-', markersize=2, color='black')
+    
+    val_ax.set_yticks([])
+    val_ax.xaxis.tick_top()
+    val_ax.spines['left'].set_alpha(0.3)
+    val_ax.spines['right'].set_alpha(0.3)
+    val_ax.tick_params(labelsize=6)
+    val_ax.grid(axis='x', alpha=0.3)
+    
+    val_ax.spines['bottom'].set_visible(False)
+    
+    val_ax.xaxis.set_label_position('top')
+    
+    ax.set_ylim(-0.5, len(vals) - 0.5)
+
 def plot_with_frequencies(pool, outcomes, text_only=False, **kwargs):
-    fig = outcome_diagrams.plot(outcomes, pool.target_info, **kwargs)
+    fig = plot(outcomes, pool.target_info, **kwargs)
     num_outcomes = kwargs.get('num_outcomes')
     add_frequencies(fig, fig.axes[0], pool, outcomes[:num_outcomes], text_only=text_only)
     return fig
