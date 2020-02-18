@@ -41,6 +41,8 @@ class GuideLibrary:
             not_best = guides_df.query('gene == @gene and promoter != @promoter').index
             guides_df.loc[not_best, 'best_promoter'] = False
 
+        guides_df = guides_df.sort_values(['gene', 'promoter', 'rank'])
+
         return guides_df
     
     @memoized_property
