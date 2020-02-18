@@ -98,7 +98,12 @@ class GuideLibrary:
         return sorted(set(self.guides_df['gene']))
 
     def gene_guides(self, gene, only_best_promoter=False):
-        query = 'gene == @gene'
+        if isinstance(gene, str):
+            genes = [gene]
+        else:
+            genes = gene
+
+        query = 'gene in @genes'
         if only_best_promoter:
             query += ' and best_promoter'
 
