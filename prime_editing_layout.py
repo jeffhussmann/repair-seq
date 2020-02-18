@@ -141,17 +141,43 @@ class Layout:
         if len(als) == 0:
             return als
 
+        # If the left edge of the read isn't covered, try to merge a primer alignmentto the left-most alignment.
+        existing_covered = interval.get_disjoint_covered(als)
+        realigned_to_primers = {}
+
+        if existing_covered.start >= 5:
+            realigned_to_primers[5] = self.realign_edges_to_primers(5)
+            if realigned_to_primers[5] is not None:
+                left_most = min(als, key=lambda al: interval.get_covered(al).start)
+                others = [al for al in als if al != left_most]
+                merged = sam.merge_adjacent_alignments(left_most, realigned_to_primers[5], self.target_info.reference_sequences)
+                if merged is None:
+                    merged = left_most
+
+                als = others + [merged]
+
+        if existing_covered.end <= len(self.seq) - 1 - 5:
+            realigned_to_primers[3] = self.realign_edges_to_primers(3)
+            if realigned_to_primers[3] is not None:
+                right_most = max(als, key=lambda al: interval.get_covered(al).end)
+                others = [al for al in als if al != right_most]
+                merged = sam.merge_adjacent_alignments(right_most, realigned_to_primers[3], self.target_info.reference_sequences)
+                if merged is None:
+                    merged = right_most
+
+                als = others + [merged]
+
         # If processed alignments don't cover either edge, this typically means non-specific amplification.
         # Try to realign each uncovered edge to the relevant primer to check for this.
         existing_covered = interval.get_disjoint_covered(als)
 
         possible_edge_als = []
 
-        if existing_covered.start != 0:
-            possible_edge_als.append(self.realign_edges_to_primers(5))
+        if existing_covered.start >= 5:
+            possible_edge_als.append(realigned_to_primers[5])
 
-        if existing_covered.end != len(self.seq) - 1:
-            possible_edge_als.append(self.realign_edges_to_primers(3))
+        if existing_covered.end <= len(self.seq) - 1 - 5:
+            possible_edge_als.append(realigned_to_primers[3])
 
         edge_als = []
 
@@ -217,9 +243,21 @@ class Layout:
     def split_target_and_donor_alignments(self):
         all_split_als = []
         for al in self.target_alignments + self.donor_alignments:
-            split_als = layout.comprehensively_split_alignment(al, self.target_info, self.ins_size_to_split_at, self.del_size_to_split_at, 'illumina')
+            split_als = layout.comprehensively_split_alignment(al,
+                                                               self.target_info,
+                                                               self.ins_size_to_split_at,
+                                                               self.del_size_to_split_at,
+                                                               'illumina',
+                                                              )
 
-            all_split_als.extend(split_als)
+            if al.reference_name == self.target_info.target:
+                seq_bytes = self.target_info.target_sequence_bytes
+            else:
+                seq_bytes = self.target_info.donor_sequence_bytes
+
+            extended = [sw.extend_alignment(split_al, seq_bytes) for split_al in split_als]
+
+            all_split_als.extend(extended)
 
         return all_split_als
 
@@ -263,10 +301,10 @@ class Layout:
 
             covered = interval.get_covered(al)
             
-            if covered.start <= 2:
+            if covered.start <= 5:
                 edge_alignments['left'].append(al)
             
-            if covered.end >= len(self.seq) - 1 - 2:
+            if covered.end >= len(self.seq) - 1 - 5 or self.extends_past_reverse_primer(al):
                 edge_alignments['right'].append(al)
 
         for edge in ['left', 'right']:
@@ -277,16 +315,19 @@ class Layout:
 
         return edge_alignments
 
-    def extends_past_PAS(self, al):
-        if (self.target_info.target, 'PAS') in self.target_info.features:
-            PAS = self.target_info.features[self.target_info.target, 'PAS']
-            return al.reference_start <= PAS.start <= al.reference_end
+    def extends_past_reverse_primer(self, al):
+        if (self.target_info.target, 'reverse_primer') in self.target_info.features:
+            reverse_primer = self.target_info.features[self.target_info.target, 'reverse_primer']
+            return al.reference_start <= reverse_primer.end <= al.reference_end
         else:
             return False
 
     @memoized_property
     def whole_read(self):
         return interval.Interval(0, len(self.seq) - 1)
+
+    def whole_read_minus_edges(self, edge_length):
+        return interval.Interval(edge_length, len(self.seq) - 1 - edge_length)
     
     @memoized_property
     def single_target_alignment(self):
@@ -323,8 +364,8 @@ class Layout:
             return False
         else:
             not_too_much = {
-                'start': missing_from['start'] <= 2,
-                'end': missing_from['end'] <= 2,
+                'start': missing_from['start'] <= 5,
+                'end': (missing_from['end'] <= 5) or self.extends_past_reverse_primer(self.single_target_alignment),
                 'middle': missing_from['middle'] <= 5,
             }
 
@@ -1002,7 +1043,7 @@ class Layout:
 
         self.category = 'nonspecific amplification'
         # which supplemental index did it come from?
-        self.subcategory = details['chr'].split('_')[0]
+        self.subcategory = details['organism']
         self.details = details_string
         self.relevant_alignments = details['full_alignments']
         self.special_alignment = details['cropped_candidate_alignment']
@@ -1056,7 +1097,9 @@ class Layout:
         if len(shared_HAs) > 1 and self.donor_insertion_matches_intended:
             self.category = 'intended edit'
             if len(self.non_donor_SNVs) > 0:
-                self.subcategory = 'insertion + mismatches'
+                self.subcategory = 'insertion + unintended mismatches'
+            elif self.has_donor_SNV:
+                self.subcategory = 'insertion + SNV'
             else:
                 self.subcategory = 'insertion'
         else:
@@ -1077,7 +1120,14 @@ class Layout:
         for feature in self.target_info.donor_insertions:
             ordered_feature_bounds = sorted([feature.start, feature.end])
 
-            if ordered_feature_bounds == ordered_observed_bounds and feature.strand == observed_strand:
+            # If there is a mismatch involved, switch points might not line up
+            # exactly with insertion boundaries. Instead, check if the insertion is
+            # a superset of the intended insertion and that the HAs are shared.
+            if (ordered_observed_bounds[0] <= ordered_feature_bounds[0]) and \
+               (ordered_observed_bounds[1] >= ordered_feature_bounds[1]) and \
+               (observed_strand == feature.strand) and \
+               (self.donor_insertion['shared_HAs'] == {'left', 'right'}):
+
                 matches = True
         
         return matches
@@ -1288,13 +1338,17 @@ class Layout:
 
             if source == 'genomic':
                 organism, original_name = cropped_candidate_al.reference_name.split('_', 1)
-                if organism not in self.target_info.supplemental_headers:
-                    raise ValueError(organism, self.target_info.supplemental_headers)
+                organism_matches = {n for n in self.target_info.supplemental_headers if cropped_candidate_al.reference_name.startswith(n)}
+                if len(organism_matches) != 1:
+                    raise ValueError(cropped_candidate_al.reference_name, self.target_info.supplemental_headers)
                 else:
-                    header = self.target_info.supplemental_headers[organism]
-                    al_dict = cropped_candidate_al.to_dict()
-                    al_dict['ref_name'] = original_name
-                    original_al = pysam.AlignedSegment.from_dict(al_dict, header)
+                    organism = organism_matches.pop()
+                    original_name = cropped_candidate_al.reference_name[len(organism) + 1:]
+
+                header = self.target_info.supplemental_headers[organism]
+                al_dict = cropped_candidate_al.to_dict()
+                al_dict['ref_name'] = original_name
+                original_al = pysam.AlignedSegment.from_dict(al_dict, header)
 
                 details.update({
                     'chr': candidate_al.reference_name,
@@ -1333,8 +1387,8 @@ class Layout:
             if has_donor_SNV['right']:
                 failures.append('right alignment has a donor SNV')
 
-            if insertion_length < 5:
-                failures.append(f'insertion length = {insertion_length}')
+            #if insertion_length < 5:
+            #    failures.append(f'insertion length = {insertion_length}')
 
             edit_distance_over_length = middle_edits / insertion_length
             if edit_distance_over_length >= 0.1:
@@ -1497,10 +1551,12 @@ class Layout:
                 indel, near_cut = self.indels[0]
                 if len(self.donor_deletions_seen) == 1:
                         self.category = 'intended edit'
-                        if len(self.non_donor_SNVs) == 0:
-                            self.subcategory = 'deletion'
+                        if len(self.non_donor_SNVs) > 0:
+                            self.subcategory = 'deletion + unintended mismatches'
+                        elif self.has_donor_SNV:
+                            self.subcategory = 'deletion + SNV'
                         else:
-                            self.subcategory = 'deletion + mismatches'
+                            self.subcategory = 'deletion'
                         self.outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
                         self.details = str(self.outcome)
 
@@ -1556,7 +1612,6 @@ class Layout:
                             self.details = self.indels_string
                             self.relevant_alignments = [self.single_target_alignment]
 
-
             else: # more than one indel
                 if self.primer_dimer <= 50:
                     self.category = 'nonspecific amplification'
@@ -1575,7 +1630,13 @@ class Layout:
         
         elif self.donor_insertion is not None:
             self.register_donor_insertion()
-        
+
+        elif self.long_duplication is not None:
+            self.category = 'duplication'
+            self.subcategory = 'duplication'
+            self.details = 'n/a'
+            self.relevant_alignments = self.target_multiple_gap_covering_alignments
+
         elif self.genomic_insertion is not None:
             self.register_genomic_insertion()
 
@@ -1617,6 +1678,63 @@ class Layout:
         return self.category, self.subcategory, self.details, self.outcome
 
     @memoized_property
+    def target_multiple_gap_covering_alignments(self):
+        initial_target_als = self.split_target_alignments
+        initial_uncovered = self.whole_read - interval.get_disjoint_covered(initial_target_als)
+        gap_covers = []
+        for uncovered_interval in initial_uncovered.intervals:
+            # Don't try to explain tiny gaps.
+            if len(uncovered_interval) > 4:
+                # Note the + 1 on end here.
+                gap_covers.extend(self.seed_and_extend('target', uncovered_interval.start, uncovered_interval.end + 1))
+        return interval.make_parsimonious(initial_target_als + gap_covers)
+
+    @memoized_property
+    def target_and_donor_multiple_gap_covering_alignments(self):
+        initial_als = self.split_target_alignments + self.split_donor_alignments
+        initial_uncovered = self.whole_read - interval.get_disjoint_covered(initial_als)
+        gap_covers = []
+        for uncovered_interval in initial_uncovered.intervals:
+            # Don't try to explain tiny gaps.
+            if len(uncovered_interval) > 4:
+                # Note the + 1 on end here.
+                gap_covers.extend(self.seed_and_extend('target', uncovered_interval.start, uncovered_interval.end + 1))
+        return interval.make_parsimonious(initial_als + gap_covers)
+
+    @memoized_property
+    def long_duplication(self):
+        target_als = sorted(self.target_multiple_gap_covering_alignments, key=interval.get_covered)
+
+        covered = interval.get_disjoint_covered(target_als)
+        uncovered = self.whole_read_minus_edges(2) - covered
+        
+        if len(target_als) == 1 or uncovered.total_length > 0:
+            return None
+        
+        MH_lengths = []
+        duplication_bounds = []
+
+        all_junctions_valid = True
+
+        for junction_i, (left_al, right_al) in enumerate(zip(target_als, target_als[1:])):
+            ref_overlap = interval.get_covered_on_ref(left_al) & interval.get_covered_on_ref(right_al)
+
+            if isinstance(ref_overlap, list):
+                # Not a simple duplication
+                all_junctions_valid = False
+                break
+
+            duplication_bounds.append((ref_overlap.start, ref_overlap.end))
+
+            MH_length = layout.junction_microhomology(self.target_info, left_al, right_al)
+            MH_lengths.append(MH_length)
+
+        if not all_junctions_valid:
+            return None
+        else:
+            return MH_lengths, duplication_bounds
+
+    @memoized_property
     def longest_polyG(self):
         locations = utilities.homopolymer_lengths(self.seq, 'G')
 
@@ -1642,9 +1760,11 @@ category_order = [
          'SNV + mismatches',
          'synthesis errors',
          'deletion',
-         'deletion + mismatches',
+         'deletion + SNV',
+         'deletion + unintended mismatches',
          'insertion',
-         'insertion + mismatches',
+         'insertion + SNV',
+         'insertion + unintended mismatches',
         ),
     ),
     ('edit + indel',
@@ -1670,6 +1790,10 @@ category_order = [
         ('loop-out',
          'snap-back',
          'multi-step',
+        ),
+    ),
+    ('duplication',
+        ('duplication',
         ),
     ),
     ('unintended donor integration',
@@ -1707,6 +1831,7 @@ category_order = [
     ),
     ('nonspecific amplification',
         ('hg19',
+         'e_coli',
          'primer dimer',
          'unknown',
         ),
@@ -1858,6 +1983,10 @@ class DeletionPlusMismatchOutcome(Outcome):
         shifted_deletion = self.deletion_outcome.perform_anchor_shift(anchor)
         shifted_mismatch = self.mismatch_outcome.perform_anchor_shift(anchor)
         return type(self)(shifted_deletion, shifted_mismatch)
+
+class DuplicationOutcome(Outcome):
+    def __init__(self):
+        pass
 
 Outcome_classes = {
     ('mismatches', 'mismatches'): MismatchOutcome,
