@@ -39,6 +39,17 @@ Pooled_UMI_Outcome = read_outcome.Outcome_factory(
     },
 )
 
+gDNA_Outcome = read_outcome.Outcome_factory(
+    columns_arg=[
+        'standardized_qname',
+        'category',
+        'subcategory',
+        'details',
+    ],
+    converters_arg={
+    },
+)
+
 def load_UMI_outcomes(fn, pooled=True):
     if pooled:
         Outcome = Pooled_UMI_Outcome
