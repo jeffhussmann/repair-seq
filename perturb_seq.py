@@ -14,6 +14,7 @@ import scanpy as sc
 import scipy.sparse
 
 from hits import utilities, mapping_tools, fasta, fastq, bus, sam
+from hits.utilities import memoized_property
 
 def build_guide_index(guides_fn, index_dir):
     ''' index entries are in same orientation as R2 '''
@@ -124,7 +125,8 @@ class PerturbseqLane:
                     missing_files.append(fn)
 
         if missing_files:
-            raise ValueError(f'{self.name} specifies non-existent files: {[str(fn) for fn in missing_files]}')
+            #raise ValueError(f'{self.name} specifies non-existent files: {[str(fn) for fn in missing_files]}')
+            print(f'{self.name} specifies non-existent files: {[str(fn) for fn in missing_files]}')
 
     def map_sgRNA_reads(self):
         output_prefix = self.sgRNA_fns['STAR_output_prefix']
@@ -217,7 +219,16 @@ class PerturbseqLane:
                 print(line.decode())
             raise
 
-    def combine_sgRNA_and_GEX_counts(self):
+    @memoized_property
+    def sgRNA_data(self):
+        return load_bustools_counts(self.sgRNA_fns['counts'])
+
+    @memoized_property
+    def GEX_data(self):
+        return load_bustools_counts(self.GEX_fns['counts'])
+
+    @memoized_property
+    def ENSG_to_name(self):
         names_fn = '/nvme/indices/refdata-cellranger-hg19-1.2.0/kallisto/transcripts_to_genes_hg19.txt'
 
         updated_names = pd.read_csv('/home/jah/projects/ddr/guides/DDR_library/updated_gene_names.txt', sep='\t', index_col='old_name', squeeze=True)
@@ -243,10 +254,18 @@ class PerturbseqLane:
                 
             ENSG_to_name[ENSG] = name_to_use
 
-        gex_data = load_bustools_counts(self.GEX_fns['counts'])
+        return ENSG_to_name
+
+    @memoized_property
+    def name_to_ENSG(self):
+        return utilities.reverse_dictionary(self.ENSG_to_name)
+
+    def combine_sgRNA_and_GEX_counts(self):
+
+        gex_data = self.GEX_data
         gex_data.var['name'] = [ENSG_to_name[g] for g in gex_data.var.index.values]
 
-        sgRNA_data = load_bustools_counts(self.sgRNA_fns['counts'])
+        sgRNA_data = self.sgRNA_data
 
         gex_data.obs['num_UMIs'] = np.sum(gex_data.X, axis=1).A1
         sgRNA_data.obs['num_UMIs'] = np.sum(sgRNA_data.X, axis=1).A1
@@ -262,7 +281,14 @@ class PerturbseqLane:
         gex_data.obs['sgRNA_num_UMIs'] = sgRNA_data.obs['num_UMIs'][gex_data.obs.index.values]
         gex_data.obs['sgRNA_name'] = [sgRNA_data.var_names[i] if i != -1 else 'none' for i in gex_data.obs['sgRNA_highest_index']]
 
+        # For performance reasons, go ahead and discard any BCs with < 1000 UMIs.
+        gex_data = gex_data[gex_data.obs.query('num_UMIs >= 1000').index]
+
         gex_data.write(self.fns['annotated_counts'])
+
+    @memoized_property
+    def annotated_counts(self):
+        return sc.read_h5ad(self.fns['annotated_counts'])
 
     def process(self):
         #self.map_sgRNA_reads()
@@ -290,12 +316,12 @@ class MultipleLanes:
     def combine_counts(self):
         all_cells = {}
         for lane in self.lanes:
-            gex_data = sc.read_h5ad(lane.fns['annotated_counts'])
-            good_cell_query = 'num_UMIs > 0.5e4 and sgRNA_num_UMIs > 1e2 and sgRNA_highest_count / sgRNA_num_UMIs > 0.9'
-            good_cells = gex_data.obs.query(good_cell_query).index
-            good_cells_with_lane = [f'{cell_bc}-{lane.name[-1]}' for cell_bc in good_cells]
-            all_cells[lane.name] = gex_data[good_cells]
-            all_cells[lane.name].obs.index = good_cells_with_lane
+            gex_data = lane.annotated_counts
+            #good_cell_query = 'num_UMIs > 0.5e4 and sgRNA_num_UMIs > 1e2 and sgRNA_highest_count / sgRNA_num_UMIs > 0.9'
+            cells = gex_data.obs.index
+            cells_with_lane = [f'{cell_bc}-{lane.name[-1]}' for cell_bc in cells]
+            all_cells[lane.name] = gex_data
+            all_cells[lane.name].obs.index = cells_with_lane
             
         all_Xs = scipy.sparse.vstack([all_cells[name].X for name in sorted(all_cells)])
         all_obs = pd.concat([all_cells[name].obs for name in sorted(all_cells)])
@@ -304,7 +330,8 @@ class MultipleLanes:
         all_cells = sc.AnnData(all_Xs, all_obs, all_var)
         all_cells.write(self.fns['all_cells'])
 
-    def load_cells(self):
+    @memoized_property
+    def cells(self):
         return sc.read_h5ad(self.fns['all_cells'])
 
 def process_in_pool(lane):
@@ -319,6 +346,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     sample_sheet = yaml.safe_load(args.sample_sheet.read_text())
 
-    lanes = [PerturbseqLane(sample_sheet, name) for name in sample_sheet]
+    lanes = [PerturbseqLane(sample_sheet, name) for name in sample_sheet['lanes']]
     pool = multiprocessing.Pool(processes=args.max_procs)
     pool.map(process_in_pool, lanes)
