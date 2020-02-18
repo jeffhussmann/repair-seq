@@ -1,10 +1,12 @@
 from pathlib import Path
+from collections import defaultdict
 
 import pandas as pd
 
 from hits import utilities, fasta, mapping_tools
 
 memoized_property = utilities.memoized_property
+memoized_with_key = utilities.memoized_with_key
 
 class GuideLibrary:
     def __init__(self, base_dir, name):
@@ -117,16 +119,22 @@ class GuideLibrary:
     def guide_to_gene(self):
         return self.guides_df['gene']
 
-    #def guide_to_gene(self, guide):
-        return self.guides_df.loc[guide]['gene']
-
     @memoized_property
     def guide_barcodes(self):
         return self.guides_df['guide_barcode']
+
+    @memoized_with_key
+    def gene_indices(self, gene):
+        idxs = [i for i, g in enumerate(self.guides_df['gene']) if g == gene]
+        return min(idxs), max(idxs)
 
 class DummyGuideLibrary:
     def __init__(self):
         self.guides = ['none']
         self.non_targeting_guides = ['none']
+    
+    @memoized_property
+    def guide_to_gene(self):
+        return defaultdict(lambda: 'none')
 
 dummy_guide_library = DummyGuideLibrary()

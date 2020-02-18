@@ -2,6 +2,7 @@
 
 import argparse
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -10,7 +11,15 @@ import tqdm
 def parallel(args):
     from ddr import pooled_screen
 
-    pool = pooled_screen.PooledScreen(args.base_dir, args.pool, progress=tqdm.tqdm)
+    sample_sheet_fn = args.base_dir / 'results' / args.pool / 'sample_sheet.yaml'
+    description = yaml.safe_load(sample_sheet_fn.read_text())
+
+    gDNA = description.get('gDNA', False)
+
+    if gDNA:
+        pool = pooled_screen.PooledScreenNoUMI(args.base_dir, args.pool, progress=tqdm.tqdm)
+    else:
+        pool = pooled_screen.PooledScreen(args.base_dir, args.pool, progress=tqdm.tqdm)
 
     # Create parent results dir to avoid race condition
     results_dir = args.base_dir / 'results' / args.pool
@@ -19,7 +28,7 @@ def parallel(args):
     def process_stage(stage):
         parallel_command = [
             'parallel',
-            '-n', '3', 
+            '-n', '4', 
             '--bar',
             '--max-procs', str(args.max_procs),
             'ddr',
@@ -27,23 +36,32 @@ def parallel(args):
             'process', ':::',
         ]
 
-        arg_tuples = [(args.pool, guide, str(stage)) for guide in pool.guides]
+        arg_tuples = []
+        for fixed_guide, variable_guide in pool.guide_combinations:
+            arg_tuples.append((args.pool, fixed_guide, variable_guide, str(stage)))
+
         for t in sorted(arg_tuples):
             parallel_command.extend(t)
         
-        subprocess.check_call(parallel_command)
+        completed_process = subprocess.run(parallel_command)
+        if completed_process.returncode != 0:
+            print('error in parallel')
+            sys.exit(1)
 
-    process_stage(0)
+    #process_stage(0)
 
-    pool.make_common_sequences()
-    parallel_common_sequences(args)
-    pool.write_common_outcome_files()
-    pool.merge_common_sequence_special_alignments()
+    if not gDNA:
+        pool.make_common_sequences()
+        parallel_common_sequences(args)
+        pool.write_common_outcome_files()
+        pool.merge_common_sequence_special_alignments()
 
     process_stage(1)
 
-    pool.make_outcome_counts()
-    pool.merge_special_alignments()
+    #pool.make_outcome_counts()
+    pool.merge_templated_insertion_details()
+
+    #pool.merge_special_alignments()
 
 def parallel_common_sequences(args):
     from ddr import pooled_screen
@@ -64,22 +82,30 @@ def parallel_common_sequences(args):
     for pair in sorted(arg_pairs):
         parallel_command.extend(pair)
     
-    subprocess.check_call(parallel_command)
+    completed_process = subprocess.run(parallel_command)
+    if completed_process.returncode != 0:
+        print('error in parallel')
+        sys.exit(1)
 
 def process(args):
     from ddr import pooled_screen
 
-    sample_sheet_fn = args.base_dir / 'data' / args.pool / 'sample_sheet.yaml'
-    description = yaml.load(sample_sheet_fn.read_text())
+    sample_sheet_fn = args.base_dir / 'results' / args.pool / 'sample_sheet.yaml'
+    description = yaml.safe_load(sample_sheet_fn.read_text())
 
-    exp = pooled_screen.SingleGuideExperiment(args.base_dir, args.pool, args.guide, description, progress=args.progress)
+    if description.get('gDNA', False):
+        ExperimentType = pooled_screen.SingleGuideNoUMIExperiment
+    else:
+        ExperimentType = pooled_screen.SingleGuideExperiment
+
+    exp = ExperimentType(args.base_dir, args.pool, args.fixed_guide, args.variable_guide, description=description, progress=args.progress)
 
     exp.process(args.stage)
 
 def process_common_sequences(args):
     from ddr import pooled_screen
 
-    exp = pooled_screen.CommonSequenceExperiment(args.base_dir, args.pool, args.chunk, progress=args.progress)
+    exp = pooled_screen.CommonSequenceExperiment(args.base_dir, args.pool, 'common_sequences', args.chunk, progress=args.progress)
     exp.process()
 
 parser = argparse.ArgumentParser()
@@ -88,7 +114,8 @@ subparsers.required = True
 
 parser_process = subparsers.add_parser('process')
 parser_process.add_argument('pool')
-parser_process.add_argument('guide')
+parser_process.add_argument('fixed_guide')
+parser_process.add_argument('variable_guide')
 parser_process.add_argument('stage', type=int, choices=[0, 1])
 parser_process.add_argument('--progress', const=tqdm.tqdm, action='store_const')
 parser_process.set_defaults(func=process)

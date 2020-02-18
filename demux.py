@@ -219,7 +219,7 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
         sample = resolvers['sample'](quartet.I2.seq, 'unknown')
         counts['sample'][quartet.I2.seq] += 1
 
-        variable_guide = resolvers['variable_guide'](quartet.R1.seq, 'unknown')
+        variable_guide = resolvers['variable_guide'](quartet.R1.seq[:45], 'unknown')
 
         guide_barcode = quartet.R2.seq[guide_barcode_slice]
         fixed_guide = resolvers['fixed_guide_barcode'](guide_barcode, 'unknown')
@@ -266,8 +266,8 @@ def merge_seq_counts(base_dir, group, k):
     counts = Counter()
     for fn in count_fns:
         for line in open(fn):
-                seq, count = line.strip().split()
-                counts[seq] += int(count)
+            seq, count = line.strip().split()
+            counts[seq] += int(count)
 
     merged_fn = Path(base_dir) / 'data' / group / f'{k}_stats.txt'
 
@@ -341,7 +341,7 @@ if __name__ == '__main__':
     demux_progress = tqdm.tqdm(desc='Demux progress', total=total_chunks)
     
     chunk_pool = multiprocessing.Pool(processes=4 * len(quartet_names))
-    demux_pool = multiprocessing.Pool(processes=5 * len(quartet_names))
+    demux_pool = multiprocessing.Pool(processes=4 * len(quartet_names))
 
     with chunk_pool, demux_pool:
         chunk_results = []

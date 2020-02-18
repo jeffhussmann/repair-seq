@@ -108,8 +108,9 @@ def build_all_singles():
     tasks_done_queue = manager.Queue()
 
     for guide_library_name in [
-        'DDR_library',
-        'DDR_sublibrary',
+        #'DDR_library',
+        #'DDR_sublibrary',
+        'DDR_microlibrary',
     ]:
         guide_library = GuideLibrary(base_dir, guide_library_name)
         for guide in guide_library.guides:

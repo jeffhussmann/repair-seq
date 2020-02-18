@@ -4,6 +4,10 @@ import bisect
 import pickle
 import contextlib
 import subprocess
+import resource
+import heapq
+import gzip
+import itertools
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -15,8 +19,9 @@ import ipywidgets
 import pysam
 import nbconvert
 import nbformat
+import h5py
 
-from hits import utilities, sam, fastq, mapping_tools, annotation
+from hits import utilities, sam, fastq, fasta, mapping_tools, annotation, interval
 from knock_knock import experiment, target_info, visualize
 
 from . import pooled_layout, collapse, coherence, guide_library
@@ -24,13 +29,23 @@ from . import pooled_layout, collapse, coherence, guide_library
 memoized_property = utilities.memoized_property
 memoized_with_key = utilities.memoized_with_key
 
+ALL_NON_TARGETING = 'all_non_targeting'
+
 class SingleGuideExperiment(experiment.Experiment):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        
+    def __init__(self, base_dir, group, fixed_guide, variable_guide, **kwargs):
+        name = f'{fixed_guide}-{variable_guide}'
+
+        super().__init__(base_dir, group, name, **kwargs)
+
         self.fns.update({
-            'R2': self.data_dir / 'by_guide' / '{}_R2.fastq.gz'.format(self.name),
+            'UMIs_seen': self.dir / 'UMIs_seen.txt',
             'guide_mismatch_rates': self.dir / 'guide_mismatch_rates.txt',
+            'truncation_positions': self.dir / 'truncation_positions.txt',
+
+            'genomic_insertion_seqs': self.dir / 'genomic_insertion_seqs.fa',
+            'filtered_genomic_insertion_seqs': self.dir / 'filtered_genomic_insertion_seqs.fa',
+
+            'filtered_templated_insertion_details': self.dir / 'filtered_templated_insertion_details.hdf5',
 
             'collapsed_UMI_outcomes': self.dir / 'collapsed_UMI_outcomes.txt',
             'cell_outcomes': self.dir / 'cell_outcomes.txt',
@@ -39,17 +54,23 @@ class SingleGuideExperiment(experiment.Experiment):
             'filtered_cell_bam': self.dir / 'filtered_cell_aligments.bam',
             'reads_per_UMI': self.dir / 'reads_per_UMI.pkl',
         })
+
+        self.fixed_guide = fixed_guide
+        self.variable_guide = variable_guide
         
         self.layout_module = pooled_layout
+        self.layout_mode = 'pooled'
         self.max_insertion_length = None
         self.max_qual = 41
 
         self.min_reads_per_cluster = 2
-        self.min_reads_per_UMI = 4
 
         self.use_memoized_outcomes = kwargs.get('use_memoized_outcomes', True)
 
-        self.read_types = ['collapsed_R2', 'collapsed_uncommon_R2']
+        self.read_types = [
+            'collapsed_R2',
+            'collapsed_uncommon_R2',
+        ]
 
         self.supplemental_index_names = [
             'hg19',
@@ -59,25 +80,40 @@ class SingleGuideExperiment(experiment.Experiment):
     @memoized_property
     def pool(self):
         return PooledScreen(self.base_dir, self.group)
+
+    @property
+    def min_reads_per_UMI(self):
+        return self.pool.min_reads_per_UMI
     
     @memoized_property
     def target_name(self):
         prefix = self.description['target_info_prefix']
 
-        if self.name == 'unknown':
-            target_name = prefix
+        if self.fixed_guide == 'none':
+            if self.name == 'unknown':
+                target_name = prefix
+            else:
+                target_name = f'{prefix}_{self.pool.variable_guide_library.name}_{self.variable_guide}'
         else:
-            target_name = f'{prefix}_{self.pool.guide_library}_{self.name}'
+            if self.fixed_guide == 'unknown':
+                target_name = prefix
+            else:
+                target_name = f'{prefix}-{self.fixed_guide}-{self.variable_guide}'
 
         return target_name
 
     @property
     def reads(self):
-        fn = self.fns['R2']
-        if not fn.exists():
-            return []
+        # To merge many chunks, need to raise limit on open files.
+        soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (hard_limit, hard_limit))
 
-        return self.progress(fastq.reads(fn, up_to_space=True))
+        chunks_dir = self.dir / 'chunks'
+        chunk_fns = sorted(chunks_dir.glob(f'*R2.fastq.gz'))
+        chunks = [fastq.reads(fn, up_to_space=True) for fn in chunk_fns]
+        merged_reads = heapq.merge(*chunks, key=lambda r: r.name)
+
+        return self.progress(merged_reads)
 
     def get_read_alignments(self, read_id, fn_key='bam_by_name', outcome=None, read_type=None):
         # Note: read_type is ignored but needed for function signature.
@@ -102,7 +138,7 @@ class SingleGuideExperiment(experiment.Experiment):
         sample = relevant_cells.sample(min(n, len(relevant_cells)), random_state=0)
         qnames = set(sample['original_name'])
 
-        outcome_alignment_groups = self.alignment_groups(outcome=(category, subcategory))
+        outcome_alignment_groups = self.alignment_groups(outcome=(category, subcategory), read_type='collapsed_uncommon_R2')
         name_with_uncommon_seq_to_als = dict(outcome_alignment_groups)
 
         name_to_als = {}
@@ -135,13 +171,13 @@ class SingleGuideExperiment(experiment.Experiment):
         mismatch_counts = np.zeros(R1_read_length)
         total = 0
 
-        expected_seq = self.pool.guides_df.loc[self.name, 'full_seq'][:R1_read_length].upper()
+        expected_seq = self.pool.variable_guide_library.guides_df.loc[self.variable_guide, 'full_seq'][:R1_read_length].upper()
 
         collapsed_fn = self.fns_by_read_type['fastq']['collapsed_R2']
 
         UMIs_seen = defaultdict(list)
 
-        with collapsed_fn.open('w') as collapsed_fh:
+        with gzip.open(collapsed_fn, 'wt', compresslevel=1) as collapsed_fh:
             groups = utilities.group_by(self.reads, UMI_key)
             for UMI, UMI_group in groups:
                 clusters = collapse.form_clusters(UMI_group, max_read_length=None, max_hq_mismatches=0)
@@ -197,7 +233,7 @@ class SingleGuideExperiment(experiment.Experiment):
 
     def make_uncommon_sequence_fastq(self):
         fn = self.fns_by_read_type['fastq']['collapsed_uncommon_R2']
-        with fn.open('w') as fh:
+        with gzip.open(fn, 'wt', compresslevel=1) as fh:
             for read in self.collapsed_reads:
                 if read.seq not in self.pool.common_sequence_to_outcome:
                     fh.write(str(read))
@@ -221,7 +257,7 @@ class SingleGuideExperiment(experiment.Experiment):
     def combined_header(self):
         return sam.get_header(self.fns['bam_by_name'])
         
-    def categorize_outcomes(self):
+    def categorize_outcomes(self, max_reads=None):
         if self.fns['outcomes_dir'].is_dir():
             shutil.rmtree(str(self.fns['outcomes_dir']))
 
@@ -245,19 +281,18 @@ class SingleGuideExperiment(experiment.Experiment):
         alignment_groups = iter(self.alignment_groups(fn_key='bam_by_name', read_type=bam_read_type))
         reads = self.reads_by_type('collapsed_R2')
 
+        if max_reads is not None:
+            reads = itertools.islice(reads, max_reads)
+
         special_als = defaultdict(list)
 
-        with self.fns['outcome_list'].open('w') as fh:
-            for read in reads:
+        with self.fns['outcome_list'].open('w') as outcome_fh, \
+             self.fns['genomic_insertion_seqs'].open('w') as genomic_insertion_seqs_fh:
+
+            for read in self.progress(reads, desc='Categorizing reads'):
                 if read.seq in outcome_lookup:
                     category, subcategory, details = outcome_lookup[read.seq]
                     special_alignment = special_alignment_lookup.get(read.seq)
-
-                    # In order to make sure that (possibly empty) outcome-specific
-                    # bam files get make below for all outcomes, register this outcome
-                    # as having been seen in a read with a common sequence.
-                    if (category, subcategory) not in outcomes:
-                        outcomes[category, subcategory] = []
 
                 else:
                     name, als = next(alignment_groups)
@@ -267,7 +302,13 @@ class SingleGuideExperiment(experiment.Experiment):
                     layout = self.layout_module.Layout(als, self.target_info)
                     total += 1
                     try:
-                        category, subcategory, details = layout.categorize()
+                        category, subcategory, details, outcome = layout.categorize()
+
+                        if outcome is not None:
+                            # Translate positions to be relative to a registered anchor
+                            # on the target sequence.
+                            details = str(outcome.perform_anchor_shift(self.target_info.anchor))
+
                     except:
                         print()
                         print(self.name, name)
@@ -278,10 +319,10 @@ class SingleGuideExperiment(experiment.Experiment):
 
                     special_alignment = layout.special_alignment
 
-                    if special_alignment is not None:
-                        special_als[category, subcategory].append(layout.special_alignment)
+                if special_alignment is not None:
+                    special_als[category, subcategory].append(special_alignment)
 
-                    outcomes[category, subcategory].append(read.name)
+                outcomes[category, subcategory].append(read.name)
 
                 annotation = collapse.Annotations['collapsed_UMI_mismatch'].from_identifier(read.name)
 
@@ -298,7 +339,20 @@ class SingleGuideExperiment(experiment.Experiment):
                                                            details,
                                                            read.name,
                                                           )
-                fh.write(str(UMI_outcome) + '\n')
+                outcome_fh.write(str(UMI_outcome) + '\n')
+
+                if category == 'genomic insertion' and subcategory == 'hg19':
+                    cropped_genomic_alignment = special_alignment
+                    query_bounds = interval.get_covered(cropped_genomic_alignment)
+
+                    start = query_bounds.start
+                    end = query_bounds.end
+                    if end is not None:
+                        end += 1
+
+                    inserted_sequence = read.seq[start:end]
+                    record = fasta.Record(read.name, inserted_sequence)
+                    genomic_insertion_seqs_fh.write(str(record))
 
         # To make plotting easier, for each outcome, make a file listing all of
         # qnames for the outcome and a bam file (sorted by name) with all of the
@@ -322,7 +376,7 @@ class SingleGuideExperiment(experiment.Experiment):
                     fh.write(qname + '\n')
             
         with pysam.AlignmentFile(bam_fn) as full_bam_fh:
-            for al in full_bam_fh:
+            for al in self.progress(full_bam_fh, desc='Making outcome-specific bams'):
                 if al.query_name in qname_to_outcome:
                     outcome = qname_to_outcome[al.query_name]
                     bam_fhs[outcome].write(al)
@@ -331,7 +385,7 @@ class SingleGuideExperiment(experiment.Experiment):
             fh.close()
 
         # Make special alignments bams.
-        for outcome, als in special_als.items():
+        for outcome, als in self.progress(special_als.items(), desc='Making special alignments bams'):
             outcome_fns = self.outcome_fns(outcome)
             bam_fn = outcome_fns['special_alignments']
             sorter = sam.AlignmentSorter(bam_fn, header)
@@ -349,11 +403,17 @@ class SingleGuideExperiment(experiment.Experiment):
                               )
         counts.index.names = ['perfect_guide', 'category', 'subcategory', 'details']
         return counts
+
+    @memoized_property
+    def outcomes(self):
+        ''' (category, subcategory) tuples in descending order by total count '''
+        totals = self.outcome_counts[True].groupby(by=['category', 'subcategory']).sum().sort_values(ascending=False)
+        return totals.index.values
     
     @memoized_property
     def perfect_guide_outcome_counts(self):
         return self.outcome_counts.xs(True)
-    
+
     def collapse_UMI_outcomes(self):
         all_collapsed_outcomes, most_abundant_outcomes = coherence.collapse_pooled_UMI_outcomes(self.fns['outcome_list'])
         with self.fns['collapsed_UMI_outcomes'].open('w') as fh:
@@ -373,7 +433,7 @@ class SingleGuideExperiment(experiment.Experiment):
                     counts[perfect, outcome.category, outcome.subcategory, outcome.details] += 1
 
         counts = pd.Series(counts).sort_values(ascending=False)
-        counts.to_csv(self.fns['outcome_counts'], sep='\t')
+        counts.to_csv(self.fns['outcome_counts'], sep='\t', header=False)
         
     def make_filtered_cell_bams(self):
         # Make bams containing only alignments from final cell assignments for IGV browsing.
@@ -403,7 +463,7 @@ class SingleGuideExperiment(experiment.Experiment):
                 sorters[outcome] = self.outcome_fns(outcome)['filtered_cell_bam']
 
             with sorters:
-                for alignment in self.progress(combined_bam_fh):
+                for alignment in self.progress(combined_bam_fh, desc='Making filtered cell bams'):
                     outcome = name_to_outcome.get(alignment.query_name)
                     if outcome is not None:
                         sorters['all'].write(alignment)
@@ -414,13 +474,22 @@ class SingleGuideExperiment(experiment.Experiment):
             out_fn = self.outcome_fns(outcome)['filtered_cell_bam_by_name']
             sam.sort_bam(in_fn, out_fn, by_name=True)
     
-    def make_reads_per_UMI(self):
-        reads_per_UMI = {}
+    def make_reads_per_UMI(self, individual_outcomes=None):
+        if individual_outcomes is None:
+            individual_outcomes = set()
 
-        for category, rows in self.cell_outcomes.groupby(by=['category', 'subcategory']):
-            reads_per_UMI[category] = Counter(rows['num_reads'])
+        reads_per_UMI = defaultdict(Counter)
 
-        reads_per_UMI['all', 'all'] = Counter(self.cell_outcomes['num_reads'])
+        with open(self.fns['cell_outcomes']) as fh:
+            for line in fh:
+                outcome = coherence.Pooled_UMI_Outcome.from_line(line)
+
+                reads_per_UMI['all'][outcome.num_reads] += 1
+
+                reads_per_UMI[outcome.category, outcome.subcategory][outcome.num_reads] += 1
+
+                if outcome.outcome in individual_outcomes:
+                    reads_per_UMI[outcome.outcome][outcome.num_reads] += 1
 
         with open(str(self.fns['reads_per_UMI']), 'wb') as fh:
             pickle.dump(reads_per_UMI, fh)
@@ -511,12 +580,12 @@ f'''\
         layout = self.layout_module.Layout(als, self.target_info)
         return layout
 
-    def get_read_diagram(self, read_id, only_relevant=True, qname_to_als=None):
-        diagram_kwargs = dict(
+    def get_read_diagram(self, read_id, only_relevant=True, qname_to_als=None, **diagram_kwargs):
+        default_diagram_kwargs = dict(
             ref_centric=True,
             highlight_SNPs=True,
             flip_target=True,
-            target_on_top=True,
+            #target_on_top=True,
             split_at_indels=True,
             force_left_aligned=True,
             draw_sequence=True,
@@ -525,6 +594,9 @@ f'''\
             refs_to_hide={'ssODN_dummy', 'ssODN_Cpf1'},
             title='',
         )
+
+        for k, v in default_diagram_kwargs.items():
+            diagram_kwargs.setdefault(k, v)
 
         layout = self.get_read_layout(read_id, qname_to_als=qname_to_als)
 
@@ -538,6 +610,101 @@ f'''\
 
         return diagram
 
+    def extract_truncation_positions(self):
+        counts = np.zeros(len(self.target_info.target_sequence), int)
+
+        with open(self.fns['filtered_cell_outcomes']) as fh:
+            for line in fh:
+                outcome = coherence.Pooled_UMI_Outcome.from_line(line)
+                if outcome.category == 'truncation' and outcome.guide_mismatch == -1 and outcome.details != 'None':
+                    counts[int(outcome.details)] += 1
+
+        np.savetxt(self.fns['truncation_positions'], counts, fmt='%d')
+        
+    @memoized_property
+    def truncation_positions(self):
+        return np.loadtxt(self.fns['truncation_positions'], int)
+
+    def extract_templated_insertion_info(self):
+        fields = pooled_layout.LongTemplatedInsertionOutcome.int_fields
+        
+        lists = defaultdict(list)
+
+        with open(self.fns['filtered_cell_outcomes']) as outcomes_fh:
+            for line in outcomes_fh:
+                outcome = coherence.Pooled_UMI_Outcome.from_line(line)
+            
+                if outcome.category in ['donor insertion', 'genomic insertion'] and outcome.guide_mismatch == -1:
+                    insertion_outcome = pooled_layout.LongTemplatedInsertionOutcome.from_string(outcome.details)
+                    
+                    for field in fields: 
+                        value = getattr(insertion_outcome, field)
+                        key = f'{outcome.category}/{outcome.subcategory}/{field}'
+                        lists[key].append(value)
+                            
+        with h5py.File(self.fns['filtered_templated_insertion_details'], 'w') as hdf5_file:
+            cat_and_subcats = {key.rsplit('/', 1)[0] for key in lists}
+            read_length = 258
+            for cat_and_subcat in cat_and_subcats:
+                left_key = f'{cat_and_subcat}/left_insertion_query_bound'
+                right_key = f'{cat_and_subcat}/right_insertion_query_bound'
+
+                lengths = []
+
+                for left, right in zip(lists[left_key], lists[right_key]):
+                    if right == read_length - 1:
+                        length = read_length
+                    else:
+                        length = right - left + 1
+
+                    lengths.append(length)
+
+                lengths_key = f'{cat_and_subcat}/insertion_length'
+
+                lists[lengths_key] = lengths
+
+            for key, value_list in lists.items():
+                hdf5_file.create_dataset(f'{key}/list', data=np.array(value_list))
+
+                counts = Counter(value_list)
+
+                if len(counts) == 0:
+                    values = np.array([], dtype=int)
+                    counts = np.array([], dtype=int)
+                else:
+                    values = np.array(sorted(counts))
+                    counts = np.array([counts[v] for v in values])
+
+                hdf5_file.create_dataset(f'{key}/values', data=values)
+                hdf5_file.create_dataset(f'{key}/counts', data=counts)
+
+    @memoized_property
+    def donor_misintegration_info(self):
+        outcomes = []
+        with open(self.fns['filtered_donor_misintegration_details']) as details_fh:
+            for line in details_fh:
+                outcome = pooled_layout.LongTemplatedInsertionOutcome.from_string(line.strip())
+                outcomes.append(outcome)
+        return outcomes
+
+    @memoized_property
+    def donor_pastein_info(self):
+        outcomes = []
+        with open(self.fns['filtered_donor_paste-in_details']) as details_fh:
+            for line in details_fh:
+                outcome = pooled_layout.LongTemplatedInsertionOutcome.from_string(line.strip())
+                outcomes.append(outcome)
+        return outcomes
+
+    @memoized_property
+    def genomic_insertion_info(self):
+        outcomes = []
+        with open(self.fns['filtered_genomic_insertion_details']) as details_fh:
+            for line in details_fh:
+                outcome = pooled_layout.LongTemplatedInsertionOutcome.from_string(line.strip())
+                outcomes.append(outcome)
+        return outcomes
+
     def process(self, stage):
         try:
             if stage == 0:
@@ -550,13 +717,15 @@ f'''\
                     read_type = 'collapsed_R2'
 
                 self.generate_alignments(read_type)
-                self.generate_supplemental_alignments(read_type)
+                self.generate_supplemental_alignments(read_type, min_length=20)
                 self.combine_alignments(read_type)
 
                 self.categorize_outcomes()
                 self.collapse_UMI_outcomes()
                 self.make_reads_per_UMI()
-                self.make_filtered_cell_bams()
+                #self.make_filtered_cell_bams()
+                self.extract_truncation_positions()
+                self.extract_templated_insertion_info()
                 #self.make_outcome_plots(num_examples=3)
             else:
                 raise ValueError(stage)
@@ -564,6 +733,187 @@ f'''\
             print(self.group, self.name)
             raise
 
+class SingleGuideNoUMIExperiment(SingleGuideExperiment):
+    def __init__(self, base_dir, group, fixed_guide, variable_guide, **kwargs):
+        super().__init__(base_dir, group, fixed_guide, variable_guide, **kwargs)
+
+        self.read_types = [
+            'R2',
+        ]
+
+        self.use_memoized_outcomes = False
+
+    def get_read_alignments(self, read_id, fn_key='bam_by_name', outcome=None, read_type=None):
+        # Note: read_type is ignored but needed for function signature.
+
+        als = experiment.Experiment.get_read_alignments(self, read_id, fn_key=fn_key, outcome=outcome, read_type='R2')
+
+        return als
+
+    def combine_read_chunks(self):
+        with gzip.open(self.fns_by_read_type['fastq']['R2'], 'wt', compresslevel=1) as combined_fh:
+            for read in self.reads:
+                combined_fh.write(str(read))
+
+    def categorize_outcomes(self, max_reads=None):
+        if self.fns['outcomes_dir'].is_dir():
+            shutil.rmtree(str(self.fns['outcomes_dir']))
+
+        self.fns['outcomes_dir'].mkdir()
+
+        outcomes = defaultdict(list)
+
+        total = 0
+        required_sw = 0
+
+        # iter wrap since tqdm objects are not iterators
+        alignment_groups = iter(self.alignment_groups(fn_key='bam_by_name', read_type='R2'))
+        reads = self.reads_by_type('R2')
+
+        if max_reads is not None:
+            reads = itertools.islice(reads, max_reads)
+
+        special_als = defaultdict(list)
+
+        counts = Counter()
+
+        with self.fns['outcome_list'].open('w') as outcome_fh, \
+             self.fns['genomic_insertion_seqs'].open('w') as genomic_insertion_seqs_fh:
+
+            for read in self.progress(reads, desc='Categorizing reads'):
+                name, als = next(alignment_groups)
+                if name != read.name:
+                    raise ValueError('iters out of sync', name, read.name)
+
+                layout = self.layout_module.Layout(als, self.target_info)
+                total += 1
+                try:
+                    category, subcategory, details, outcome = layout.categorize()
+
+                    if outcome is not None:
+                        # Translate positions to be relative to a registered anchor
+                        # on the target sequence.
+                        details = str(outcome.perform_anchor_shift(self.target_info.anchor))
+
+                except:
+                    print()
+                    print(self.name, name)
+                    raise
+            
+                if layout.required_sw:
+                    required_sw += 1
+
+                special_alignment = layout.special_alignment
+
+                if special_alignment is not None:
+                    special_als[category, subcategory].append(special_alignment)
+
+                outcomes[category, subcategory].append(read.name)
+
+                outcome = coherence.gDNA_Outcome(read.name,
+                                                 category,
+                                                 subcategory,
+                                                 details,
+                                                )
+                outcome_fh.write(str(outcome) + '\n')
+
+                counts[True, category, subcategory, details] += 1
+
+                if category == 'genomic insertion' and subcategory == 'hg19':
+                    cropped_genomic_alignment = special_alignment
+                    query_bounds = interval.get_covered(cropped_genomic_alignment)
+
+                    start = query_bounds.start
+                    end = query_bounds.end
+                    if end is not None:
+                        end += 1
+
+                    inserted_sequence = read.seq[start:end]
+                    record = fasta.Record(read.name, inserted_sequence)
+                    genomic_insertion_seqs_fh.write(str(record))
+
+        # To make plotting easier, for each outcome, make a file listing all of
+        # qnames for the outcome and a bam file (sorted by name) with all of the
+        # alignments for these qnames.
+
+        qname_to_outcome = {}
+        bam_fhs = {}
+
+        bam_fn = self.fns_by_read_type['bam_by_name']['R2']
+        with pysam.AlignmentFile(bam_fn) as full_bam_fh:
+            header = full_bam_fh.header
+
+        for outcome, qnames in outcomes.items():
+            outcome_fns = self.outcome_fns(outcome)
+            outcome_fns['dir'].mkdir()
+            bam_fhs[outcome] = pysam.AlignmentFile(outcome_fns['bam_by_name']['R2'], 'wb', header=header)
+            
+            with outcome_fns['query_names'].open('w') as fh:
+                for qname in qnames:
+                    qname_to_outcome[qname] = outcome
+                    fh.write(qname + '\n')
+            
+        with pysam.AlignmentFile(bam_fn) as full_bam_fh:
+            for al in self.progress(full_bam_fh, desc='Making outcome-specific bams'):
+                if al.query_name in qname_to_outcome:
+                    outcome = qname_to_outcome[al.query_name]
+                    bam_fhs[outcome].write(al)
+
+        for outcome, fh in bam_fhs.items():
+            fh.close()
+
+        # Make special alignments bams.
+        for outcome, als in self.progress(special_als.items(), desc='Making special alignments bams'):
+            outcome_fns = self.outcome_fns(outcome)
+            bam_fn = outcome_fns['special_alignments']
+            sorter = sam.AlignmentSorter(bam_fn, header)
+            with sorter:
+                for al in als:
+                    sorter.write(al)
+
+        counts = pd.Series(counts).sort_values(ascending=False)
+        counts.to_csv(self.fns['outcome_counts'], sep='\t', header=False)
+
+    @memoized_property
+    def filtered_cell_outcomes(self):
+        df = pd.read_table(self.fns['outcome_list'], header=None, na_filter=False, names=coherence.gDNA_Outcome.columns)
+        return df
+
+    def extract_genomic_insertion_info(self):
+        genomic_insertion_seqs = fasta.to_dict(self.fns['genomic_insertion_seqs'])
+
+        with open(self.fns['outcome_list']) as outcomes_fh, \
+             open(self.fns['filtered_genomic_insertion_seqs'], 'w') as seqs_fh, \
+             open(self.fns['filtered_genomic_insertion_details'], 'w') as details_fh:
+
+            for line in outcomes_fh:
+                outcome = coherence.gDNA_Outcome.from_line(line)
+                if outcome.category == 'genomic insertion' and outcome.subcategory == 'hg19':
+                    name = outcome.standardized_qname
+                    record = fasta.Record(name, genomic_insertion_seqs[name])
+                    seqs_fh.write(str(record))
+
+                    details_fh.write(f'{outcome.details}\n')
+
+    def process(self, stage):
+        try:
+            if stage == 0:
+                self.combine_read_chunks()
+            elif stage == 1:
+                read_type = 'R2'
+
+                self.generate_alignments(read_type)
+                self.generate_supplemental_alignments(read_type, min_length=20)
+                self.combine_alignments(read_type)
+
+                self.categorize_outcomes()
+                self.extract_genomic_insertion_info()
+            else:
+                raise ValueError(stage)
+        except:
+            print(self.group, self.name)
+            raise
+    
 class CommonSequenceExperiment(SingleGuideExperiment):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -587,7 +937,7 @@ class CommonSequenceExperiment(SingleGuideExperiment):
         try:
             read_type = 'collapsed_R2'
             self.generate_alignments(read_type)
-            self.generate_supplemental_alignments(read_type)
+            self.generate_supplemental_alignments(read_type, min_length=20)
             self.combine_alignments(read_type)
             self.categorize_outcomes()
         except:
@@ -610,7 +960,7 @@ def collapse_categories(df):
             to_add = df.loc[category, subcat]
             new_rows[category, subcat, 'collapsed'] = to_add.sum()
 
-    if 'donor' in df.index.levels[0]:
+    if any(c == 'donor' for c, s, d in df.index.values):
         all_details = set(d for s, d in df.loc['donor'].index.values)
 
         for details in all_details:
@@ -623,115 +973,149 @@ def collapse_categories(df):
 
     return pd.concat((df, new_rows))
 
-class PooledScreen():
+class PooledScreen:
     def __init__(self, base_dir, group, progress=None):
         self.base_dir = Path(base_dir)
         self.group = group
 
         if progress is None:
-            progress = utilities.identity
+            def ignore_kwargs(x, **kwargs):
+                return x
+            progress = ignore_kwargs
 
-        self.progress = progress
+        def pass_along_kwargs(iterable, **kwargs):
+            return progress(iterable, **kwargs)
 
-        sample_sheet_fn = self.base_dir / 'data' / group / 'sample_sheet.yaml'
+        self.progress = pass_along_kwargs
+
+        sample_sheet_fn = self.base_dir / 'results' / group / 'sample_sheet.yaml'
         sample_sheet = yaml.load(sample_sheet_fn.read_text())
 
-        try:
-            self.guide_library = sample_sheet['guide_library']
-        except:
-            print(sample_sheet_fn)
-            print(sample_sheet)
-            raise
+        self.variable_guide_library = guide_library.GuideLibrary(self.base_dir, sample_sheet['variable_guide_library'])
+        self.variable_guides = self.variable_guide_library.guides
+
+        if 'fixed_guide_library' in sample_sheet:
+            self.fixed_guide_library = guide_library.GuideLibrary(self.base_dir, sample_sheet['fixed_guide_library'])
+        else:
+            self.fixed_guide_library = guide_library.dummy_guide_library
+
+        self.fixed_guides = self.fixed_guide_library.guides
+
+        self.short_name = sample_sheet.get('short_name', self.group)
 
         self.sgRNA = sample_sheet.get('sgRNA')
         self.donor = sample_sheet.get('donor')
+        self.sequencing_start_feature_name = sample_sheet.get('sequencing_start_feature_name', None)
         self.target_name = sample_sheet['target_info_prefix']
+
+        self.supplemental_index_names = ['hg19', 'bosTau7']
+        supplemental_indices = target_info.locate_supplemental_indices(self.base_dir)
+        self.supplemental_indices = {name: supplemental_indices[name] for name in self.supplemental_index_names}
+
+        self.min_reads_per_UMI = sample_sheet.get('min_reads_per_UMI', 4)
+
         self.target_info = target_info.TargetInfo(self.base_dir,
                                                   self.target_name,
                                                   donor=self.donor,
                                                   sgRNA=self.sgRNA,
-                                                )
+                                                  sequencing_start_feature_name=self.sequencing_start_feature_name,
+                                                  supplemental_indices=self.supplemental_indices,
+                                                  infer_homology_arms=sample_sheet.get('infer_homology_arms', False),
+                                                 )
+
+        group_dir = self.base_dir / 'results' / group
 
         self.fns = {
-            'guides': self.base_dir / 'guides' / self.guide_library / 'guides.txt',
-            'best_promoters': self.base_dir / 'guides' / self.guide_library / 'best_promoters.txt',
-            'updated_gene_names': self.base_dir / 'guides' / self.guide_library / 'updated_gene_names.txt',
+            'outcome_counts': group_dir  / 'outcome_counts.npz',
+            'total_outcome_counts': group_dir / 'total_outcome_counts.txt',
+            'collapsed_outcome_counts': group_dir / 'collapsed_outcome_counts.npz',
+            'collapsed_total_outcome_counts': group_dir / 'collapsed_total_outcome_counts.txt',
 
-            'outcome_counts': self.base_dir / 'results' / group / 'outcome_counts.npz',
-            'total_outcome_counts': self.base_dir / 'results' / group / 'total_outcome_counts.txt',
-            'collapsed_outcome_counts': self.base_dir / 'results' / group / 'collapsed_outcome_counts.npz',
-            'collapsed_total_outcome_counts': self.base_dir / 'results' / group / 'collapsed_total_outcome_counts.txt',
+            'filtered_cell_bam': group_dir / 'filtered_cell_alignments.bam',
+            'reads_per_UMI': group_dir / 'reads_per_UMI.pkl',
 
-            'filtered_cell_bam': self.base_dir / 'results' / group / 'filtered_cell_alignments.bam',
-            'reads_per_UMI': self.base_dir / 'reads_per_UMI.pkl',
+            'quantiles': group_dir / 'quantiles.hdf5',
 
-            'quantiles': self.base_dir / 'results' / group / 'quantiles.hdf5',
+            'common_sequences_dir': group_dir / 'common_sequences',
+            'common_name_to_common_sequence': group_dir / 'common_sequences' / 'common_name_to_common_sequence.txt',
+            'all_sequences': group_dir / 'common_sequences' / f'{group}_all_sequences.txt',
+            'common_sequence_outcomes': group_dir / 'common_sequences' / 'common_sequence_to_outcome.txt',
+            'common_name_to_outcome': group_dir / 'common_sequences' / 'common_name_to_outcome.txt',
 
-            'common_sequences_dir': self.base_dir / 'results' / group / 'common_sequences',
-            'common_name_to_common_sequence': self.base_dir / 'results' / group / 'common_sequences' / 'common_name_to_common_sequence.txt',
-            'all_sequences': self.base_dir / 'results' / group / 'common_sequences' / '{}_all_sequences.txt'.format(group),
-            'common_sequence_outcomes': self.base_dir / 'results' / group / 'common_sequences' / 'common_sequence_to_outcome.txt',
-            'common_name_to_outcome': self.base_dir / 'results' / group / 'common_sequences' / 'common_name_to_outcome.txt',
+            'common_sequence_special_alignments': group_dir / 'common_sequences' / 'all_special_alignments.bam',
+            'special_alignments_dir': group_dir / 'special_alignments',
 
-            'common_sequence_special_alignments': self.base_dir / 'results' / group / 'common_sequences' / 'all_special_alignments.bam',
-            'special_alignments_dir': self.base_dir / 'results' / group / 'special_alignments',
+            'filtered_templated_insertion_details': group_dir / 'filtered_templated_insertion_details.hdf5',
         }
 
-    def single_guide_experiments(self, no_progress=False):
-        for guide in self.guide_library.guides:
-            yield self.single_guide_experiment(guide, no_progress=no_progress)
+    @memoized_property
+    def guide_combinations(self):
+        combinations = []
 
-    def single_guide_experiment(self, guide, no_progress=False):
+        for fixed_guide in self.fixed_guides:
+            for variable_guide in self.variable_guides:
+                combinations.append((fixed_guide, variable_guide))
+
+        return combinations
+
+    def single_guide_experiments(self, no_progress=False):
+        for fixed_guide, variable_guide in self.guide_combinations:
+            yield self.single_guide_experiment(fixed_guide, variable_guide, no_progress=no_progress)
+
+    def single_guide_experiment(self, fixed_guide, variable_guide, no_progress=False):
         if no_progress:
             progress = None
         else:
             progress = self.progress
 
-        return SingleGuideExperiment(self.base_dir, self.group, guide, progress=progress)
+        return SingleGuideExperiment(self.base_dir, self.group, fixed_guide, variable_guide, progress=progress)
 
     def make_outcome_counts(self):
         all_counts = {}
-        guides = self.guide_library.guides
 
-        for guide in self.progress(guides):
-            exp = SingleGuideExperiment(self.base_dir, self.group, guide)
+        description = 'Loading outcome counts'
+        guide_combos = self.progress(self.guide_combinations, desc=description)
+        for fixed_guide, variable_guide in guide_combos:
+            exp = SingleGuideExperiment(self.base_dir, self.group, fixed_guide, variable_guide)
             try:
-                all_counts[guide] = exp.outcome_counts
+                all_counts[fixed_guide, variable_guide] = exp.outcome_counts
             except (FileNotFoundError, pd.errors.EmptyDataError):
                 pass
 
         all_outcomes = set()
 
-        for guide in all_counts:
-            all_outcomes.update(all_counts[guide].index.values)
+        for fixed_guide, variable_guide in all_counts:
+            all_outcomes.update(all_counts[fixed_guide, variable_guide].index.values)
             
         outcome_order = sorted(all_outcomes)
         outcome_to_index = {outcome: i for i, outcome in enumerate(outcome_order)}
 
-        counts = scipy.sparse.dok_matrix((len(outcome_order), len(guides)), dtype=int)
+        counts = scipy.sparse.dok_matrix((len(outcome_order), len(self.guide_combinations)), dtype=int)
 
-        for g, guide in enumerate(self.progress(guides)):
-            if guide in all_counts:
-                for outcome, count in all_counts[guide].items():
+        description = 'Combining outcome counts'
+        guide_combos = self.progress(self.guide_combinations, desc=description)
+        for g, (fixed_guide, variable_guide) in enumerate(guide_combos):
+            if (fixed_guide, variable_guide) in all_counts:
+                for outcome, count in all_counts[fixed_guide, variable_guide].items():
                     o = outcome_to_index[outcome]
                     counts[o, g] = count
                 
         scipy.sparse.save_npz(self.fns['outcome_counts'], counts.tocoo())
 
         df = pd.DataFrame(counts.todense(),
-                          columns=guides,
+                          columns=self.guide_combinations,
                           index=pd.MultiIndex.from_tuples(outcome_order),
                          )
 
-        df.sum(axis=1).to_csv(self.fns['total_outcome_counts'])
+        df.sum(axis=1).to_csv(self.fns['total_outcome_counts'], header=False)
 
         # Collapse potentially equivalent outcomes together.
-        collapsed = pd.concat({pg: collapse_categories(df.loc[pg]) for pg in [True, False]})
+        collapsed = pd.concat({pg: collapse_categories(df.loc[pg]) for pg in [True, False] if pg in df.index.levels[0]})
 
         coo = scipy.sparse.coo_matrix(np.array(collapsed))
         scipy.sparse.save_npz(self.fns['collapsed_outcome_counts'], coo)
 
-        collapsed.sum(axis=1).to_csv(self.fns['collapsed_total_outcome_counts'])
+        collapsed.sum(axis=1).to_csv(self.fns['collapsed_total_outcome_counts'], header=False)
 
     @memoized_with_key
     def total_outcome_counts(self, collapsed):
@@ -746,7 +1130,7 @@ class PooledScreen():
 
     @memoized_with_key
     def outcome_counts_df(self, collapsed):
-        guides = self.guide_library.guides
+        guides = self.guide_combinations
 
         if collapsed:
             prefix = 'collapsed_'
@@ -758,7 +1142,7 @@ class PooledScreen():
         sparse_counts = scipy.sparse.load_npz(self.fns[key])
         df = pd.DataFrame(sparse_counts.todense(),
                           index=self.total_outcome_counts(collapsed).index,
-                          columns=guides,
+                          columns=pd.MultiIndex.from_tuples(guides),
                          )
         df.index.names = ('perfect_guide', 'category', 'subcategory', 'details')
 
@@ -767,12 +1151,22 @@ class PooledScreen():
     @memoized_with_key
     def outcome_counts(self, guide_status):
         if guide_status == 'all':
-            outcome_counts = (self.outcome_counts('perfect') + self.outcome_counts('imperfect')).fillna(0).astype(int)
+            outcome_counts = self.outcome_counts_df(True).sum(level=[1, 2, 3])
+        elif guide_status == 'perfect':
+            outcome_counts = self.outcome_counts_df(True).loc[True]
         else:
             perfect_guide = guide_status == 'perfect'
             outcome_counts = self.outcome_counts_df(True).loc[perfect_guide]
 
         return outcome_counts
+
+    @memoized_property
+    def non_targeting_guide_pairs(self):
+        pairs = []
+        for fixed_nt in self.fixed_guide_library.non_targeting_guides:
+            for variable_nt in self.variable_guide_library.non_targeting_guides:
+                pairs.append((fixed_nt, variable_nt))
+        return pairs
 
     @memoized_with_key
     def UMI_counts(self, guide_status):
@@ -781,14 +1175,15 @@ class PooledScreen():
     @memoized_with_key
     def outcome_fractions(self, guide_status):
         per_guide_fractions = self.outcome_counts(guide_status) / self.UMI_counts(guide_status)
-        nt_fractions = self.non_targeting_fractions(guide_status)
-        return pd.concat([per_guide_fractions, nt_fractions], axis=1)
+        
+        all_nt_fractions = [self.non_targeting_fractions(guide_status, fixed_guide) for fixed_guide in list(self.fixed_guides) + [ALL_NON_TARGETING]]
+        return pd.concat([per_guide_fractions] + all_nt_fractions, axis=1)
     
-    @memoized_property
-    def non_targeting_outcomes(self):
+    @memoized_with_key
+    def non_targeting_outcomes(self, fixed_guide):
         guide_outcomes = {}
-        for nt_guide in self.guide_library.non_targeting_guides:
-            exp = SingleGuideExperiment(self.base_dir, self.group, nt_guide)
+        for nt_guide in self.variable_guide_library.non_targeting_guides:
+            exp = SingleGuideExperiment(self.base_dir, self.group, fixed_guide, nt_guide)
             fn = exp.fns['filtered_cell_outcomes']
 
             outcomes = [coherence.Pooled_UMI_Outcome.from_line(line) for line in fn.open()]
@@ -805,20 +1200,30 @@ class PooledScreen():
         return guide_outcomes
 
     @memoized_with_key
-    def non_targeting_counts(self, guide_status):
-        counts = self.outcome_counts(guide_status)[self.guide_library.non_targeting_guides]
-        return counts.sum(axis=1).sort_values(ascending=False)
-    
+    def non_targeting_counts(self, guide_status, fixed_guide):
+        if fixed_guide is None:
+            fixed_guide = ALL_NON_TARGETING
+
+        if fixed_guide is ALL_NON_TARGETING:
+            fixed_nts = self.fixed_guide_library.non_targeting_guides
+        else:
+            fixed_nts = fixed_guide
+        
+        variable_nts = self.variable_guide_library.non_targeting_guides
+
+        counts = self.outcome_counts(guide_status).loc(axis=1)[fixed_nts, variable_nts]
+        return counts.sum(axis='columns').sort_values(ascending=False)
+
     @memoized_with_key
-    def non_targeting_fractions(self, guide_status):
-        counts = self.non_targeting_counts(guide_status)
+    def non_targeting_fractions(self, guide_status, fixed_guide):
+        counts = self.non_targeting_counts(guide_status, fixed_guide)
         fractions = counts / counts.sum()
-        fractions.name = 'non_targeting'
+        fractions.name = (fixed_guide, ALL_NON_TARGETING)
         return fractions
 
-    @memoized_property
-    def most_frequent_outcomes(self):
-        return self.non_targeting_counts('all').index.values[:1000]
+    @memoized_with_key
+    def most_frequent_outcomes(self, fixed_guide):
+        return self.non_targeting_counts('all', fixed_guide).index.values[:1000]
 
     @memoized_with_key
     def common_counts(self, guide_status):
@@ -831,7 +1236,7 @@ class PooledScreen():
     
     @memoized_property
     def common_non_targeting_counts(self):
-        return self.common_counts('perfect')[self.guide_library.non_targeting_guides].sum(axis=1)
+        return self.common_counts('perfect')[self.variable_guide_library.non_targeting_guides].sum(axis=1)
     
     @memoized_property
     def common_non_targeting_fractions(self):
@@ -843,17 +1248,27 @@ class PooledScreen():
         return self.common_counts(guide_status) / self.UMI_counts(guide_status)
 
     @memoized_with_key
-    def fold_changes(self, guide_status):
+    def fold_changes(self, guide_status, fixed_guide):
+        if fixed_guide is None:
+            fixed_guide = ALL_NON_TARGETING
         fractions = self.outcome_fractions(guide_status)
-        return fractions.div(fractions['non_targeting'], axis=0)
+        denominator = fractions[fixed_guide, ALL_NON_TARGETING]
+        return fractions.div(denominator, axis=0)
 
     @memoized_with_key
-    def log2_fold_changes(self, guide_status):
-        fc = self.fold_changes(guide_status)
+    def log2_fold_changes(self, guide_status, fixed_guide):
+        fc = self.fold_changes(guide_status, fixed_guide)
         fc = fc.fillna(2**5).replace(0, 2**-5)
         return np.log2(fc)
-
-    def rational_outcome_order(self, num_outcomes=50, include_uncommon=False, by_frequency=False):
+    
+    def log2_fold_changes_multiple_outcomes(self, outcomes, fixed_guide='none', guide_status='perfect'):
+        fractions = self.outcome_fractions(guide_status)[fixed_guide].loc[outcomes].sum(axis=0)
+        nt_fraction = self.non_targeting_fractions(guide_status, fixed_guide).loc[outcomes].sum()
+        fc = fractions / nt_fraction
+        fc = fc.fillna(2**5).replace(0, 2**-5)
+        return np.log2(fc)
+        
+    def rational_outcome_order(self, fixed_guide, num_outcomes=50, include_uncommon=False, by_frequency=False):
         def get_deletion_info(details):
             deletion = target_info.degenerate_indel_from_string(details)
             return {'num_MH_nts': len(deletion.starts_ats) - 1,
@@ -874,20 +1289,22 @@ class PooledScreen():
             'uncat': lambda c, sc, d: c == 'uncategorized',
             'genomic': lambda c, sc, d: c == 'genomic insertion',
             'donor insertion': lambda c, sc, d: c == 'donor insertion',
+            'complex templated insertion': lambda c, sc, d: c == 'complex templated insertion',
             'SD-MMEJ': lambda c, sc, d: c == 'SD-MMEJ',
             'uncommon': [('uncommon', 'uncommon', 'collapsed')],
         }
 
         group_order = [
-            'uncat',
-            'genomic',
-            'donor insertion',
             'wt',
             'donor',
             'insertions',
             'no_MH_deletions',
             'MH_deletions',
             'SD-MMEJ',
+            'uncat',
+            'genomic',
+            'donor insertion',
+            'complex templated insertion',
         ]
         if include_uncommon:
             group_order.append('uncommon')
@@ -912,7 +1329,7 @@ class PooledScreen():
         ]
 
         groups = {
-            name: [o for o in self.most_frequent_outcomes[:num_outcomes] if condition(*o)] if name != 'uncommon' else condition
+            name: [o for o in self.most_frequent_outcomes(fixed_guide)[:num_outcomes] if condition(*o)] if name != 'uncommon' else condition
             for name, condition in conditions.items()
         }
 
@@ -949,7 +1366,7 @@ class PooledScreen():
 
     def merge_filtered_bams(self):
         input_fns = []
-        for guide in self.guide_library.non_targeting_guides:
+        for guide in self.variable_guide_library.non_targeting_guides:
             exp = SingleGuideExperiment(self.base_dir, self.group, guide)
             input_fns.append(exp.fns['filtered_cell_bam'])
 
@@ -966,7 +1383,8 @@ class PooledScreen():
                 if fn.exists():
                     all_fns.append(fn)
 
-        sam.merge_sorted_bam_files(all_fns, self.fns['common_sequence_special_alignments'])
+        if len(all_fns) > 0:
+            sam.merge_sorted_bam_files(all_fns, self.fns['common_sequence_special_alignments'])
 
     def merge_special_alignments(self):
         all_fns = defaultdict(dict)
@@ -982,7 +1400,8 @@ class PooledScreen():
 
         top_dir.mkdir(exist_ok=True)
 
-        for outcome, outcome_fns in self.progress(all_fns.items()):
+        description = 'Merging special alignments'
+        for outcome, outcome_fns in self.progress(all_fns.items(), desc=description):
             first_fn = list(outcome_fns.values())[0]
             with pysam.AlignmentFile(first_fn) as fh:
                 header = fh.header
@@ -998,13 +1417,59 @@ class PooledScreen():
     def merge_reads_per_UMI(self):
         reads_per_UMI = defaultdict(Counter)
 
-        for exp in self.progress(self.single_guide_experiments()):
+        description = 'Mergings reads per UMI'
+        total = len(self.guide_combinations)
+        for exp in self.progress(self.single_guide_experiments(), desc=description, total=total):
             for category, counts in exp.reads_per_UMI.items():
                 reads_per_UMI[category].update(counts)
 
         with open(str(self.fns['reads_per_UMI']), 'wb') as fh:
             pickle.dump(dict(reads_per_UMI), fh)
-    
+
+    def merge_templated_insertion_details(self):
+        with h5py.File(self.fns['filtered_templated_insertion_details'], 'w') as merged_f:
+            for exp in self.progress(self.single_guide_experiments()):
+
+                def add_to_merged(key, dataset):
+                    fields = key.split('/')
+
+                    if len(fields) != 4:
+                        return
+
+                    category, subcategory, field, array_type = fields
+
+                    if array_type == 'list':
+                        return
+
+                    new_key = f'{category}/{subcategory}/{field}/{exp.name}/{array_type}'
+
+                    merged_f.create_dataset(new_key, data=dataset.value)
+
+                with h5py.File(exp.fns['filtered_templated_insertion_details']) as exp_f:
+                    exp_f.visititems(add_to_merged)
+
+    def templated_insertion_details(self, guide_pairs, category, subcategories, field):
+        counts = Counter()
+
+        with h5py.File(self.fns[f'filtered_templated_insertion_details']) as f:
+            for fixed_guide, variable_guide in guide_pairs:
+                for subcategory in subcategories:
+                    group = f'{category}/{subcategory}/{field}/{fixed_guide}-{variable_guide}'
+                    if group in f:
+                        counts.update(dict(zip(f[group]['values'], f[group]['counts'])))
+
+        if pooled_layout.NAN_INT in counts:
+            counts.pop(pooled_layout.NAN_INT)
+
+        if len(counts) == 0:
+            xs = np.array([])
+        else:
+            xs = np.arange(min(counts), max(counts) + 1)
+
+        ys = np.array([counts[x] for x in xs])
+
+        return xs, ys
+
     @memoized_property
     def reads_per_UMI(self):
         with open(str(self.fns['reads_per_UMI']), 'rb') as fh:
@@ -1015,20 +1480,20 @@ class PooledScreen():
 
         return reads_per_UMI
 
-    def chi_squared_per_guide(self, relevant_outcomes=None):
+    def chi_squared_per_guide(self, relevant_outcomes=None, fixed_guide='none'):
         if relevant_outcomes is None:
             relevant_outcomes = 50
         if isinstance(relevant_outcomes, int):
-            relevant_outcomes = self.most_frequent_outcomes[:relevant_outcomes]
+            relevant_outcomes = self.most_frequent_outcomes(fixed_guide)[:relevant_outcomes]
 
-        counts = self.outcome_counts('perfect').loc[relevant_outcomes]
+        counts = self.outcome_counts('perfect')['none'].loc[relevant_outcomes]
         
         # A column with zero counts causes problems.
         guide_counts = counts.sum()
         nonzero_guides = guide_counts[guide_counts > 0].index
         counts = counts[nonzero_guides]
         
-        non_targeting_guides = sorted(set(self.guide_library.non_targeting_guides) & set(nonzero_guides))
+        non_targeting_guides = sorted(set(self.variable_guide_library.non_targeting_guides) & set(nonzero_guides))
         
         UMI_counts = counts.sum()
         nt_totals = counts[non_targeting_guides].sum(axis=1)
@@ -1047,7 +1512,9 @@ class PooledScreen():
         def Read_to_num_reads(r):
             return Annotation.from_identifier(r.name)['num_reads']
 
-        for exp in self.progress(self.single_guide_experiments(no_progress=True)):
+        description = 'Collecting common sequences'
+        exps = self.single_guide_experiments(no_progress=True)
+        for exp in self.progress(exps, desc=description, total=len(self.guide_combinations)):
             reads = exp.reads_by_type('collapsed_R2')
             enough_reads_per_UMI = (r.seq for r in reads if Read_to_num_reads(r) >= 5)
             splitter.update_counts(enough_reads_per_UMI)
@@ -1056,11 +1523,14 @@ class PooledScreen():
 
     @memoized_property
     def common_sequence_chunk_names(self):
-        return sorted([d.name for d in self.fns['common_sequences_dir'].iterdir() if d.is_dir()])
+        def d_to_chunk_name(d):
+            return d.name[len('common_sequences-'):]
+
+        return sorted([d_to_chunk_name(d) for d in self.fns['common_sequences_dir'].iterdir() if d.is_dir()])
 
     def common_sequence_chunks(self):
         for chunk_name in self.common_sequence_chunk_names:
-            yield CommonSequenceExperiment(self.base_dir, self.group, chunk_name, progress=self.progress)
+            yield CommonSequenceExperiment(self.base_dir, self.group, 'common_sequences', chunk_name, progress=self.progress)
 
     @memoized_property
     def common_name_to_common_sequence(self):
@@ -1082,6 +1552,16 @@ class PooledScreen():
                 common_names.append(name)
 
         return common_names
+
+    @memoized_property
+    def common_name_to_outcome(self):
+        name_to_outcome = {}
+        with self.fns['common_name_to_outcome'].open() as fh:
+            for line in fh:
+                name, category, subcategory, details = line.strip().split('\t')
+                name_to_outcome[name] = (category, subcategory, details)
+
+        return name_to_outcome
     
     @memoized_property
     def common_sequence_to_common_name(self):
@@ -1091,8 +1571,9 @@ class PooledScreen():
     def common_name_to_special_alignment(self):
         name_to_al = {}
 
-        for al in pysam.AlignmentFile(self.fns['common_sequence_special_alignments']):
-            name_to_al[al.query_name] = al
+        if self.fns['common_sequence_special_alignments'].exists():
+            for al in pysam.AlignmentFile(self.fns['common_sequence_special_alignments']):
+                name_to_al[al.query_name] = al
 
         return name_to_al
 
@@ -1106,7 +1587,7 @@ class PooledScreen():
     def name_to_chunk(self):
         names = self.common_sequence_chunk_names
         starts = [int(n.split('-')[0]) for n in names]
-        chunks = [CommonSequenceExperiment(self.base_dir, self.group, n) for n in names]
+        chunks = [CommonSequenceExperiment(self.base_dir, self.group, 'common_sequences', n) for n in names]
         Annotation = collapse.Annotations['collapsed_UMI_mismatch']
 
         def name_to_chunk(name):
@@ -1126,6 +1607,11 @@ class PooledScreen():
         als = chunk.get_read_alignments(name)
 
         return als
+
+    def get_read_layout(self, name, **kwargs):
+        als = self.get_read_alignments(name)
+        l = pooled_layout.Layout(als, self.target_info, **kwargs)
+        return l
 
     def get_common_seq_alignments(self, seq):
         name = self.common_sequence_to_common_name[seq]
@@ -1168,7 +1654,16 @@ class PooledScreen():
 
         return common_sequence_to_outcome
 
-class CommonSequenceSplitter():
+class PooledScreenNoUMI(PooledScreen):
+    def single_guide_experiment(self, fixed_guide, variable_guide, no_progress=False):
+        if no_progress:
+            progress = None
+        else:
+            progress = self.progress
+
+        return SingleGuideNoUMIExperiment(self.base_dir, self.group, fixed_guide, variable_guide, progress=progress)
+
+class CommonSequenceSplitter:
     def __init__(self, pool, reads_per_chunk=1000):
         self.pool = pool
         self.reads_per_chunk = reads_per_chunk
@@ -1197,9 +1692,9 @@ class CommonSequenceSplitter():
         if i % self.reads_per_chunk == 0:
             self.close()
             chunk_name = '{:010d}-{:010d}'.format(i, i + self.reads_per_chunk - 1)
-            chunk_exp = CommonSequenceExperiment(self.pool.base_dir, self.pool.group, chunk_name)
+            chunk_exp = CommonSequenceExperiment(self.pool.base_dir, self.pool.group, 'common_sequences', chunk_name)
             fn = chunk_exp.fns_by_read_type['fastq']['collapsed_R2']
-            self.current_chunk_fh = fn.open('w')
+            self.current_chunk_fh = gzip.open(fn, 'wt', compresslevel=1)
             
     def write_read(self, i, read):
         self.possibly_make_new_chunk(i)
@@ -1243,87 +1738,14 @@ class CommonSequenceSplitter():
                 if name is not None:
                     name_to_seq_fh.write('{}\t{}\n'.format(name, seq))
 
-class BrittIlluminaExperiment(experiment.IlluminaExperiment):
-    def __init__(self, *args, **kwargs):
-        super(BrittAmpliconExperiment, self).__init__(*args, **kwargs)
-        self.supplemental_headers = {}
-        self.layout_module = pooled_layout
-        
-    def categorize_outcomes(self, bam_fn_key='stitched_bam_by_name'):
-        if self.fns['outcomes_dir'].is_dir():
-            shutil.rmtree(str(self.fns['outcomes_dir']))
-
-        self.fns['outcomes_dir'].mkdir()
-
-        outcomes = defaultdict(list)
-
-        total = 0
-        required_sw = 0
-
-        # iter wrap since tqdm objects are not iterators
-        alignment_groups = iter(self.alignment_groups(bam_fn_key))
-
-        with self.fns['outcome_list'].open('w') as fh:
-            for name, als in alignment_groups:
-                layout = self.layout_module.Layout(als, self.target_info, self.supplemental_headers)
-                total += 1
-                try:
-                    category, subcategory, details = layout.categorize()
-                except:
-                    print()
-                    print(self.name, name)
-                    raise
-            
-                if layout.required_sw:
-                    required_sw += 1
-
-                outcomes[category, subcategory].append(name)
-
-                UMI_outcome = coherence.Pooled_UMI_Outcome('ph',
-                                                           '-1',
-                                                           name,
-                                                           1,
-                                                           category,
-                                                           subcategory,
-                                                           details,
-                                                           name,
-                                                          )
-                fh.write(str(UMI_outcome) + '\n')
-
-        # To make plotting easier, for each outcome, make a file listing all of
-        # qnames for the outcome and a bam file (sorted by name) with all of the
-        # alignments for these qnames.
-
-        qname_to_outcome = {}
-        bam_fhs = {}
-
-        with pysam.AlignmentFile(self.fns['bam_by_name']) as full_bam_fh:
-        
-            for outcome, qnames in outcomes.items():
-                outcome_fns = self.outcome_fns(outcome)
-                outcome_fns['dir'].mkdir()
-                bam_fhs[outcome] = pysam.AlignmentFile(str(outcome_fns['bam_by_name']), 'w', template=full_bam_fh)
-                
-                with outcome_fns['query_names'].open('w') as fh:
-                    for qname in qnames:
-                        qname_to_outcome[qname] = outcome
-                        fh.write(qname + '\n')
-            
-            for al in full_bam_fh:
-                if al.query_name in qname_to_outcome:
-                    outcome = qname_to_outcome[al.query_name]
-                    bam_fhs[outcome].write(al)
-
-        for outcome, fh in bam_fhs.items():
-            fh.close()
-
 def explore(base_dir, group,
             initial_guide=None,
             by_outcome=True,
+            fixed_guide='none',
             **kwargs):
     pool = PooledScreen(base_dir, group)
 
-    guides = pool.guides
+    guides = pool.variable_guide_library.guides
     if initial_guide is None:
         initial_guide = guides[0]
 
@@ -1364,7 +1786,8 @@ def explore(base_dir, group,
 
     def get_exp():
         guide = widgets['guide'].value
-        exp = SingleGuideExperiment(base_dir, group, guide)
+        exp = SingleGuideExperiment(base_dir, group, fixed_guide, guide)
+        #exp = SingleGuideNoUMIExperiment(base_dir, group, fixed_guide, guide)
         return exp
 
     @output.capture()
@@ -1402,6 +1825,9 @@ def explore(base_dir, group,
                 category, subcategory = outcome
                 right_outcome = df.query('category == @category and subcategory == @subcategory and guide_mismatch == -1')
                 qnames = right_outcome['original_name'].values[:200]
+
+                #right_outcome = df.query('category == @category and subcategory == @subcategory')
+                #qnames = right_outcome['standardized_qname'].values[:200]
         else:
             qnames = df['original_name'].values[:200]
 
@@ -1424,7 +1850,7 @@ def explore(base_dir, group,
     else:
         widgets['guide'].observe(populate_read_ids, names='value')
 
-    @output.capture(clear_output=True)
+    @output.capture(clear_output=False)
     def plot(guide, read_id, **plot_kwargs):
         exp = get_exp()
 
@@ -1440,19 +1866,20 @@ def explore(base_dir, group,
             return None
 
         l = pooled_layout.Layout(als, exp.target_info)
-        info = l.categorize()
+        category, subcategory, details, outcome = l.categorize()
         if widgets['relevant'].value:
             als = l.relevant_alignments
 
         diagram = visualize.ReadDiagram(als, exp.target_info,
                                         max_qual=exp.max_qual,
                                         flip_target=True,
-                                        target_on_top=True,
-                                        #features_to_hide=['ssODN_Cpf1_deletion'],
+                                        #target_on_top=True,
+                                        features_to_show=exp.target_info.features_to_show,
                                         **plot_kwargs)
         fig = diagram.fig
 
-        fig.axes[0].set_title(' '.join((l.name,) + info))
+        title = f'{l.name} {category} {subcategory} {details}'
+        fig.axes[0].set_title(title)
 
         if widgets['draw_sequence'].value:
             print(exp.group, exp.name)
@@ -1477,7 +1904,7 @@ def explore(base_dir, group,
     @output.capture(clear_output=False)
     def save(change):
         fig = interactive.result
-        fn = widgets['file_name'].value
+        fn = non_widgets['file_name'].value
         fig.savefig(fn, bbox_inches='tight')
 
     non_widgets['save'].on_click(save)
@@ -1493,8 +1920,25 @@ def explore(base_dir, group,
 
     return layout
 
-def get_all_pools(base_dir=os.environ['HOME'] + '/projects/ddr', progress=None):
-    group_dirs = [p for p in (Path(base_dir) / 'data').iterdir() if p.is_dir()]
+class MergedPools(PooledScreen):
+    def __init__(self, base_dir, name, groups, progress=None):
+        super().__init__(base_dir, name, progress=progress)
+
+        self.groups = groups
+        self.pools = {group: PooledScreen(base_dir, group, progress) for group in groups}
+
+    def merge_outcome_counts(self):
+        all_counts = {group: pool.outcome_counts_df(True) for group, pool in self.pools.items()}
+        all_counts = pd.concat(all_counts, axis=1).fillna(0).astype(int)
+        merged_counts = all_counts.sum(axis='columns', level=[1, 2])
+
+        sparse_counts = scipy.sparse.coo_matrix(merged_counts.values)
+        scipy.sparse.save_npz(self.fns['collapsed_outcome_counts'], sparse_counts)
+
+        merged_counts.sum(axis=1).to_csv(self.fns['collapsed_total_outcome_counts'], header=False)
+
+def get_all_pools(base_dir=Path.home() / 'projects' / 'ddr', progress=None):
+    group_dirs = [p for p in (Path(base_dir) / 'results').iterdir() if p.is_dir()]
 
     pools = {}
 
@@ -1506,6 +1950,9 @@ def get_all_pools(base_dir=os.environ['HOME'] + '/projects/ddr', progress=None):
             sample_sheet = yaml.load(sample_sheet_fn.read_text())
             pooled = sample_sheet.get('pooled', False)
             if pooled:
-                pools[name] = PooledScreen(base_dir, name, progress=progress)
+                if sample_sheet.get('gDNA', False):
+                    pools[name] = PooledScreenNoUMI(base_dir, name, progress=progress)
+                else:
+                    pools[name] = PooledScreen(base_dir, name, progress=progress)
 
     return pools
