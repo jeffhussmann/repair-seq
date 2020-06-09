@@ -477,3 +477,49 @@ def conversion_tracts(pool, genes, fc_ylims=None):
     ax.set_ylabel('log2 fold-change in conversion from non-targeting')
 
     return f
+
+def fraction_removed(pool, genes):
+    fig, (fraction_ax, fc_ax) = plt.subplots(2, 1, figsize=(12, 12), sharex=True, gridspec_kw=dict(hspace=0.05))
+
+    guide_sets = [
+        ('negative_control', 'individual non-targeting guide', dict(color='black', alpha=0.1)),
+    ]
+
+    for gene_i, gene in enumerate(genes):
+        guide_sets.append((gene, None, dict(color=ddr.visualize.heatmap.good_colors[gene_i], alpha=0.8, linewidth=1.5)))
+
+    kwargs = dict(color='black', alpha=0.9, linewidth=2, label='all non-targeting guides')
+    fraction_ax.plot(pool.fraction_removed['all_non_targeting'], '-', **kwargs)
+    fc_ax.plot(pool.fraction_removed_log2_fold_changes['all_non_targeting'], '-', **kwargs)    
+
+    for gene, label, kwargs in guide_sets:
+        guides = pool.variable_guide_library.gene_guides(gene, only_best_promoter=True)
+
+        for i, guide in enumerate(guides):
+            
+            label_to_use = None
+
+            if i == 0:
+                if label is None:
+                    label_to_use = gene
+                else:
+                    label_to_use = label
+            else:
+                label_to_use = ''
+            
+            ys = pool.fraction_removed[guide].replace(to_replace=0, value=np.nan)
+            fraction_ax.plot(ys, '-', label=label_to_use, **kwargs)
+            fc_ax.plot(pool.fraction_removed_log2_fold_changes[guide], '-', label=label_to_use, **kwargs)
+
+    fraction_ax.legend()
+    for ax in [fraction_ax, fc_ax]:
+        ax.set_xlim(pool.fraction_removed.index[0], pool.fraction_removed.index[-1])
+
+    fraction_ax.set_ylim(5e-4, 1)
+    fraction_ax.set_yscale('log')
+    fraction_ax.set_ylabel('fraction of outcomes with position deleted', size=12)
+
+    fc_ax.set_ylim(-4, 2)
+    fc_ax.set_ylabel('log2 fold change from non-targeting', size=12)
+    
+    fc_ax.set_xlabel('distance from cut site (nts)', size=12)
