@@ -407,3 +407,73 @@ def draw_ssODN_configurations(pools, pool_names):
         ax.plot([x_start, x_start, x_end, x_end], [y_start, y_end, y_end, y_start])
             
     return fig
+
+def conversion_tracts(pool, genes, fc_ylims=None):
+    f = draw_ssODN_configurations([pool])
+
+    ax = f.axes[0]
+
+    xs = pool.SNV_name_to_position - pool.target_info.cut_after
+
+    # overall incorporation frequency plot
+
+    ax_p = ax.get_position()
+    ax = f.add_axes([ax_p.x0, ax_p.y0 - 0.5 * ax_p.height, ax_p.width, 0.5 * ax_p.height], sharex=ax)
+
+    ys = pool.conversion_fractions['all_non_targeting']
+    ax.plot(xs, ys, 'o-', color='black', linewidth=2)
+
+    ax.axvline(0, linestyle='--', color='black', alpha=0.5)
+    
+    ax.set_ylim(0, max(ys) * 1.1)
+
+    ax.set_ylabel('overall\nconversion\nfrequency')
+
+    # log2 fold changes plot
+
+    ax_p = ax.get_position()
+    ax = f.add_axes([ax_p.x0, ax_p.y0 - 2.2 * ax_p.height, ax_p.width, 2 * ax_p.height], sharex=ax)
+
+    guide_sets = [
+        ('negative_control', 'non-targeting', dict(color='black', alpha=0.2)),
+    ]
+
+    for gene_i, gene in enumerate(genes):
+        guide_sets.append((gene, None, dict(color=ddr.visualize.heatmap.good_colors[gene_i], alpha=0.8, linewidth=1.5)))
+
+    max_y = 1
+    min_y = -2
+    
+    for gene, label, kwargs in guide_sets:
+        for i, guide in enumerate(pool.variable_guide_library.gene_guides(gene)):
+            ys = pool.conversion_log2_fold_changes[guide]
+
+            max_y = np.ceil(max(max_y, max(ys)))
+            min_y = np.floor(min(min_y, min(ys)))
+
+            label_to_use = None
+
+            if i == 0:
+                if label is None:
+                    label_to_use = gene
+                else:
+                    label_to_use = label
+            else:
+                label_to_use = ''
+
+            ax.plot(xs, ys, '.-', label=label_to_use, **kwargs)
+
+    ax.legend()
+
+    if fc_ylims is None:
+        fc_ylims = (max(-6, min_y), min(5, max_y))
+    
+    ax.set_ylim(*fc_ylims)
+    #ax.set_ylim(-4, 1)
+
+    ax.axhline(0, color='black', alpha=0.2)
+    ax.axvline(0, linestyle='--', color='black', alpha=0.5)
+
+    ax.set_ylabel('log2 fold-change in conversion from non-targeting')
+
+    return f
