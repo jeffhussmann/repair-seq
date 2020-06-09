@@ -1031,6 +1031,8 @@ class PooledScreen:
             'collapsed_outcome_counts': group_dir / 'collapsed_outcome_counts.npz',
             'collapsed_total_outcome_counts': group_dir / 'collapsed_total_outcome_counts.txt',
 
+            'high_frequency_outcome_counts': group_dir / 'high_frequency_outcome_counts.hdf5',
+
             'filtered_cell_bam': group_dir / 'filtered_cell_alignments.bam',
             'reads_per_UMI': group_dir / 'reads_per_UMI.pkl',
 
@@ -1159,6 +1161,87 @@ class PooledScreen:
             outcome_counts = self.outcome_counts_df(True).loc[perfect_guide]
 
         return outcome_counts
+
+    def make_high_frequency_outcome_counts(self):
+        outcomes = self.most_frequent_outcomes('none')
+
+        non_targeting_fractions = self.non_targeting_fractions('perfect', 'none').loc[outcomes]
+
+        to_write = {
+            'counts': self.outcome_counts('perfect').loc[outcomes],
+            'fractions': self.outcome_fractions('perfect').loc[outcomes],
+            'log2_fold_changes': self.log2_fold_changes('perfect', 'none').loc[outcomes],
+        }
+
+        fractions_intervals = {
+            'lower': [],
+            'upper': [],
+        } 
+
+        UMI_counts = self.UMI_counts('perfect')
+
+        for _, row in to_write['counts'].iterrows():
+            lowers, uppers = utilities.clopper_pearson_fast(row, UMI_counts)
+            fractions_intervals['lower'].append(lowers)
+            fractions_intervals['upper'].append(uppers)
+
+        for key, array in fractions_intervals.items():
+            fractions = pd.DataFrame(array, index=to_write['counts'].index)
+
+            fold_changes = fractions.div(non_targeting_fractions, axis=0)
+            fold_changes = fold_changes.fillna(2**5).replace(0, 2**-5)
+            log2_fold_changes = np.log2(fold_changes)
+
+            to_write.update({
+                f'fractions_interval_{key}': fractions,
+                f'log2_fold_changes_interval_{key}': log2_fold_changes,
+            })
+
+        with h5py.File(self.fns['high_frequency_outcome_counts'], 'w') as fh:
+            for key, df in to_write.items():
+                dataset = fh.create_dataset(key, data=df.values)
+                
+                for level in df.index.names:
+                    dataset.attrs[level] = [s.encode() for s in df.index.get_level_values(level)]
+                    
+                for level in df.columns.names:
+                    dataset.attrs[level] = [s.encode() for s in df.columns.get_level_values(level)]
+
+    def load_high_frequency_outcome_counts(self, key):
+        with h5py.File(self.fns['high_frequency_outcome_counts']) as fh:
+            index_level_names = ['category', 'subcategory', 'details']
+            columns_level_names = ['fixed_guide', 'variable_guide']
+            
+            dataset = fh[key]
+            index_levels = [[b.decode() for b in dataset.attrs[level]] for level in index_level_names]
+            index = pd.MultiIndex.from_tuples(zip(*index_levels))
+            
+            columns_levels = [[b.decode() for b in dataset.attrs[level]] for level in columns_level_names]
+            columns = pd.MultiIndex.from_tuples(zip(*columns_levels))
+            
+            outcome_counts = pd.DataFrame(dataset.value, index=index, columns=columns)
+            
+        return outcome_counts
+
+    @memoized_property
+    def high_frequency_outcome_counts(self):
+        return self.load_high_frequency_outcome_counts('counts')
+
+    @memoized_property
+    def high_frequency_outcome_fractions(self):
+        return self.load_high_frequency_outcome_counts('fractions')
+
+    @memoized_property
+    def high_frequency_log2_fold_changes(self):
+        return self.load_high_frequency_outcome_counts('log2_fold_changes')
+
+    @memoized_property
+    def high_frequency_log2_fold_change_intervals(self):
+        intervals = {
+            k: self.load_high_frequency_outcome_counts(f'log2_fold_changes_interval_{k}')
+            for k in ('lower', 'upper')
+        }
+        return pd.concat(intervals, axis=1)
 
     @memoized_property
     def non_targeting_guide_pairs(self):
