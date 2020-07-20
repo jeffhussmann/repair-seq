@@ -1,6 +1,7 @@
 import argparse
 import gzip
 import multiprocessing
+import itertools
 
 from pathlib import Path
 from collections import defaultdict, Counter
@@ -26,8 +27,9 @@ def load_pool_details(base_dir, group):
     pool_details_fn = Path(base_dir) / 'data' / group / 'gDNA_pool_details.csv'
     if pool_details_fn.exists():
         pool_details = pd.read_csv(pool_details_fn, index_col='pool_name').replace({np.nan: None})
-        pool_details['I7_index'] = [s.split(';') for s in pool_details['I7_index']]
-        pool_details['I5_index'] = [s.split(';') for s in pool_details['I5_index']]
+        for key_to_split in ['I7_index', 'I5_index', 'sgRNA', 'primer_names']:
+            if key_to_split in pool_details:
+                pool_details[key_to_split] = [s.split(';') if s is not None else s for s in pool_details[key_to_split]]
         pool_details = pool_details.T.to_dict()
     else:
         pool_details = None
@@ -40,15 +42,20 @@ def make_pool_sample_sheets(base_dir, group):
         pool_sample_sheet = {
             'pooled': True,
             'gDNA': True,
-            'sequencing_start_feature_name': 'gDNA_primer',
+            'sequencing_start_feature_name': 'gDNA_reverse_primer',
             'variable_guide_library': sample_sheet['variable_guide_library'],
         }
 
         if 'fixed_guide_library' in sample_sheet:
             pool_sample_sheet['fixed_guide_library'] = sample_sheet['fixed_guide_library']
-            pool_sample_sheet['target_info_prefix'] = 'doubles_vector'
+            target_info_prefix = 'doubles_vector'
         else:
-            pool_sample_sheet['target_info_prefix'] = 'pooled_vector'
+            if 'target_info_prefix' in sample_sheet:
+                target_info_prefix = sample_sheet['target_info_prefix']
+            else:
+                target_info_prefix = 'pooled_vector'
+
+        pool_sample_sheet['target_info_prefix'] = target_info_prefix
 
         pool_sample_sheet.update(details)
 
@@ -105,6 +112,7 @@ class FastqChunker:
         
     def split_into_chunks(self):
         line_groups = fastq.get_line_groups(self.input_fn)
+        #line_groups = itertools.islice(line_groups, int(5e6))
         
         for read_number, line_group in enumerate(line_groups):
             if read_number % self.reads_per_chunk == 0:
@@ -184,7 +192,7 @@ def get_resolvers(base_dir, group):
         # If there weren't multiple fixed guide pools present, keep everything
         # to allow possibility of outcomes that don't include the intended NotI site.
         def fixed_guide_barcode_resolver(*args):
-            return 'none'
+            return {'none'}
 
         resolvers['fixed_guide_barcode'] = fixed_guide_barcode_resolver
         expected_seqs['fixed_guide_barcode'] = set()
@@ -198,7 +206,7 @@ def get_resolvers(base_dir, group):
     guides = fasta.to_dict(variable_guide_library.fns['guides_fasta'])
     # Note: primer for gDNA prep makes R1 read start 1 downstream of UMI prep.
     resolvers['variable_guide'] = utilities.get_one_mismatch_resolver({g: s[1:45] for g, s in guides.items()}).get
-    expected_seqs['variable_guide'] = set(guides.values())
+    expected_seqs['variable_guide'] = set(s[1:45] for s in guides.values())
 
     return resolvers, expected_seqs
 
@@ -226,11 +234,13 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
         if len({r.name for r in quartet}) != 1:
             raise ValueError('quartet out of sync')
 
-        I7_sample = resolvers['I7'](quartet.I1.seq, 'unknown')
-        I5_sample = resolvers['I5'](quartet.I2.seq, 'unknown')
+        I7_samples = resolvers['I7'](quartet.I1.seq, {'unknown'})
+        I5_samples = resolvers['I5'](quartet.I2.seq, {'unknown'})
 
-        if I7_sample == I5_sample:
-            sample = I7_sample
+        consistent_with_both = I7_samples & I5_samples
+
+        if len(consistent_with_both) == 1:
+            sample = next(iter(consistent_with_both))
         else:
             sample = 'unknown'
 
@@ -238,10 +248,23 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
         counts['I5'][quartet.I2.seq] += 1
 
         # Note: primer for gDNA prep makes R1 read start 1 downstream of UMI prep.
-        variable_guide = resolvers['variable_guide'](quartet.R1.seq[:44], 'unknown')
+        variable_guide_seq = quartet.R1.seq[:44]
+
+        variable_guides = resolvers['variable_guide'](variable_guide_seq, {'unknown'})
+        if len(variable_guides) == 1:
+            variable_guide = next(iter(variable_guides))
+        else:
+            variable_guide = 'unknown'
+
+        counts['variable_guide'][variable_guide_seq] += 1
 
         guide_barcode = quartet.R2.seq[guide_barcode_slice]
-        fixed_guide = resolvers['fixed_guide_barcode'](guide_barcode, 'unknown')
+        fixed_guides = resolvers['fixed_guide_barcode'](guide_barcode, {'unknown'})
+        if len(fixed_guides) == 1:
+            fixed_guide = next(iter(fixed_guides))
+        else:
+            fixed_guide = 'unknown'
+
         counts['fixed_guide_barcode'][guide_barcode] += 1
 
         counts['id'][sample, fixed_guide, variable_guide] += 1
@@ -267,7 +290,7 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
     queue.put(('demux', quartet_name, chunk_number))
 
 def merge_seq_counts(base_dir, group, k):
-    chunk_dir = Path(base_dir) / 'data' / group / 'chunks'
+    chunk_dir = Path(base_dir) / 'data' / group / 'gDNA_chunks'
     count_fns = chunk_dir.glob(f'{k}*.txt')
 
     counts = Counter()
@@ -303,7 +326,7 @@ def merge_seq_counts(base_dir, group, k):
         fn.unlink()
     
 def merge_ids(base_dir, group):
-    chunk_dir = Path(base_dir) / 'data' / group / 'chunks'
+    chunk_dir = Path(base_dir) / 'data' / group / 'gDNA_chunks'
     count_fns = chunk_dir.glob('id*.txt')
 
     counts = Counter()
@@ -350,6 +373,8 @@ if __name__ == '__main__':
     chunk_pool = multiprocessing.Pool(processes=4 * len(quartet_names))
     demux_pool = multiprocessing.Pool(processes=4 * len(quartet_names))
 
+    debug = False
+
     with chunk_pool, demux_pool:
         chunk_results = []
         demux_results = []
@@ -360,7 +385,8 @@ if __name__ == '__main__':
             for which in fastq.quartet_order:
                 args = (base_dir, group, quartet_name, which, reads_per_chunk, tasks_done_queue)
                 chunk_result = chunk_pool.apply_async(split_into_chunks, args)
-                #print(chunk_result.get())
+                if debug:
+                    print(chunk_result.get())
                 chunk_results.append(chunk_result)
 
                 unfinished_chunkers.add((quartet_name, which))
@@ -384,7 +410,8 @@ if __name__ == '__main__':
                         
                         args = (base_dir, group, quartet_name, chunk_number, tasks_done_queue)
                         demux_result = demux_pool.apply_async(demux_chunk, args)
-                        #print(demux_result.get())
+                        if debug:
+                            print(demux_result.get())
                         demux_results.append(demux_result)
 
             elif task_type == 'demux':
@@ -417,6 +444,9 @@ if __name__ == '__main__':
 
     merge_pool = multiprocessing.Pool(processes=3)
     merge_results = []
+    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'I5')))
+    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'I7')))
+    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'variable_guide')))
     merge_results.append(merge_pool.apply_async(merge_ids, args=(base_dir, group)))
 
     merge_pool.close()
