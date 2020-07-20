@@ -132,9 +132,16 @@ class DummyGuideLibrary:
     def __init__(self):
         self.guides = ['none']
         self.non_targeting_guides = ['none']
+        self.genes = ['negative_control']
     
     @memoized_property
     def guide_to_gene(self):
         return defaultdict(lambda: 'none')
+
+    def gene_guides(self, gene):
+        if gene == 'negative_control':
+            return ['none']
+        else:
+            return []
 
 dummy_guide_library = DummyGuideLibrary()
