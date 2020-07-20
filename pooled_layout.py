@@ -202,6 +202,60 @@ class Layout:
         return all_split_als
 
     @memoized_property
+    def gap_sw_realignments(self):
+        ti = self.target_info
+        gaps = self.whole_read - interval.get_disjoint_covered(self.split_target_and_donor_alignments)
+
+        all_gap_als = []
+
+        targets = [
+            (ti.target, ti.target_sequence),
+        ]
+
+        if ti.donor is not None:
+            targets.append((ti.donor, ti.donor_sequence))
+
+        target_window_start = ti.features[ti.target, 'sgRNA constant region E+F'].start
+        target_window_end = ti.features[ti.target, 'EF1a'].end + 1
+
+        ref_intervals = {
+            ti.target: interval.Interval(target_window_start, target_window_end),
+        }
+
+        if ti.donor is not None:
+            ref_intervals[ti.donor] = interval.Interval(0, len(ti.donor_sequence) - 1)
+
+        for gap in gaps.intervals:
+            start = max(0, gap.start - 5)
+            end = min(len(self.seq) - 1, gap.end + 5)
+            extended_gap = interval.Interval(start, end)
+
+            als = sw.align_read(self.read,
+                                targets,
+                                10,
+                                ti.header,
+                                read_interval=extended_gap,
+                                ref_intervals=ref_intervals,
+                                max_alignments_per_target=4,
+                                mismatch_penalty=-8,
+                                indel_penalty=-60,
+                                min_score_ratio=0,
+                                both_directions=True,
+                                N_matches=False,
+                               )
+            
+            extended_target_als = [sw.extend_alignment(al, ti.target_sequence_bytes) for al in als if al.reference_name == ti.target]
+
+            if ti.donor is not None:
+                extended_donor_als = [sw.extend_alignment(al, ti.donor_sequence_bytes) for al in als if al.reference_name == ti.donor]
+            else:
+                extended_donor_als = []
+            
+            all_gap_als.extend(extended_target_als + extended_donor_als)
+
+        return all_gap_als
+
+    @memoized_property
     def split_donor_alignments(self):
         return [al for al in self.split_target_and_donor_alignments if al.reference_name == self.target_info.donor]
     
@@ -577,6 +631,11 @@ class Layout:
         return self.whole_read - covered
 
     @memoized_property
+    def not_covered_by_target_or_donor_plus_realigned(self):
+        covered = interval.get_disjoint_covered(self.gap_sw_realignments)
+        return self.not_covered_by_target_or_donor & (self.whole_read - covered)
+
+    @memoized_property
     def perfect_gap_als(self):
         all_gap_als = []
 
@@ -593,8 +652,9 @@ class Layout:
         
         for al in self.supplemental_alignments:
             covered = interval.get_covered(al)
-            novel_covered = covered & self.not_covered_by_target_or_donor
-            if novel_covered:
+            novel_covered = covered & self.not_covered_by_target_or_donor_plus_realigned
+
+            if novel_covered.total_length > 10:
                 nonredundant.append(al)
 
         return nonredundant
