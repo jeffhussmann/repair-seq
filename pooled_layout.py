@@ -1,6 +1,7 @@
-from collections import Counter, defaultdict
-
 import re
+from collections import Counter, defaultdict
+from itertools import product
+
 import numpy as np
 import pandas as pd
 import pysam
@@ -1112,23 +1113,30 @@ class Layout:
     def register_donor_insertion(self):
         details = self.donor_insertion
 
-        shared_HAs = details['shared_HAs']
+        if 'left' in details['shared_HAs']:
+            left_category = 'intended'
+        elif details['insertion_reaches_reference_edge']['left']:
+            left_category = 'blunt'
+        else:
+            left_category = 'unintended'
+
+        if details['insertion_reaches_read_edge']:
+            right_category = 'ambiguous'
+        elif 'right' in details['shared_HAs']:
+            right_category = 'intended'
+        elif len(details['concatamer_alignments']) > 0:
+            right_category = 'concatamer'
+        elif details['insertion_reaches_reference_edge']['right']:
+            right_category = 'blunt'
+        else:
+            right_category = 'unintended'
+
         strand = details['strand']
 
-        if shared_HAs is None:
-            subcategory = f'non-homologous, {strand}'
-        else:
-            if len(shared_HAs) > 1:
-                subcategory = 'uses both homology arms'
-            elif len(shared_HAs) == 1:
-                read_side = list(shared_HAs)[0]
-                PAM_side = self.target_info.read_side_to_PAM_side[read_side]
-                subcategory = f'uses {PAM_side} homology'
-            else:
-                subcategory = f'neither homology arm used, {strand}'
+        subcategory = f'left {left_category}, right {right_category}'
 
-            if not details['has_donor_SNV']['insertion']:
-                subcategory += ' (no SNVs)'
+        if not details['has_donor_SNV']['insertion']:
+            subcategory += ' (no SNVs)'
 
         donor_SNV_summary_string = self.donor_al_SNV_summary(details['candidate_alignment'])
 
@@ -1151,10 +1159,9 @@ class Layout:
         self.outcome = outcome
         self.details = str(outcome)
         
-        # TODO: re-examine concatamer
-        relevant_alignments = details['full_alignments']# + details['concatamer_alignments']
+        relevant_alignments = details['full_alignments'] + details['concatamer_alignments']
 
-        self.category = 'donor insertion'
+        self.category = 'donor misintegration'
         self.subcategory = subcategory
         self.relevant_alignments = relevant_alignments
         self.special_alignment = details['candidate_alignment']
@@ -1363,7 +1370,8 @@ class Layout:
                 target_query_bounds[3] = len(self.seq)
             else:
                 if cropped_right_al.query_alignment_length >= 8:
-                    target_bounds[3] = sam.reference_edges(cropped_right_al)[5]
+                    edges = sam.reference_edges(cropped_right_al)
+                    target_bounds[3] = edges[5]
                     target_query_bounds[3] = interval.get_covered(cropped_right_al).start
                 else:
                     target_bounds[3] = None
@@ -1375,9 +1383,16 @@ class Layout:
                 possible_insertions.append(details)
                 continue
 
+            strand = sam.get_strand(candidate_al)
+
             insertion_reference_bounds = sam.reference_edges(cropped_candidate_al)   
+            insertion_uncropped_reference_bounds = sam.reference_edges(candidate_al)   
+
             insertion_query_interval = interval.get_covered(cropped_candidate_al)
+            insertion_uncropped_query_interval = interval.get_covered(candidate_al)
             insertion_length = len(insertion_query_interval)
+
+            insertion_reaches_read_edge = self.whole_read.end - insertion_uncropped_query_interval.end <= 2
                 
             left_edits = sam.edit_distance_in_query_interval(cropped_left_al, ref_seq=ti.target_sequence)
             right_edits = sam.edit_distance_in_query_interval(cropped_right_al, ref_seq=ti.target_sequence)
@@ -1417,8 +1432,12 @@ class Layout:
             details.update({
                 'source': source,
                 'insertion_length': insertion_length,
+
                 'insertion_reference_bounds': insertion_reference_bounds,
+                'insertion_uncropped_reference_bounds': insertion_uncropped_reference_bounds,
+
                 'insertion_query_bounds': {5: insertion_query_interval.start, 3: insertion_query_interval.end},
+                'insertion_reaches_read_edge': insertion_reaches_read_edge,
 
                 'gap_left_query_edge': left_results['switch_after'],
                 'gap_right_query_edge': right_results['switch_after'] + 1,
@@ -1446,7 +1465,7 @@ class Layout:
 
                 'has_donor_SNV': has_donor_SNV,
 
-                'strand': sam.get_strand(candidate_al),
+                'strand': strand,
             })
 
             if source == 'genomic':
@@ -1479,17 +1498,33 @@ class Layout:
             if source == 'donor':
                 details['shared_HAs'] = self.shared_HAs(candidate_al, edge_als)
 
-                # TODO: deal with this
-                #concatamer_als = []
-                #if resection[3] is not None and resection[3] < -10:
-                #    # Non-physical resection might indicate concatamer. Check for
-                #    # a relevant donor alignment.
-                #    for al in self.split_donor_alignments:
-                #        possible_concatamer = sam.crop_al_to_query_int(al, right_results['switch_after'] + 1, np.inf)
-                #        if possible_concatamer is not None:
-                #            concatamer_als.append(possible_concatamer)
+                # Post-insertion target alignment on the wrong side of the cut might indicated donor concatamer.
+                if target_bounds[3] is None:
+                    non_physical_restart = False
+                else:
+                    if ti.sequencing_start.strand == '-':
+                        non_physical_restart = target_bounds[3] > ti.cut_after + 10
+                    else:
+                        non_physical_restart = target_bounds[3] < ti.cut_after - 10
 
-                #details['concatamer_alignments'] = concatamer_als
+                concatamer_als = []
+                if non_physical_restart:
+                    for al in self.split_donor_alignments:
+                        possible_concatamer = sam.crop_al_to_query_int(al, insertion_uncropped_query_interval.end + 1, np.inf)
+                        if possible_concatamer is not None:
+                            concatamer_als.append(possible_concatamer)
+
+                details['concatamer_alignments'] = concatamer_als
+
+                insertion_reaches_reference_edge = {}
+                if strand == '+':
+                    insertion_reaches_reference_edge['left'] = insertion_uncropped_reference_bounds[5] <= 2
+                    insertion_reaches_reference_edge['right'] = len(ti.donor_sequence) - insertion_uncropped_reference_bounds[3] <= 2
+                else:
+                    insertion_reaches_reference_edge['left'] = len(ti.donor_sequence) - insertion_uncropped_reference_bounds[5] <= 2
+                    insertion_reaches_reference_edge['right'] = insertion_uncropped_reference_bounds[3] <= 2
+
+                details['insertion_reaches_reference_edge'] = insertion_reaches_reference_edge
 
             failures = []
 
@@ -1938,6 +1973,24 @@ class Layout:
     def uncategorized_relevant_alignments(self):
         return self.target_alignments + self.donor_alignments + interval.make_parsimonious(self.nonredundant_supplemental_alignments)
 
+side_categories = [
+    'intended',
+    'unintended',
+    'blunt',
+    'concatamer',
+    'ambiguous',
+]
+
+donor_misintegration_subcategories = []
+
+for l_cat, r_cat in product(side_categories, repeat=2):
+    subcat = f'left {l_cat}, right {r_cat}'
+    donor_misintegration_subcategories.append(subcat)
+    subcat_no_SNVs = f'{subcat} (no SNVs)'
+    donor_misintegration_subcategories.append(subcat_no_SNVs)
+
+donor_misintegration_subcategories = tuple(donor_misintegration_subcategories)
+
 category_order = [
     ('wild type',
         ('clean',
@@ -1991,21 +2044,8 @@ category_order = [
          'non-NotI',
         ),
     ),
-    ('donor insertion',
-        ('uses PAM-distal homology',
-         'uses PAM-proximal homology',
-         'neither homology arm used, +',
-         'neither homology arm used, -',
-         'uses PAM-distal homology (no SNVs)',
-         'uses PAM-proximal homology (no SNVs)',
-         'neither homology arm used (no SNVs)',
-         'uses both homology arms',
-         'uses both homology arms (no SNVs)',
-         'neither homology arm used, + (no SNVs)',
-         'neither homology arm used, - (no SNVs)',
-         'non-homologous, +',
-         'non-homologous, -',
-        ),
+    ('donor misintegration',
+        donor_misintegration_subcategories,
     ),
     ('complex templated insertion',
         ('genomic',
