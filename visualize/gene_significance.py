@@ -91,69 +91,110 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
 
     df['interval_bottom'], df['interval_top'] = utilities.clopper_pearson_fast(df['outcome_count'], df['total_UMIs'])
 
+    df['log2_fold_change_interval_bottom'] = np.maximum(-6, np.log2(df['interval_bottom'] / nt_fraction))
+    df['log2_fold_change_interval_top'] = np.minimum(5, np.log2(df['interval_top'] / nt_fraction))
+
+    for direction in ['down', 'up']:
+        df[f'gene_p_{direction}'] = np.array([corrected_ps.loc[row['gene'], direction] for guide, row in df.iterrows()])
+
     return df, nt_fraction, corrected_ps
 
-def compute_table(base_dir, pool_names, outcome_groups, pickle_fn, initial_dataset=None, initial_outcome=None, progress=None):
+def compute_table(base_dir, pool_names, outcome_groups,
+                  pickle_fn=None,
+                  initial_dataset=None,
+                  initial_outcome=None,
+                  progress=None,
+                  use_short_names=False,
+                 ):
     if progress is None:
         progress = utilities.identity
-
-    if initial_dataset is None:
-        initial_dataset = pool_names[0]
-    if initial_outcome is None:
-        initial_outcome = outcome_groups[0][0]
 
     all_columns = {}
     nt_fractions = {}
 
-    column_names = ['frequency', 'ys', 'total_UMIs', 'gene_p_up', 'gene_p_down']
+    column_names = ['log2_fold_change', 'frequency', 'ys', 'total_UMIs', 'gene_p_up', 'gene_p_down']
+    outcome_names = []
+
+    guide_to_gene = {}
 
     for pool_name in progress(pool_names):
         pool = pooled_screen.PooledScreen(base_dir, pool_name)
+
+        if use_short_names:
+            name_to_use = pool.short_name
+        else:
+            name_to_use = pool_name
         
-        for outcome_name, is_eligible in progress(outcome_groups):
-            outcomes = [csd for csd in pool.outcome_counts('perfect').index.values if is_eligible(csd)]
+        for outcome_specification in progress(outcome_groups):
+            if isinstance(outcome_specification, tuple) and len(outcome_specification) == 3:
+                # It is a just a single outcome.
+                outcome_name = '_'.join(outcome_specification)
+                outcomes = [outcome_specification]
+            elif len(outcome_specification) == 2:
+                outcome_name, rule = outcome_specification
+                if callable(rule):
+                    outcomes = rule(pool)
+                else:
+                    if isinstance(rule, tuple) and len(rule) == 3:
+                        # It is a just a single outcome.
+                        outcomes = [rule]
+                    else:
+                        # a list of outcomes
+                        outcomes = rule
+            
+            outcome_names.append(outcome_name)
+
             df, nt_fraction, p_df = get_outcome_statistics(pool, outcomes)
+
+            guide_to_gene.update(df['gene'].items())
 
             df['x'] = np.arange(len(df))
             df['xs'] = [[x, x] for x in df['x']]
-
-            clopper_pairs = [utilities.clopper_pearson(row['outcome_count'], row['total_UMIs']) for _, row in df.iterrows()]
-            df['ys'] = [[r - b, r + a] for r, (b, a) in zip(df['frequency'], clopper_pairs)]
-            for direction in ['down', 'up']:
-                df[f'gene_p_{direction}'] = np.array([p_df.loc[pool.guide_to_gene(guide), direction] for guide in df.index])
+            df['ys'] = [[row['interval_bottom'], row['interval_top']] for _, row in df.iterrows()]
 
             for col_name in column_names:
-                all_columns[f'{pool_name}_{outcome_name}_{col_name}'] = df[col_name]
+                #all_columns[f'{pool_name}_{outcome_name}_{col_name}'] = df[col_name]
+                all_columns[f'{name_to_use}_{outcome_name}', col_name] = df[col_name]
                 
-            nt_fractions[f'{pool_name}_{outcome_name}'] = nt_fraction
+            nt_fractions[f'{name_to_use}_{outcome_name}'] = nt_fraction
             
     full_df = pd.DataFrame(all_columns)
 
-    for col_name in column_names:
-        full_df[col_name] = full_df[f'{initial_dataset}_{initial_outcome}_{col_name}']
+    if initial_dataset is None:
+        initial_dataset = pool_names[0]
+    if initial_outcome is None:
+        initial_outcome = outcome_names[0]
+
+    #for col_name in column_names:
+    #    full_df[col_name] = full_df[f'{initial_dataset}_{initial_outcome}_{col_name}']
 
     color_list = [c for i, c in enumerate(bokeh.palettes.Category10[10]) if i != 7]
     grey = bokeh.palettes.Category10[10][7]
 
-    gene_to_color = {g: color_list[i % len(color_list)] if g != 'negative_control' else grey for i, g in enumerate(pool.genes)}
+    gene_to_color = {g: color_list[i % len(color_list)] if g != 'negative_control' else grey for i, g in enumerate(pool.variable_guide_library.genes)}
 
-    full_df['color'] = [gene_to_color[pool.guide_to_gene(guide)] for guide in df.index]
+    #full_df['color'] = [gene_to_color[row['gene']] for guide, row in df.iterrows()]
     full_df.index.name = 'guide'
 
-    for common_key in ['gene', 'x', 'xs']:
+    for common_key in ['x', 'xs']:
         full_df[common_key] = df[common_key]
+
+    full_df['gene'] = pd.Series(guide_to_gene)
 
     to_pickle = {
         'pool_names': pool_names,
-        'outcome_names': [name for name, _ in outcome_groups],
+        'outcome_names': outcome_names,
         'full_df': full_df,
         'nt_fractions': nt_fractions,
         'initial_dataset': initial_dataset,
         'initial_outcome': initial_outcome,
     }
 
-    with open(pickle_fn, 'wb') as fh:
-        pickle.dump(to_pickle, fh)
+    if pickle_fn is not None:
+        with open(pickle_fn, 'wb') as fh:
+            pickle.dump(to_pickle, fh)
+    
+    return to_pickle
 
 def scatter(pickle_fn,
             plot_width=2000,
@@ -465,33 +506,58 @@ def gene_significance(pool, outcomes, draw_outcomes=False, p_val_threshold=0.05,
 
 def gene_significance_simple(pool, outcomes,
                              p_val_threshold=1e-4,
-                             as_percentage=False,
+                             quantity_to_plot='frequency',
                              draw_fold_change_grid=False,
                              fixed_guide='none',
                              denominator_outcomes=None,
                              max_num_to_label=50,
                              title=None,
+                             label_by='significance',
+                             figsize=(27, 6),
+                             y_lims=None,
+                             genes_to_label=None,
+                             manual_label_offsets=None,
                             ):
+
+    if manual_label_offsets is None:
+        manual_label_offsets = {}
+
     df, nt_fraction, p_df = get_outcome_statistics(pool, outcomes, fixed_guide=fixed_guide, denominator_outcomes=denominator_outcomes)
+
     df['x'] = np.arange(len(df))
 
-    if as_percentage:
+    if quantity_to_plot == 'frequency':
+        y_key = 'frequency'
+        bottom_key = 'interval_bottom'
+        top_key = 'interval_top'
+        nt_value = nt_fraction
+        y_label = 'fraction of outcomes'
+
+    elif quantity_to_plot == 'percentage':
         nt_percentage = nt_fraction * 100
         df['percentage'] = df['frequency'] * 100
         df['percentage_interval_bottom'] = df['interval_bottom'] * 100
         df['percentage_interval_top'] = df['interval_top'] * 100
 
-        frequency_key = 'percentage'
+        y_key = 'percentage'
         bottom_key = 'percentage_interval_bottom'
         top_key = 'percentage_interval_top'
         nt_value = nt_percentage
         y_label = 'percentage of outcomes'
+
+    elif quantity_to_plot == 'log2_fold_change':
+        nt_value = 0
+        y_key = 'log2_fold_change'
+        bottom_key = 'log2_fold_change_interval_bottom'
+        top_key = 'log2_fold_change_interval_top'
+        y_label = 'log2 fold change'
+
+    if y_lims is not None:
+        min_y, max_y = y_lims
     else:
-        frequency_key = 'frequency'
-        bottom_key = 'interval_bottom'
-        top_key = 'interval_top'
-        nt_value = nt_fraction
-        y_label = 'fraction of outcomes'
+        enough_UMIs = df['total_UMIs'] > 500
+        min_y = df.loc[enough_UMIs, bottom_key].min() * 1.1
+        max_y = df.loc[enough_UMIs, top_key].max() * 1.1
 
     if denominator_outcomes is not None:
         y_label = 'relative ' + y_label
@@ -500,38 +566,82 @@ def gene_significance_simple(pool, outcomes,
 
     gene_to_color = {g: f'C{i % 10}' for i, g in enumerate(pool.variable_guide_library.genes)}
 
-    fig, ax = plt.subplots(figsize=(27, 6))
+    fig, ax = plt.subplots(figsize=figsize)
 
     global_max_y = 0
 
-    ordered = p_df.min(axis=1).sort_values()
-    below_threshold = ordered[ordered <= p_val_threshold]
-    genes_to_label = set(below_threshold.index[:max_num_to_label])
-
-    for gene in genes_to_label:
-        gene_rows = df.query('gene == @gene')
-
-        x = gene_rows['x'].mean()
-        if p_df.loc[gene, 'up'] <= p_df.loc[gene, 'down']:
-            y = gene_rows[top_key].max()
-            va = 'bottom'
-            y_offset = 5
+    gene_label_size = 8
+    if genes_to_label is not None:
+        all_genes_to_label = set(genes_to_label)
+        gene_label_size = 12
+    elif label_by == 'significance':
+        ordered = p_df.min(axis=1).sort_values()
+        below_threshold = ordered[ordered <= p_val_threshold]
+        all_genes_to_label = set(below_threshold.index[:max_num_to_label])
+    else:
+        if quantity_to_plot == 'log2_fold_change':
+            magnitude = df['log2_fold_change']
         else:
-            y = gene_rows[bottom_key].min()
-            va = 'top'
-            y_offset = -5
+            magnitude = df['frequency'] - nt_fraction
+           
+        guide_order = np.abs(magnitude).sort_values(ascending=False).index
+        gene_order = df['gene'].loc[guide_order].unique()
+        all_genes_to_label = set(gene_order[:max_num_to_label])
 
-        ax.annotate(gene,
-                    xy=(x, y),
-                    xytext=(0, y_offset),
-                    textcoords='offset points',
-                    size=8,
-                    color=gene_to_color[gene],
-                    va=va,
-                    ha='center',
-                    )
+    for direction in ['up', 'down']:
+        if direction == 'up':
+            other_direction = 'down'
+        else:
+            other_direction = 'up'
 
-    guides_to_label = set(pool.variable_guide_library.gene_guides(genes_to_label))
+        correct_direction_genes = set(p_df[p_df[direction] < p_df[other_direction]].index)
+        genes_to_label = all_genes_to_label & correct_direction_genes
+
+        blocks = []
+        current_block = []
+
+        for gene in p_df.index:
+            if not gene in genes_to_label:
+                if len(current_block) > 0:
+                    blocks.append(current_block)
+                current_block = []
+            else:
+                current_block.append(gene)
+
+        for block in blocks:
+            block_rows = df.query('gene in @block')
+            if direction == 'up':
+                y = block_rows[top_key].max()
+                va = 'bottom'
+                y_offset = 5
+            else:
+                y = block_rows[bottom_key].min()
+                va = 'top'
+                y_offset = -5
+
+            y = max(y, min_y)
+            y = min(y, max_y)
+
+            for gene_i, gene in enumerate(block):
+                gene_rows = df.query('gene == @gene')
+
+                x = gene_rows['x'].mean()
+                
+                extra_offset = manual_label_offsets.get(gene, 0)
+
+                total_offset = (1.5 * gene_i + 1 + extra_offset) * y_offset
+
+                ax.annotate(gene,
+                            xy=(x, y),
+                            xytext=(0, total_offset),
+                            textcoords='offset points',
+                            size=gene_label_size,
+                            color=gene_to_color[gene],
+                            va=va,
+                            ha='center',
+                           )
+
+    guides_to_label = set(pool.variable_guide_library.gene_guides(all_genes_to_label))
 
     colors = df['gene'].map(gene_to_color)
 
@@ -543,9 +653,9 @@ def gene_significance_simple(pool, outcomes,
     line_alphas = [0.3 if guide in guides_to_label else 0.15 for guide in df.index]
     line_colors[:, 3] = line_alphas
 
-    ax.scatter('x', frequency_key, data=df, s=15, c=point_colors, linewidths=(0,))
+    ax.scatter('x', y_key, data=df, s=15, c=point_colors, linewidths=(0,))
 
-    for x, y, label in zip(df['x'], df[frequency_key], labels):
+    for x, y, label in zip(df['x'], df[y_key], labels):
         if label in guides_to_label:
             ax.annotate(label.split('_')[-1],
                         xy=(x, y),
@@ -554,12 +664,10 @@ def gene_significance_simple(pool, outcomes,
                         size=6,
                         color=colors[x],
                         va='center',
+                        annotation_clip=False,
                        )
 
-    if as_percentage:
-        label = f'{nt_fraction:0.2%}'
-    else:
-        label = f'{nt_fraction:0.2f}'
+    label = f'{nt_fraction:0.2%}'
 
     ax.annotate(label,
                 xy=(1, nt_value),
@@ -580,7 +688,10 @@ def gene_significance_simple(pool, outcomes,
         x = row['x']
         ax.plot([x, x], [row[bottom_key], row[top_key]], color=line_colors[x])
 
-    ax.set_ylim(0, global_max_y)
+    if quantity_to_plot != 'log2_fold_change':
+        ax.set_ylim(0, global_max_y)
+    else:
+        ax.set_ylim(min_y, max_y)
 
     ax.axhline(nt_value, color='black', alpha=0.5)
 
@@ -615,7 +726,7 @@ def gene_significance_simple(pool, outcomes,
     boundaries = list(np.array(first_letter_xs) - 0.5) + [len(df) - 1 + 0.5]
     mean_xs = {l: np.mean(xs) for l, xs in letter_xs.items()}
 
-    ax.set_xticks(boundaries)
+    ax.set_xticks(boundaries[1:-1])
     ax.set_xticklabels([])
 
     for l, x in mean_xs.items():
@@ -624,16 +735,22 @@ def gene_significance_simple(pool, outcomes,
         ax.annotate(l,
                     xy=(x, 0),
                     xycoords=('data', 'axes fraction'),
-                    xytext=(0, -12),
+                    xytext=(0, -18),
                     textcoords='offset points',
                     ha='center',
                     va='center',
                 )
 
-    ax.set_xlim(-0.005 * len(df), 1.005 * len(df))
+    ax.set_xlim(-0.005 * len(df), len(df))
 
     if title is None:
         title = pool.group
+    
+    if title == '':
+        title = pool.group
+        alpha = 0
+    else:
+        alpha = 1
 
     ax.annotate(title,
                 xy=(0.5, 1),
@@ -643,13 +760,17 @@ def gene_significance_simple(pool, outcomes,
                 ha='center',
                 va='center',
                 size=16,
+                alpha=alpha,
                )
 
     ax.set_ylabel(y_label, size=12)
 
     ax.set_xlabel('guides (alphabetical order)', labelpad=20, size=12)
+
+    for side in ['top', 'bottom', 'right']:
+        ax.spines[side].set_visible(False)
     
-    return fig, df
+    return fig, df, p_df
 
 def genetics_of_stat(stat_series,
                      pool,
@@ -658,8 +779,9 @@ def genetics_of_stat(stat_series,
                      y_label=None,
                     ):
     stat_series = pd.Series(stat_series)
-    nt_value = stat_series['non-targeting']
-    df = pd.DataFrame(stat_series, columns=['stat']).drop(index='non-targeting')
+    stat_series.name = 'stat'
+    nt_value = stat_series[pooled_screen.ALL_NON_TARGETING]
+    df = pd.DataFrame(stat_series, columns=['stat']).drop(index=pooled_screen.ALL_NON_TARGETING)
     df['gene'] = [pool.variable_guide_library.guide_to_gene[g] for g in df.index]
     df['x'] = np.arange(len(df))
 

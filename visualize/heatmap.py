@@ -22,9 +22,55 @@ good_colors = (category10[2:7] + category10[8:] + accent[:3] + accent[4:])*100
 
 colors_list = [[c]*10 for c in good_colors]
 
+def add_fold_change_colorbar(fig, im, x0, y0, width, height):
+    cbar_ax = fig.add_axes((x0, y0, width, height)) 
+
+    v_min, v_max = im.get_clim()
+    ticks = np.arange(v_min, v_max + 1)
+    cbar = plt.colorbar(im, cax=cbar_ax, orientation='horizontal', ticks=ticks)
+
+    tick_labels = [str(int(t)) for t in ticks]
+    tick_labels[0] = r'$\leq$' + tick_labels[0]
+    tick_labels[-1] = r'$\geq$' + tick_labels[-1]
+    cbar.set_ticklabels(tick_labels)
+    cbar_ax.xaxis.tick_top()
+
+    cbar_ax.annotate('gene activity\npromotes outcome',
+                     xy=(0, 0),
+                     xycoords='axes fraction',
+                     xytext=(0, -5),
+                     textcoords='offset points',
+                     ha='center',
+                     va='top',
+                     #size=10,
+                    )
+
+    cbar_ax.annotate('gene activity\nsuppresses outcome',
+                     xy=(1, 0),
+                     xycoords='axes fraction',
+                     xytext=(0, -5),
+                     textcoords='offset points',
+                     ha='center',
+                     va='top',
+                     #size=10,
+                    )
+
+    cbar_ax.annotate('log2 fold change in\nfrequency from non-targeting',
+                     xy=(0.5, 1),
+                     xycoords='axes fraction',
+                     xytext=(0, 20),
+                     textcoords='offset points',
+                     va='bottom',
+                     ha='center',
+                    )
+
+    cbar.outline.set_alpha(0.1)
+
+    return cbar
+
 def genes(pool,
           genes,
-          fixed_guide=None,
+          fixed_guide='none',
           heatmap_pools=None,
           pools_to_compare=None,
           only_best_promoter=False,
@@ -52,13 +98,15 @@ def genes(pool,
           guide_aliases=None,
           gene_to_sort_by=None,
           show_ax_titles=True,
+          overall_title=None,
+          use_high_frequency=False,
          ):
 
     if heatmap_pools is None:
         heatmap_pools = [(pool, fixed_guide)]
 
     colors = itertools.cycle(bokeh.palettes.Set2[8])
-    pool_to_color = {(p.group, fg): color for (p, fg), color in zip(heatmap_pools, colors)}
+    pool_to_color = {(p.group, fixed_guide): color for (p, fixed_guide), color in zip(heatmap_pools, colors)}
 
     if guide_aliases is None:
         guide_aliases = {}
@@ -101,7 +149,7 @@ def genes(pool,
                 'log2_fold_change' if log_2 else 'fold_change',
             ]
 
-    if pools_to_compare is not None:
+    if pools_to_compare is not None and 'log2_between_pools' not in ax_order:
         ax_order.append('log2_between_pools')
 
     if outcomes is None:
@@ -115,10 +163,21 @@ def genes(pool,
     if outcome_group_sizes is None:
         outcome_group_sizes = auto_outcome_group_sizes
 
+    if use_high_frequency:
+        def get_log2_fold_changes(p, f=fixed_guide):
+            return p.high_frequency_log2_fold_changes[f]
+        def get_outcome_fractions(p, f=fixed_guide):
+            return p.high_frequency_outcome_fractions[f]
+    else:
+        def get_log2_fold_changes(p, f=fixed_guide):
+            return p.log2_fold_changes(guide_status, f)[f]
+        def get_outcome_fractions(p, f=fixed_guide):
+            return p.outcome_fractions(guide_status)[f]
+
     if gene_to_sort_by is not None:
         guides = pool.variable_guide_library.gene_guides(gene_to_sort_by)
         guides = [g for g in guides if g not in bad_guides]
-        fcs = pool.log2_fold_changes('perfect', fixed_guide)[fixed_guide].loc[outcome_order, guides]
+        fcs = get_log2_fold_changes(pool).loc[outcome_order, guides]
         average_fcs = fcs.mean(axis=1)
         outcome_order = average_fcs.sort_values().index.values
 
@@ -162,17 +221,19 @@ def genes(pool,
         return color
 
     def get_nt_fractions(pool, fixed_guide):
-        return pool.non_targeting_fractions('all', fixed_guide).reindex(outcome_order, fill_value=0)
+        if use_high_frequency:
+            return pool.high_frequency_outcome_fractions[fixed_guide, 'all_non_targeting'].reindex(outcome_order, fill_value=0)
+        else:
+            return pool.non_targeting_fractions('all', fixed_guide).reindex(outcome_order, fill_value=0)
 
-    fractions = pool.outcome_fractions(guide_status)[fixed_guide].reindex(outcome_order, fill_value=0)
+    fractions = get_outcome_fractions(pool).reindex(outcome_order, fill_value=0)
     nt_fracs = get_nt_fractions(pool, fixed_guide)
     absolute_change = fractions.sub(nt_fracs, axis=0)
-    fold_changes = pool.fold_changes(guide_status, fixed_guide).reindex(outcome_order, fill_value=1)
-    log2_fold_changes = pool.log2_fold_changes(guide_status, fixed_guide)[fixed_guide].reindex(outcome_order, fill_value=0)
+    log2_fold_changes = get_log2_fold_changes(pool).reindex(outcome_order, fill_value=0)
     
     if draw_nt_fracs == 'combined':
         for heatmap_pool, heatmap_fixed_guide in heatmap_pools:
-            outcome_fractions = heatmap_pool.outcome_fractions('perfect')[heatmap_fixed_guide].reindex(outcome_order, fill_value=0)
+            outcome_fractions = get_outcome_fractions(heatmap_pool, heatmap_fixed_guide).reindex(outcome_order, fill_value=0)
             nt_guides = heatmap_pool.variable_guide_library.non_targeting_guides
             for key in ('frequency', 'frequency_zoom', 'log10_frequency'):
                 if key in axs:
@@ -199,11 +260,10 @@ def genes(pool,
 
         if 'log2_between_pools' in axs:
             numerator_pool, denominator_pool = pools_to_compare
-            numerator_fracs = get_nt_fractions(numerator_pool)
-            denominator_fracs = get_nt_fractions(denominator_pool)
+            numerator_fracs = get_nt_fractions(numerator_pool, fixed_guide)
+            denominator_fracs = get_nt_fractions(denominator_pool, fixed_guide)
             xs = np.log2(numerator_fracs / denominator_fracs)
             dot_and_line(xs, axs['log2_between_pools'], 'black', 'between', line_width=1.5, line_alpha=0.9, marker_alpha=1, marker_size=4)
-
         
     if genes_to_plot is None:
         genes_to_plot = genes
@@ -233,16 +293,13 @@ def genes(pool,
             else:
                 kwargs = dict()
 
-            if 'fold_change' in axs:
-                dot_and_line(fold_changes[guide], axs['fold_change'], color, label, **kwargs)
-
             if 'log2_fold_change' in axs:
                 dot_and_line(log2_fold_changes[guide], axs['log2_fold_change'], color, label, **kwargs)
         
         for key in ('frequency', 'frequency_zoom', 'log10_frequency'):
             if key in axs:
                 if highlight_targeting_guides:
-                    if pool.variable_guide_library.guide_to_gene(guide) == 'negative_control':
+                    if pool.variable_guide_library.guide_to_gene[guide] == 'negative_control':
                         kwargs = dict(line_alpha=0.15, marker_size=2)
                         color = 'C0'
                     else:
@@ -372,7 +429,7 @@ def genes(pool,
                 if first_gene is None:
                     first_gene = gene
                 
-                vals = heatmap_pool.log2_fold_changes(guide_status, heatmap_fixed_guide)[heatmap_fixed_guide].reindex(outcome_order[::-1], fill_value=0)[gene_guides]
+                vals = get_log2_fold_changes(heatmap_pool, heatmap_fixed_guide).reindex(outcome_order[::-1], fill_value=0)[gene_guides]
                 
                 num_rows, num_cols = vals.shape
             
@@ -510,8 +567,6 @@ def genes(pool,
                             ha='center',
                             )
     
-    #plt.draw()
-
     for key in ['frequency_zoom', 'change_zoom', 'fold_change']:
         if key in axs:
             axs[key].set_xticklabels(list(axs[key].get_xticklabels())[:-1] + [''])
@@ -542,7 +597,10 @@ def genes(pool,
 
 
     if show_pool_name:
-        diagram_ax.annotate(pool.group,
+        if overall_title is None:
+            overall_title = pool.group
+        
+        diagram_ax.annotate(overall_title,
                             xy=(0.5, 1),
                             xycoords='axes fraction',
                             xytext=(0, 25),
@@ -1035,9 +1093,8 @@ def big_heatmap(pool_list,
 
         heatmap_ax.set_yticks([])
 
-        #heatmap_ax.set_xticks(np.arange(cols))
-        #heatmap_ax.set_xticklabels(guide_order, rotation=90, size=6)
-        heatmap_ax.set_xticks([])
+        heatmap_ax.set_xticks(np.arange(cols))
+        heatmap_ax.set_xticklabels(guide_order, rotation=90, size=6)
         heatmap_ax.xaxis.set_tick_params(labeltop=True)
 
         #if cluster_guides:
@@ -1117,16 +1174,16 @@ def big_heatmap(pool_list,
 
     return fig
 
-def cluster(pool, outcomes, guides, metric='correlation', method='single'):
+def cluster(pool, outcomes, guides, metric='correlation', method='single', fixed_guide='none'):
     if isinstance(outcomes, int):
-        outcomes = pool.most_frequent_outcomes('none')[:outcomes]
+        outcomes = pool.most_frequent_outcomes(fixed_guide)[:outcomes]
 
-    l2_fcs = pool.log2_fold_changes('perfect', 'none')['none'].loc[outcomes]
+    l2_fcs = pool.log2_fold_changes('perfect', fixed_guide)[fixed_guide].loc[outcomes]
     jitter = np.random.normal(0, 1e-6, l2_fcs.shape)
     l2_fcs = l2_fcs + jitter
 
     if isinstance(guides, int):
-        phenotype_strengths = pool.chi_squared_per_guide(outcomes)
+        phenotype_strengths = pool.chi_squared_per_guide(outcomes, fixed_guide=fixed_guide)
         guides = phenotype_strengths.index[:guides]
 
     guide_linkage = scipy.cluster.hierarchy.linkage(l2_fcs[guides].T,
@@ -1157,7 +1214,7 @@ def cluster(pool, outcomes, guides, metric='correlation', method='single'):
 
     return guide_order, outcome_order, correlations
 
-def bokeh_heatmap(pool, num_outcomes=50, num_guides=None, cmap='RdBu_r', **kwargs):
+def bokeh_heatmap(pool, num_outcomes=50, num_guides=200, cmap='RdBu_r', **kwargs):
     guide_order, outcome_order, correlations = cluster(pool, num_outcomes, num_guides, **kwargs)
 
     c_map = plt.get_cmap(cmap)
@@ -1383,6 +1440,5 @@ def doubles_heatmap(pool, outcome, subtract_nt=False):
 
     diagram_ax = fig.add_axes((ax_p.x0 - 0.12, ax_p.y0 + ax_p.height * 0.4, ax_p.width * 0.1, ax_p.height * 0.15))
     outcome_diagrams.plot([outcome], pool.target_info, draw_wild_type_on_top=True, window=20, ax=diagram_ax)
-
 
     return fig, fcs

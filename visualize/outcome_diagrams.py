@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
 import hits.utilities
@@ -21,11 +22,16 @@ def plot(outcome_order,
          draw_wild_type_on_top=False,
          draw_donor_on_top=False,
          text_size=8,
+         fixed_guide='none',
+         features_to_draw=None,
         ):
     if isinstance(window, int):
         window_left, window_right = -window, window
     else:
         window_left, window_right = window
+
+    if features_to_draw is None:
+        features_to_draw = []
 
     window_size = window_right - window_left
 
@@ -39,7 +45,7 @@ def plot(outcome_order,
     else:
         fig = ax.figure
 
-    guide = target_info.features[target_info.target, target_info.sgRNA]
+    guide = target_info.features[target_info.target, target_info.primary_sgRNA]
 
     if flip_if_reverse and guide.strand == '-':
         flip = True
@@ -106,6 +112,12 @@ def plot(outcome_order,
 
     block_alpha = 0.1
     wt_height = 0.6
+
+    #for feature_name in ['gDNA_reverse_primer']:
+    #    feature = target_info.features[target_info.target, feature_name]
+
+    #    y = num_outcomes
+    #    draw_rect(feature.start - offset - 0.5, feature.end - offset + 0.5, y - wt_height / 2, y + wt_height / 2, 0.9, color=feature.attribute['color']) 
 
     def draw_sequence(y, xs_to_skip=None, alpha=0.1):
         if xs_to_skip is None:
@@ -179,14 +191,23 @@ def plot(outcome_order,
 
         return xs_to_skip
 
-    def draw_wild_type(y, on_top=False):
-        PAM_start = target_info.PAM_slice.start - 0.5 - offset
-        PAM_end = target_info.PAM_slice.stop + 0.5 - 1 - offset
+    def draw_wild_type(y, on_top=False, guides_to_draw=None):
+        if guides_to_draw is None:
+            guides_to_draw = [target_info.primary_sgRNA]
 
-        draw_rect(guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='blue')
-        draw_rect(PAM_start, PAM_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='green')
+        for guide_name in guides_to_draw:
+            PAM_start = target_info.PAM_slices[guide_name].start - 0.5 - offset
+            PAM_end = target_info.PAM_slices[guide_name].stop + 0.5 - 1 - offset
+
+            guide = target_info.features[target_info.target, guide_name]
+            guide_start = guide.start - 0.5 - offset
+            guide_end = guide.end + 0.5 - offset
+
+            draw_rect(guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='blue')
+            draw_rect(PAM_start, PAM_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='green')
 
         if not on_top:
+            # Draw grey blocks. Needs to be updated to support multiple sgRNAs.
             draw_rect(window_left - 0.5, min(PAM_start, guide_start), y - wt_height / 2, y + wt_height / 2, block_alpha)
             draw_rect(max(PAM_end, guide_end), window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
 
@@ -417,7 +438,7 @@ def plot(outcome_order,
         draw_donor(num_outcomes + 0.75, HDR_outcome, None, on_top=True)
 
     if draw_wild_type_on_top:
-        draw_wild_type(num_outcomes, on_top=True)
+        draw_wild_type(num_outcomes, on_top=True, guides_to_draw=target_info.sgRNAs)
         ax.set_xticks([])
                 
     x_lims = [window_left - 0.5, window_right + 0.5]
@@ -446,19 +467,18 @@ def plot(outcome_order,
     
     return fig
 
-def add_frequencies(fig, ax, count_source, outcome_order, text_only=False):
-    ax_p = ax.get_position()
-    
-    width = 0.2
-    offset = 0.04
-
-    if isinstance(count_source, dict):
+def add_frequencies(fig, ax, count_source, outcome_order, fixed_guide='none', text_only=False):
+    if isinstance(count_source, (dict, pd.Series)):
         counts = np.array([count_source[outcome] for outcome in outcome_order])
-        freqs = counts / sum(count_source.values())
+        if isinstance(count_source, dict):
+            total = sum(count_source.values())
+        else:
+            total = sum(count_source.values)
+        freqs = counts / total
     else:
         pool = count_source
-        freqs = pool.non_targeting_fractions('perfect').loc[outcome_order]
-        counts = pool.non_targeting_counts('perfect').loc[outcome_order]
+        freqs = pool.non_targeting_fractions('perfect', fixed_guide).loc[outcome_order]
+        counts = pool.non_targeting_counts('perfect', fixed_guide).loc[outcome_order]
 
     ys = np.arange(len(outcome_order) - 1, -1, -1)
     
@@ -474,19 +494,27 @@ def add_frequencies(fig, ax, count_source, outcome_order, text_only=False):
                    )
 
     if not text_only:
-        freq_ax = fig.add_axes((ax_p.x1 + 6 * offset, ax_p.y0, width, ax_p.height), sharey=ax)
+        ax_p = ax.get_position()
+        
+        width_inches, height_inches = fig.get_size_inches()
+
+        width = 2 / width_inches
+        gap = 0.5 / width_inches
+
+        freq_ax = fig.add_axes((ax_p.x1 + 4 * gap, ax_p.y0, width, ax_p.height), sharey=ax)
         freq_ax_p = freq_ax.get_position()
-        log_ax = fig.add_axes((freq_ax_p.x1 + offset, ax_p.y0, width, ax_p.height), sharey=ax)
+        log_ax = fig.add_axes((freq_ax_p.x1 + gap, ax_p.y0, width, ax_p.height), sharey=ax)
         log_ax_p = log_ax.get_position()
-        cumulative_ax = fig.add_axes((log_ax_p.x1 + offset, ax_p.y0, width, ax_p.height), sharey=ax)
+        cumulative_ax = fig.add_axes((log_ax_p.x1 + gap, ax_p.y0, width, ax_p.height), sharey=ax)
         
         freq_ax.plot(freqs, ys, 'o-', markersize=2, color='black')
         log_ax.plot(np.log10(freqs), ys, 'o-', markersize=2, color='black')
-        cumulative_ax.plot(freqs.cumsum(), ys, 'o-', markersize=2, color='black')
+
+        cumulative = freqs.cumsum()
+        cumulative_ax.plot(cumulative, ys, 'o-', markersize=2, color='black')
         
         freq_ax.set_xlim(0, max(freqs) * 1.05)
-        cumulative_ax.set_xlim(0, 1)
-        cumulative_ax.set_xticks([0, 0.25, 0.5, 0.75, 1])
+        cumulative_ax.set_xlim(0, cumulative[-1] * 1.05)
         
         for p_ax in [freq_ax, log_ax, cumulative_ax]:
             p_ax.set_yticks([])
@@ -531,8 +559,11 @@ def add_values(fig, ax, vals):
     
     ax.set_ylim(-0.5, len(vals) - 0.5)
 
-def plot_with_frequencies(pool, outcomes, text_only=False, **kwargs):
-    fig = plot(outcomes, pool.target_info, **kwargs)
+def plot_with_frequencies(pool, outcomes, fixed_guide='none', text_only=False, count_source=None, **kwargs):
+    if count_source is None:
+        count_source is pool
+
+    fig = plot(outcomes, pool.target_info, fixed_guide=fixed_guide, **kwargs)
     num_outcomes = kwargs.get('num_outcomes')
-    add_frequencies(fig, fig.axes[0], pool, outcomes[:num_outcomes], text_only=text_only)
+    add_frequencies(fig, fig.axes[0], count_source, outcomes[:num_outcomes], text_only=text_only)
     return fig

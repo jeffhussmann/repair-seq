@@ -17,7 +17,7 @@ from . import outcome_diagrams
 
 def outcome(outcome,
             pool,
-            fixed_guide=None,
+            fixed_guide='none',
             p_cutoff=4,
             num_to_label=20,
             genes_to_label=None,
@@ -40,6 +40,7 @@ def outcome(outcome,
             non_targeting_label_location='floating',
             avoid_label_overlap=False,
             flip_axes=False,
+            draw_intervals=True,
            ):
     if guide_aliases is None:
         guide_aliases = {}
@@ -71,11 +72,10 @@ def outcome(outcome,
 
     quantity_to_axis = hits.utilities.reverse_dictionary(axis_to_quantity)
 
-    UMI_counts = pool.UMI_counts(guide_status)#[fixed_guide]
+    UMI_counts = pool.UMI_counts(guide_status).xs(fixed_guide, level=0, drop_level=False)
     max_cells = max(UMI_counts)
 
-    granular_df = pool.outcome_counts(guide_status)#[fixed_guide]
-    non_targeting = pool.variable_guide_library.non_targeting_guides
+    granular_df = pool.outcome_counts(guide_status).xs(fixed_guide, level=0, axis=1, drop_level=False)
 
     if isinstance(outcome, tuple):
         nt_fraction = pool.non_targeting_fractions(guide_status, fixed_guide)[outcome]
@@ -139,7 +139,7 @@ def outcome(outcome,
 
     df['fixed_gene'] = [pool.fixed_guide_library.guide_to_gene[f_g] for f_g, v_g in df.index.values]
     df['variable_gene'] = [pool.variable_guide_library.guide_to_gene[v_g] for f_g, v_g in df.index.values]
-    
+
     if guide_subset is None:
         guide_subset = df.index
 
@@ -153,7 +153,7 @@ def outcome(outcome,
         return guide
 
     if isinstance(df.index, pd.core.index.MultiIndex):
-        if pool.fixed_guide_library.guides == ['none']:
+        if np.array_equal(pool.fixed_guide_library.guides, ['none']):
             df['alias'] = [convert_alias(v) for f, v in df.index]
         else:
             df['alias'] = [f'{convert_alias(f)}-{convert_alias(v)}' for f, v in df.index.values]
@@ -196,13 +196,14 @@ def outcome(outcome,
     df['label_color'] = 'black'
     #df.loc[df.query('significant').index, 'color'] = 'C1'
     df.loc[df.query('significant').index, 'color'] = 'silver'
-    df.loc[pool.non_targeting_guide_pairs, 'color'] = 'C0'
+    nt_guide_pairs = [(fg, vg) for fg, vg in pool.guide_combinations if fg == fixed_guide and vg in pool.variable_guide_library.non_targeting_guides]
+    df.loc[nt_guide_pairs, 'color'] = 'C0'
 
     if gene_to_color is not None:
         for gene, color in gene_to_color.items():
             # TODO: best promoter?
-            #gene_guides = df.query('fixed_gene == @gene or variable_gene == @gene').index
-            gene_guides = df.query('fixed_gene == @gene').index
+            gene_guides = df.query('fixed_gene == @gene or variable_gene == @gene').index
+            #gene_guides = df.query('fixed_gene == @gene').index
             df.loc[gene_guides, 'color'] = color
             df.loc[gene_guides, 'label_color'] = color
 
@@ -328,65 +329,66 @@ def outcome(outcome,
     #                        clip_on=False,
     #                        size=6,
     #                       )
-    if p_val_method == 'binomial':
-        # Draw grey lines at significance thresholds away from the bulk non-targeting fraction.
-        
-        cells = boundary_cells[1:]
+    if draw_intervals:
+        if p_val_method == 'binomial':
+            # Draw grey lines at significance thresholds away from the bulk non-targeting fraction.
+            
+            cells = boundary_cells[1:]
 
-        for fractions in [boundary_lower, boundary_upper]:
+            for fractions in [boundary_lower, boundary_upper]:
+                vals = {
+                    'num_cells': cells,
+                    fraction_key: fractions[cells] * fraction_scaling_factor,
+                }
+
+                xs = vals[axis_to_quantity['x']]
+                ys = vals[axis_to_quantity['y']]
+                
+                g.ax_joint.plot(xs, ys, color='black', alpha=0.3)
+
+            # Annotate the lines with their significance level.
+            x = int(np.floor(1.01 * max_cells))
+
+            cells = int(np.floor(0.8 * num_cells_max))
             vals = {
                 'num_cells': cells,
-                fraction_key: fractions[cells] * fraction_scaling_factor,
+                fraction_key: boundary_upper[cells] * fraction_scaling_factor,
             }
+            x = vals[axis_to_quantity['x']]
+            y = vals[axis_to_quantity['y']]
 
-            xs = vals[axis_to_quantity['x']]
-            ys = vals[axis_to_quantity['y']]
-            
-            g.ax_joint.plot(xs, ys, color='black', alpha=0.3)
+            if flip_axes:
+                annotate_kwargs = dict(
+                    xytext=(20, 0),
+                    ha='left',
+                    va='center',
+                )
+            else:
+                annotate_kwargs = dict(
+                    xytext=(0, 30),
+                    ha='center',
+                    va='bottom',
+                )
 
-        # Annotate the lines with their significance level.
-        x = int(np.floor(1.01 * max_cells))
-
-        cells = int(np.floor(0.8 * num_cells_max))
-        vals = {
-            'num_cells': cells,
-            fraction_key: boundary_upper[cells] * fraction_scaling_factor,
-        }
-        x = vals[axis_to_quantity['x']]
-        y = vals[axis_to_quantity['y']]
-
-        if flip_axes:
-            annotate_kwargs = dict(
-                xytext=(20, 0),
-                ha='left',
-                va='center',
-            )
-        else:
-            annotate_kwargs = dict(
-                xytext=(0, 30),
-                ha='center',
-                va='bottom',
-            )
-
-        g.ax_joint.annotate(f'p = $10^{{-{p_cutoff}}}$ significance threshold',
-                            xy=(x, y),
-                            xycoords='data',
-                            textcoords='offset points',
-                            color='black',
-                            size=10,
-                            arrowprops={'arrowstyle': '-',
-                                        'alpha': 0.5,
-                                        'color': 'black',
-                                        },
-                            **annotate_kwargs,
-                        )
+            g.ax_joint.annotate(f'p = $10^{{-{p_cutoff}}}$ significance threshold',
+                                xy=(x, y),
+                                xycoords='data',
+                                textcoords='offset points',
+                                color='black',
+                                size=10,
+                                arrowprops={'arrowstyle': '-',
+                                            'alpha': 0.5,
+                                            'color': 'black',
+                                            },
+                                **annotate_kwargs,
+                            )
         
     if non_targeting_label_location is None:
         pass
     else:
         if non_targeting_label_location == 'floating':
             floating_labels = [
-                #('individual non-targeting guides', 20, 'C0'),
+                ('individual non-targeting guides', -50, 'C0'),
                 #('{} p-value < 1e-{}'.format(p_val_method, p_cutoff), -25, 'C1'),
             ]
             for text, offset, color in floating_labels:
@@ -494,7 +496,7 @@ def outcome(outcome,
 
         legend_elements = [Line2D([0], [0], marker='o', color=color, label=f'{gene} fixed guide', linestyle='none') for gene, color in gene_to_color.items()]
         legend_elements.append(Line2D([0], [0], marker='o', color='C0', label=f'non-targeting in both positions', linestyle='none'))
-        g.ax_joint.legend(handles=legend_elements)
+        #g.ax_joint.legend(handles=legend_elements)
 
     if quantity_to_axis[fraction_key] == 'y':
         line_func = g.ax_joint.axhline
@@ -530,7 +532,7 @@ def outcome(outcome,
         if isinstance(outcome, tuple):
             outcomes_to_plot = [outcome]
         else:
-            outcomes_to_plot = list(pool.non_targeting_counts('perfect').loc[outcome].sort_values(ascending=False).index.values[:4])
+            outcomes_to_plot = list(pool.non_targeting_counts('perfect', fixed_guide).loc[outcome].sort_values(ascending=False).index.values[:4])
 
         diagram_height = ax_marg_x_p.height * 0.1 * len(outcomes_to_plot)
 
@@ -690,7 +692,7 @@ def guide(pool, gene, number,
     data['up'] = data['fracs'] > data['nt_fracs']
     data['down'] = data['fracs'] < data['nt_fracs']
 
-    data['significant'] = False
+    data['significant'] = data['lower_above_0'] | data['upper_below_0']
     #data.loc[data['significant_down'], 'color'] = 'C0'
     #data.loc[data['significant_up'], 'color'] = 'C3'
     colors = bokeh.palettes.Category10[10][1:3] + bokeh.palettes.Category10[10][4:]
