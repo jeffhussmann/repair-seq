@@ -1,14 +1,16 @@
 import shutil
 import itertools
 import gzip
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 import pysam
 import pandas as pd
+import h5py
+import numpy as np
 
 from hits import fastq, utilities, adapters
 from knock_knock import experiment, read_outcome, visualize, svg
-from ddr import prime_editing_layout
+from ddr import prime_editing_layout, pooled_layout
 
 class PrimeEditingExperiment(experiment.Experiment):
     def __init__(self, base_dir, group, name, **kwargs):
@@ -23,6 +25,7 @@ class PrimeEditingExperiment(experiment.Experiment):
         self.max_qual = 41
 
         self.fns['fastq'] = self.data_dir / self.description['fastq_fn']
+        self.fns['templated_insertion_details'] = self.fns['dir'] / 'templated_insertion_details.hdf5'
 
         self.outcome_fn_keys = ['outcome_list']
 
@@ -51,8 +54,9 @@ class PrimeEditingExperiment(experiment.Experiment):
                 self.generate_supplemental_alignments(read_type='trimmed', min_length=20)
                 self.combine_alignments(read_type='trimmed')
             elif stage == 'categorize':
-                self.categorize_outcomes(read_type='trimmed')
-                self.count_read_lengths()
+                #self.categorize_outcomes(read_type='trimmed')
+                #self.count_read_lengths()
+                self.extract_templated_insertion_info()
             elif stage == 'visualize':
                 lengths_fig = self.length_distribution_figure()
                 lengths_fig.savefig(self.fns['lengths_figure'], bbox_inches='tight')
@@ -194,6 +198,83 @@ class PrimeEditingExperiment(experiment.Experiment):
             im = visualize.make_stacked_Image(diagrams, titles='')
             fn = fns['length_range_figure'](length, length)
             im.save(fn)
+
+    def extract_templated_insertion_info(self):
+        fields = prime_editing_layout.LongTemplatedInsertionOutcome.int_fields
+        
+        lists = defaultdict(list)
+
+        with open(self.fns['outcome_list']) as outcomes_fh:
+            for line in outcomes_fh:
+                outcome = read_outcome.Outcome.from_line(line)
+            
+                if outcome.category == 'unintended donor integration':
+                    insertion_outcome = prime_editing_layout.LongTemplatedInsertionOutcome.from_string(outcome.details)
+                    
+                    for field in fields: 
+                        value = getattr(insertion_outcome, field)
+                        key = f'{outcome.category}/{outcome.subcategory}/{field}'
+                        lists[key].append(value)
+                            
+        with h5py.File(self.fns['templated_insertion_details'], 'w') as hdf5_file:
+            cat_and_subcats = {key.rsplit('/', 1)[0] for key in lists}
+            read_length = 258
+            for cat_and_subcat in cat_and_subcats:
+                left_key = f'{cat_and_subcat}/left_insertion_query_bound'
+                right_key = f'{cat_and_subcat}/right_insertion_query_bound'
+
+                lengths = []
+
+                for left, right in zip(lists[left_key], lists[right_key]):
+                    if right == read_length - 1:
+                        length = read_length
+                    else:
+                        length = right - left + 1
+
+                    lengths.append(length)
+
+                lengths_key = f'{cat_and_subcat}/insertion_length'
+
+                lists[lengths_key] = lengths
+
+            for key, value_list in lists.items():
+                hdf5_file.create_dataset(f'{key}/list', data=np.array(value_list))
+
+                counts = Counter(value_list)
+
+                if len(counts) == 0:
+                    values = np.array([], dtype=int)
+                    counts = np.array([], dtype=int)
+                else:
+                    values = np.array(sorted(counts))
+                    counts = np.array([counts[v] for v in values])
+
+                hdf5_file.create_dataset(f'{key}/values', data=values)
+                hdf5_file.create_dataset(f'{key}/counts', data=counts)
+
+    def templated_insertion_details(self, category, subcategories, field):
+        counts = Counter()
+
+        if isinstance(subcategories, str):
+            subcategories = [subcategories]
+
+        with h5py.File(self.fns[f'templated_insertion_details']) as f:
+            for subcategory in subcategories:
+                group = f'{category}/{subcategory}/{field}'
+                if group in f:
+                    counts.update(dict(zip(f[group]['values'], f[group]['counts'])))
+
+        if pooled_layout.NAN_INT in counts:
+            counts.pop(pooled_layout.NAN_INT)
+
+        if len(counts) == 0:
+            xs = np.array([])
+        else:
+            xs = np.arange(min(counts), max(counts) + 1)
+
+        ys = np.array([counts[x] for x in xs])
+
+        return xs, ys
 
 class PrimeEditingFixedOffsetExperiment(PrimeEditingExperiment):
     def preprocess(self):
