@@ -96,7 +96,7 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
     cmap = plt.get_cmap('PuOr_r')
     cmap.set_bad('white')
 
-    clusterd_guide_order, clustered_outcome_order, correlations = ddr.visualize.heatmap.cluster(pool,
+    clustered_guide_order, clustered_outcome_order, correlations = ddr.visualize.heatmap.cluster(pool,
                                                                              num_outcomes,
                                                                              guides,
                                                                              method='average',
@@ -117,7 +117,7 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
     size = 16 * len(guide_order) / 100
     fig, correlation_ax = plt.subplots(figsize=(size, size))
 
-    im = correlation_ax.imshow(masked, cmap=cmap, vmin=-1, vmax=1)
+    correlation_im = correlation_ax.imshow(masked, cmap=cmap, vmin=-1, vmax=1)
 
     correlation_ax.set_xticks([])
     correlation_ax.set_yticks([])
@@ -127,7 +127,7 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
 
     transform = matplotlib.transforms.Affine2D().rotate_deg(-45) + correlation_ax.transData
 
-    im.set_transform(transform)
+    correlation_im.set_transform(transform)
 
     diag_length = np.sqrt(2 * len(correlations)**2)
 
@@ -150,11 +150,31 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
                     size=6,
                 )
 
+    if upside_down:
+        title_kwargs = dict(
+            xy=(0.5, 0),
+            xytext=(0, -15),
+            va='top',
+        )
+    else:
+        title_kwargs = dict(
+            xy=(0.5, 1),
+            xytext=(0, 15),
+            va='bottom',
+        )
+
+    correlation_ax.annotate(pool.group,
+            xycoords='axes fraction',
+            textcoords='offset points',
+            ha='center',
+            **title_kwargs,
+    )
+
     ax_p = correlation_ax.get_position()
 
     # Draw correlation colorbar.
-    cbar_ax = fig.add_axes((ax_p.x1 - ax_p.width * 0.1, ax_p.y0 + ax_p.height * 0.4, ax_p.width * 0.01, ax_p.height * 0.3))
-    cbar = fig.colorbar(im, cax=cbar_ax, ticks=[-1, 0, 1])
+    cbar_ax = fig.add_axes((ax_p.x1 - ax_p.width * 0.1, ax_p.y0 + ax_p.height * 0.4, ax_p.width * 0.02, ax_p.height * 0.4))
+    cbar = fig.colorbar(correlation_im, cax=cbar_ax, ticks=[-1, 0, 1])
     cbar_ax.annotate('correlation\nbetween\noutcome\nredistribution\nprofiles',
                      xy=(1, 0.5),
                      xycoords='axes fraction',
@@ -164,16 +184,24 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
                      va='center',
                     )
 
+    cbar.outline.set_alpha(0.1)
+
     width = ax_p.width
     height = width * len(clustered_outcome_order) / len(guide_order)
     # Make gap equal to height for 5 outcome rows.
     gap = height / len(clustered_outcome_order) * 5
-    fc_ax = fig.add_axes((ax_p.x0, ax_p.y0 - height - gap, width, height))
+
+    if upside_down:
+        y0 = ax_p.y1 + gap
+    else:
+        y0 = ax_p.y0 - height - gap
+
+    fc_ax = fig.add_axes((ax_p.x0, y0, width, height))
 
     fcs = pool.log2_fold_changes('perfect', fixed_guide)[fixed_guide].loc[clustered_outcome_order, guide_order]
 
     heatmap_kwargs = dict(cmap=plt.get_cmap('RdBu_r'), vmin=-2, vmax=2)
-    fc_ax.imshow(fcs, **heatmap_kwargs)
+    heatmap_im = fc_ax.imshow(fcs, **heatmap_kwargs)
 
     fc_ax.axis('off')
 
@@ -189,18 +217,52 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
                               **layout_kwargs,
                              )
 
+    diagram_ax.set_title('distance from cut site (nts)', size=10, pad=15)
+
+    frequency_width = fc_ax_p.width * 0.15
+    frequency_gap = frequency_width * 0.1
+
+    frequency_ax = fig.add_axes((fc_ax_p.x1 + frequency_gap, fc_ax_p.y0, frequency_width, fc_ax_p.height), sharey=fc_ax)
+
+    frequencies = pool.non_targeting_fractions('perfect', 'none').loc[clustered_outcome_order]
+
+    frequency_ax.plot(np.log10(frequencies), np.arange(len(frequencies)), '.', markeredgewidth=0, markersize=10, alpha=0.9)
+
+    x_lims = np.log10(np.array([1e-3, 2e-1]))
+
+    for exponent in [3, 2, 1]:
+        xs = np.log10(np.arange(1, 10) * 10**-exponent)        
+        for x in xs:
+            if x_lims[0] <= x <= x_lims[1]:
+                frequency_ax.axvline(x, color='black', alpha=0.07, clip_on=False)
+
+    x_ticks = [x for x in [1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 2e-1] if x_lims[0] <= np.log10(x) <= x_lims[1]]
+
+    frequency_ax.set_xticks(np.log10(x_ticks))
+    frequency_ax.set_xticklabels([f'{100 * x:g}' for x in x_ticks])
+
+    for side in ['left', 'right', 'bottom']:
+        frequency_ax.spines[side].set_visible(False)
+
+    frequency_ax.xaxis.tick_top()
+    frequency_ax.set_xlim(*x_lims)
+
+    frequency_ax.set_title('frequency of outcome\nin cells containing\nnon-targeting guides\n(percentage)', size=10, pad=15)
+
+    ddr.visualize.heatmap.add_fold_change_colorbar(fig, heatmap_im, -0.05, 0.4, 0.15, 0.02)
+
     return fig, guide_order, clustered_outcome_order
 
-
-def draw_ssODN_configurations(pools, pool_names):
-    common_ti = pools[pool_names[0]].target_info
-
-    x_min = -120
-    x_max = 120
+def draw_ssODN_configurations(pools=None, tis=None):
+    if pools is None:
+        common_ti = tis[0]
+    else:
+        common_ti = pools[0].target_info
+        tis = [pool.target_info for pool in pools]
 
     rect_height = 0.25
 
-    fig, ax = plt.subplots(figsize=(30, 4))
+    fig, ax = plt.subplots(figsize=(25, 4))
 
     def draw_rect(x0, x1, y0, y1, alpha, color='black', fill=True):
         path = [
@@ -247,7 +309,6 @@ def draw_ssODN_configurations(pools, pool_names):
     kwargs = dict(ha='center', va='center', fontfamily='monospace',)
 
     offset_at_cut = 0
-    length_to_resect = 110
 
     ys = {
         'target_+': 0.15,
@@ -258,49 +319,11 @@ def draw_ssODN_configurations(pools, pool_names):
 
     colors = bokeh.palettes.Set2[8]
 
-    before_cut = common_ti.target_sequence[:common_ti.cut_after + 1][-120:]
-    after_cut = common_ti.target_sequence[common_ti.cut_after + 1:][:120]
+    donor_x_min = -1
+    donor_x_max = 1
 
-    for b, x in zip(before_cut[::-1], np.arange(len(before_cut))):
-        final_x = -x - offset_at_cut - 0.5
 
-        ax.annotate(b,
-                    (final_x, ys['target_+']),
-                    **kwargs,
-                   )
-
-        if x < length_to_resect:
-            alpha = 0.3
-        else:
-            alpha = 1
-
-        ax.annotate(hits.utilities.complement(b),
-                    (final_x, ys['target_-']),
-                    alpha=alpha,
-                    **kwargs,
-                   )
-
-    for b, x in zip(after_cut, np.arange(len(after_cut))):
-        final_x = x + offset_at_cut + 0.5
-
-        if x < length_to_resect:
-            alpha = 0.3
-        else:
-            alpha = 1
-
-        ax.annotate(b,
-                    (final_x, ys['target_+']),
-                    alpha=alpha,
-                    **kwargs,
-                   )
-
-        ax.annotate(hits.utilities.complement(b),
-                    (final_x, ys['target_-']),
-                    **kwargs,
-                   )
-
-    for pool_name, color in zip(pool_names, colors):
-        ti = pools[pool_name].target_info
+    for ti, color in zip(tis, colors):
         _, offset, is_reverse_complement = ti.best_donor_target_alignment
 
         # For ss donors, ti.donor_sequence is the actual stranded sequence
@@ -323,6 +346,8 @@ def draw_ssODN_configurations(pools, pool_names):
         for b, x in zip(donor_before_cut[::-1], np.arange(len(donor_before_cut))):
             final_x = -x - offset_at_cut - 0.5
 
+            donor_x_min = min(donor_x_min, final_x)
+
             ax.annotate(b,
                         (final_x, donor_y),
                         **kwargs,
@@ -330,6 +355,8 @@ def draw_ssODN_configurations(pools, pool_names):
 
         for b, x in zip(donor_after_cut, np.arange(len(donor_after_cut))):
             final_x = x + offset_at_cut + 0.5
+
+            donor_x_max = max(donor_x_max, final_x)
 
             ax.annotate(b,
                         (final_x, donor_y),
@@ -362,12 +389,61 @@ def draw_ssODN_configurations(pools, pool_names):
 
             draw_rect(x - 0.5, x + 0.5, donor_y - rect_height / 2, donor_y + rect_height / 2, 0.2)
 
+    # Draw resected target.
+
+    resect_before = int(np.abs(np.floor(donor_x_min))) + 1
+    resect_after = int(np.abs(np.ceil(donor_x_max))) + 1
+
+    x_min = -resect_before - 5
+    x_max = resect_after + 5
+
+    before_cut = common_ti.target_sequence[:common_ti.cut_after + 1][x_min:]
+    after_cut = common_ti.target_sequence[common_ti.cut_after + 1:][:x_max]
+
+    for b, x in zip(before_cut[::-1], np.arange(len(before_cut))):
+        final_x = -x - offset_at_cut - 0.5
+
+        ax.annotate(b,
+                    (final_x, ys['target_+']),
+                    **kwargs,
+                   )
+
+        if x < resect_before:
+            alpha = 0.3
+        else:
+            alpha = 1
+
+        ax.annotate(hits.utilities.complement(b),
+                    (final_x, ys['target_-']),
+                    alpha=alpha,
+                    **kwargs,
+                   )
+
+    for b, x in zip(after_cut, np.arange(len(after_cut))):
+        final_x = x + offset_at_cut + 0.5
+
+        if x < resect_after:
+            alpha = 0.3
+        else:
+            alpha = 1
+
+        ax.annotate(b,
+                    (final_x, ys['target_+']),
+                    alpha=alpha,
+                    **kwargs,
+                   )
+
+        ax.annotate(hits.utilities.complement(b),
+                    (final_x, ys['target_-']),
+                    **kwargs,
+                   )
+
     alpha = 0.1
-    draw_rect(offset_at_cut + length_to_resect, x_max, ys['target_+'] - rect_height / 2, ys['target_+'] + rect_height / 2, alpha)
+    draw_rect(offset_at_cut + resect_after, x_max, ys['target_+'] - rect_height / 2, ys['target_+'] + rect_height / 2, alpha)
     draw_rect(0, x_max, ys['target_-'] - rect_height / 2, ys['target_-'] + rect_height / 2, alpha)
 
     draw_rect(0, x_min, ys['target_+'] - rect_height / 2, ys['target_+'] + rect_height / 2, alpha)
-    draw_rect(-offset_at_cut - length_to_resect, x_min, ys['target_-'] - rect_height / 2, ys['target_-'] + rect_height / 2, alpha)
+    draw_rect(-offset_at_cut - resect_before, x_min, ys['target_-'] - rect_height / 2, ys['target_-'] + rect_height / 2, alpha)
 
     ax.set_xlim(x_min, x_max)
     ax.set_ylim(-2, 2)
@@ -478,7 +554,7 @@ def conversion_tracts(pool, genes, fc_ylims=None):
 
     return f
 
-def fraction_removed(pool, genes):
+def fraction_removed(pool, genes, fraction_y_lims=(5e-4, 1), fold_change_y_lims=(-4, 2)):
     fig, (fraction_ax, fc_ax) = plt.subplots(2, 1, figsize=(12, 12), sharex=True, gridspec_kw=dict(hspace=0.05))
 
     guide_sets = [
@@ -486,7 +562,7 @@ def fraction_removed(pool, genes):
     ]
 
     for gene_i, gene in enumerate(genes):
-        guide_sets.append((gene, None, dict(color=ddr.visualize.heatmap.good_colors[gene_i], alpha=0.8, linewidth=1.5)))
+        guide_sets.append((gene, f'{gene} guides', dict(color=ddr.visualize.heatmap.good_colors[gene_i], alpha=0.8, linewidth=1.5)))
 
     kwargs = dict(color='black', alpha=0.9, linewidth=2, label='all non-targeting guides')
     fraction_ax.plot(pool.fraction_removed['all_non_targeting'], '-', **kwargs)
@@ -496,14 +572,8 @@ def fraction_removed(pool, genes):
         guides = pool.variable_guide_library.gene_guides(gene, only_best_promoter=True)
 
         for i, guide in enumerate(guides):
-            
-            label_to_use = None
-
             if i == 0:
-                if label is None:
-                    label_to_use = gene
-                else:
-                    label_to_use = label
+                label_to_use = label
             else:
                 label_to_use = ''
             
@@ -515,11 +585,372 @@ def fraction_removed(pool, genes):
     for ax in [fraction_ax, fc_ax]:
         ax.set_xlim(pool.fraction_removed.index[0], pool.fraction_removed.index[-1])
 
-    fraction_ax.set_ylim(5e-4, 1)
+    fraction_ax.set_title(pool.group)
+    fraction_ax.set_ylim(*fraction_y_lims)
     fraction_ax.set_yscale('log')
     fraction_ax.set_ylabel('fraction of outcomes with position deleted', size=12)
 
-    fc_ax.set_ylim(-4, 2)
+    fc_ax.set_ylim(*fold_change_y_lims)
     fc_ax.set_ylabel('log2 fold change from non-targeting', size=12)
     
-    fc_ax.set_xlabel('distance from cut site (nts)', size=12)
+    if len(pool.target_info.cut_afters) == 1:
+        fc_ax.set_xlabel('distance from cut site (nts)', size=12)
+    else:
+        for name, position in pool.target_info.cut_afters.items():
+            for ax in [fraction_ax, fc_ax]:
+                ax.axvline(position - pool.target_info.cut_after, color='black', alpha=0.3)
+
+        fc_ax.set_xlabel('distance from primary cut site (nts)', size=12)
+
+    return fig
+
+def make_color_column(guide_to_gene, genes, full_gene_list=None, default_color='silver'):
+    if full_gene_list is None:
+        full_gene_list = genes
+
+    guide_to_color = pd.Series(default_color, index=guide_to_gene.index)
+
+    for i, gene in enumerate(full_gene_list):
+        if gene in genes:
+            if i + 1 < 10:
+                color = f'C{i + 1}'
+            else:
+                color = bokeh.palettes.Category20b[20][::4][(i + 1) % 10]
+
+            guide_to_color[guide_to_gene == gene] = color
+
+    guide_to_color[guide_to_gene == 'negative_control'] = 'C0'
+        
+    guide_to_color = guide_to_color.apply(matplotlib.colors.to_hex)
+        
+    return guide_to_color
+
+def scatter_and_pc(pool,
+                   results,
+                   x_column,
+                   y_column,
+                   genes_to_label,
+                   full_gene_list=None,
+                   lims=(-4, 2),
+                   avoid_overlapping_labels=False,
+                   pn_to_name=None,
+                  ):
+    data = results['full_df'].xs('log2_fold_change', axis=1, level=1).copy()
+    best_promoter = pool.variable_guide_library.guides_df['best_promoter']
+    guide_to_gene = results['full_df']['gene']
+        
+    guides_to_label = guide_to_gene[guide_to_gene.isin(genes_to_label) & best_promoter].index
+    #guides_to_label = guide_to_gene[guide_to_gene.isin(genes_to_label)].index
+
+    guide_to_color = make_color_column(guide_to_gene, genes_to_label, full_gene_list=full_gene_list)
+
+    fig, pc_ax = plt.subplots(figsize=(0.75 * len(data.columns), 6))
+    
+    parallel_coordinates(data, pc_ax,
+                         guides_to_label,
+                         guide_to_gene,
+                         guide_to_color,
+                         lims=lims,
+                         text_labels=['right'],
+                         pn_to_name=pn_to_name,
+                        )
+
+    pc_ax_p = pc_ax.get_position()
+    fig_width, fig_height = fig.get_size_inches()
+    scatter_height = pc_ax_p.height
+    scatter_width = fig_height / fig_width * scatter_height
+    scatter_ax = fig.add_axes((pc_ax_p.x1 + pc_ax_p.width * 0.5, pc_ax_p.y0, scatter_width, scatter_height), sharey=pc_ax) 
+
+    scatter(data, scatter_ax,
+            x_column,
+            y_column,
+            guides_to_label,
+            guide_to_color,
+            avoid_overlapping_labels=avoid_overlapping_labels,
+            lims=lims,
+            pn_to_name=pn_to_name,
+           )
+
+    fig_transform = pc_ax.figure.transFigure
+    inverse_figure = fig_transform.inverted()
+    pc_transform = pc_ax.get_xaxis_transform() + inverse_figure
+    scatter_transform = scatter_ax.transAxes + inverse_figure
+
+    def draw_path(points, transforms):
+        xs, ys = np.array([t.transform_point(p) for t, p in zip(transforms, points)]).T
+        pc_ax.plot(xs, ys, transform=fig_transform, clip_on=False, color='black')
+
+    def draw_bracket(x):
+        draw_path([(x - 0.1, -bracket_offset + bracket_height),
+                   (x - 0.1, -bracket_offset),
+                   (x + 0.1, -bracket_offset),
+                   (x + 0.1, -bracket_offset + bracket_height),
+                  ],
+                  [pc_transform, pc_transform, pc_transform, pc_transform],
+                 )
+
+    bracket_offset = 0.03
+    bracket_height = 0.025
+    y_pc_x = data.columns.get_loc(y_column)
+    draw_bracket(y_pc_x)
+    draw_path([(y_pc_x, -bracket_offset),
+               (y_pc_x, -0.1),
+               (-0.22, -0.1),
+               (-0.22, 0.5),
+               (-0.22 + 0.025, 0.5),
+              ],
+              [pc_transform, pc_transform, scatter_transform, scatter_transform, scatter_transform],
+             )
+
+    x_pc_x = data.columns.get_loc(x_column)
+    draw_bracket(x_pc_x)
+    draw_path([(x_pc_x, -bracket_offset),
+               (x_pc_x, -0.2),
+               (0.5, -0.2),
+               (0.5, -0.2),
+               (0.5, -0.2 + 0.025)],
+              [pc_transform, pc_transform, scatter_transform, scatter_transform, scatter_transform],
+             )
+
+    return fig, pc_ax, scatter_ax
+
+def scatter(data, ax, x_column, y_column,
+            guides_to_label,
+            guide_to_color, 
+            lims=(-4, 2),
+            avoid_overlapping_labels=True,
+            pn_to_name=None,
+           ):
+
+    data = data.copy()
+
+    data['color'] = guide_to_color
+
+    common_kwargs = dict(x=x_column, y=y_column, c='color', linewidths=(0,))
+    
+    ax.scatter(data=data.loc[data.index.difference(guides_to_label)], s=15, alpha=0.5, **common_kwargs)
+    ax.scatter(data=data.loc[guides_to_label], s=25, alpha=0.95, zorder=10, **common_kwargs)
+
+    ax.axhline(0, color='black', alpha=0.3)
+    ax.axvline(0, color='black', alpha=0.3)
+    
+    ax.set_xlim(*lims)
+    ax.set_ylim(*lims)
+    ax.set_aspect('equal') 
+    
+    hits.visualize.draw_diagonal(ax, alpha=0.3)
+    
+    if pn_to_name is not None:
+        x_label = pn_to_name[x_column.rsplit('_', 1)[0]]
+        y_label = pn_to_name[y_column.rsplit('_', 1)[0]]
+    else:
+        x_label = x_column
+        y_label = y_column
+
+    ax.set_xlabel(x_label + '\nlog2 fold change', size=12)
+    ax.set_ylabel(y_label + '\nlog2 fold change', size=12)
+    
+    ax.annotate('non-targeting guides',
+                xy=(0, 0),
+                xycoords='data',
+                xytext=(20, 10),
+                textcoords='offset points',
+                ha='left',
+                va='bottom',
+                color='C0',
+                size=10,
+               )
+
+    hits.visualize.label_scatter_plot(ax, x_column, y_column, 'guide',
+                                      data=data.loc[guides_to_label],
+                                      text_kwargs={'size': 10},
+                                      initial_distance=20,
+                                      color='color',
+                                      avoid=avoid_overlapping_labels,
+                                      avoid_existing=avoid_overlapping_labels,
+                                     )
+        
+
+def parallel_coordinates(data, ax,
+                         guides_to_label,
+                         guide_to_gene,
+                         guide_to_color,
+                         lims=(-4, 2),
+                         text_labels=None,
+                         pn_to_name=None,
+                        ):
+    guide_to_kwargs = {}
+
+    if text_labels is None:
+        text_labels = []
+
+    if pn_to_name is None:
+        pn_to_name = {n.rsplit('_', 1)[0]: n.rsplit('_', 1)[0] for n in data.columns}
+
+    genes_to_label = guide_to_gene[guides_to_label].unique()
+    for gene_i, gene in enumerate(genes_to_label, 1):
+        guides = guides_to_label[guide_to_gene[guides_to_label] == gene]
+        for guide_i, guide in enumerate(guides):
+            guide_to_kwargs[guide] = dict(color=guide_to_color[guide],
+                                          marker='.',
+                                          markersize=8,
+                                          alpha=0.8,
+                                          linewidth=2.5,
+                                          label=f'{gene} guides' if guide_i == 0 else '',
+                                          clip_on=False,
+                                         )
+
+    for guide_i, guide in enumerate(guide_to_gene[guide_to_gene == 'negative_control'].index):     
+        guide_to_kwargs[guide] = dict(color=guide_to_color[guide],
+                                      alpha=0.4,
+                                      linewidth=1,
+                                      label='individual\nnon-targeting\nguides' if guide_i == 0 else '',
+                                     )
+
+    for guide, row in data.iterrows():
+        kwargs = guide_to_kwargs.get(guide)
+        if kwargs is None:
+            kwargs = dict(color='black', alpha=0.04)
+            continue
+        
+        ax.plot(row.values, **kwargs)
+
+        if guide_to_gene[guide] != 'negative_control':
+            if 'right' in text_labels:
+                ax.annotate(guide,
+                            xy=(1, row.values[-1]),
+                            xycoords=('axes fraction', 'data'),
+                            xytext=(5, 0),
+                            textcoords='offset points',
+                            color=kwargs['color'],
+                            ha='left',
+                            va='center',
+                            size=6,
+                )
+
+        
+    ax.legend(bbox_to_anchor=(-0.2, 1), loc='upper right')
+        
+    ax.set_ylabel('log2 fold-change from all non-targeting', size=12)
+
+    ax.set_xticks(np.arange(len(data.columns)))
+    labels = []
+    for n in data.columns:
+        pn, outcome = n.rsplit('_', 1)
+        label = f'{pn_to_name[pn]} {outcome}'
+        labels.append(label)
+    ax.set_xticklabels(labels, rotation=45, ha='left')
+    ax.tick_params(labelbottom=False, labeltop=True)
+
+    ax.set_ylim(*lims)
+
+    all_axs = [ax]
+    for x in range(1, len(data.columns)):
+        other_ax = ax.twinx()
+
+        other_ax.spines['left'].set_position(('data', x))
+        other_ax.yaxis.tick_left()
+        other_ax.set_ylim(ax.get_ylim())
+        other_ax.set_yticklabels([])
+        
+        all_axs.append(other_ax)
+
+    for ax in all_axs:
+        for side in ['right', 'top', 'bottom']:
+            ax.spines[side].set_visible(False)
+        ax.tick_params(axis='x', length=0)
+
+def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name):
+    ax.set_autoscale_on(False)
+    ax.set_xticklabels([])
+
+    sgRNA_colors = bokeh.palettes.Colorblind8[3::2]
+
+    sgRNAs = [
+        'sgRNA-5',
+        'sgRNA-3',
+    ]
+
+    sgRNA_to_color = dict(zip(sgRNAs, sgRNA_colors))
+        
+    label_y = 1.20
+    donor_y = 1.14
+    sgRNA_y = 1.07
+
+    donor_half_width = 0.3
+
+    arrow_width = donor_half_width * 0.2
+    arrow_height = 0.01
+
+    top_strand_y = donor_y + 0.005
+    bottom_strand_y = donor_y - 0.005
+        
+    for x, pn in enumerate([n.rsplit('_', 1)[0] for n in data.columns]):
+        ti = pools[pn].target_info
+
+        _, _, is_reverse_complement = ti.best_donor_target_alignment
+            
+        if 'sODN' in pn:
+            donor_color = 'black'
+        else:
+            donor_color = 'red'
+        
+        double_stranded = 'dsODN' in pn
+        
+        common_kwargs = dict(
+            transform=ax.get_xaxis_transform(),
+            clip_on=False,
+            color=donor_color,
+        )
+        
+        # Draw reverse orientation strands.
+        if is_reverse_complement or double_stranded:
+            xs = [x - donor_half_width + arrow_width, x - donor_half_width, x + donor_half_width]
+            ys = [bottom_strand_y - arrow_height, bottom_strand_y, bottom_strand_y]
+            ax.plot(xs, ys, **common_kwargs)
+        
+        # Draw forward orientation strands.
+        if (not is_reverse_complement) or double_stranded:
+            xs = [x - donor_half_width, x + donor_half_width, x + donor_half_width - arrow_width]
+            ys = [top_strand_y, top_strand_y, top_strand_y + arrow_height]
+            ax.plot(xs, ys, **common_kwargs)
+        
+        # Draw base pairing ticks for double stranded donors.
+        if double_stranded:
+            bp_xs = np.linspace(x - 0.9 * donor_half_width, x + 0.9 * donor_half_width, endpoint=True, num=10)
+            for bp_x in bp_xs:
+                ax.plot([bp_x, bp_x], [top_strand_y, bottom_strand_y], alpha=0.5, solid_capstyle='butt', **common_kwargs)
+                
+        ax.annotate(pn_to_name[pn],
+                    xy=(x, label_y),
+                    xycoords=('data', 'axes fraction'),
+                    ha='left',
+                    va='bottom',
+                    rotation=45,
+                )
+        
+        ax.annotate(pools[pn].target_info.sgRNA,
+                    xy=(x, sgRNA_y),
+                    xycoords=('data', 'axes fraction'),
+                    ha='center',
+                    va='center',
+                    color=sgRNA_to_color[pools[pn].target_info.sgRNA],
+                )
+            
+    common_kwargs = dict(
+        xycoords='axes fraction',
+        xytext=(-30, 0),
+        textcoords='offset points',
+        ha='right',
+        va='center',
+    )
+
+    ax.annotate('donor:',
+                xy=(0, donor_y),
+                **common_kwargs,
+            )
+
+    ax.annotate('cutting sgRNA:',
+                xy=(0, sgRNA_y),
+                **common_kwargs,
+            )
