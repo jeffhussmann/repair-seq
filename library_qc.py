@@ -2,6 +2,7 @@
 
 import argparse
 import multiprocessing
+import itertools
 from collections import defaultdict, Counter
 from pathlib import Path
 
@@ -10,8 +11,12 @@ import pandas as pd
 import numpy as np
 import pysam
 
-from hits import mapping_tools, sam
+from hits import mapping_tools, sam, fastq, utilities
 from hits.utilities import memoized_property
+
+import tqdm
+
+import ddr.guide_library
 
 class Sample():
     def __init__(self, base_dir, group, name):
@@ -31,8 +36,8 @@ class Sample():
 
         self.fns = {
             'R1': R1_fn,
-            'guides': '/home/jah/projects/ddr/guides/DDR_sublibrary/guides.txt',
-            'guides_STAR_index': '/home/jah/projects/ddr/guides/DDR_sublibrary/STAR_index',
+            'guides': '/home/jah/projects/ddr/guides/DDR_library/guides.txt',
+            'guides_STAR_index': '/home/jah/projects/ddr/guides/DDR_library/STAR_index',
 
             'STAR_output_prefix': results_dir / 'alignments.',
             'bam': results_dir / 'alignments.bam',
@@ -42,6 +47,7 @@ class Sample():
             'indel_distributions': results_dir / 'indel_distributions.txt',
             'edit_distance_distributions': results_dir / 'edit_distance_distributions.txt',
             'guide_counts': results_dir / 'guide_counts.txt',
+            'direct_guide_counts': results_dir / 'direct_guide_counts.txt',
         }
 
     def align_reads(self):
@@ -53,6 +59,26 @@ class Sample():
                                include_unmapped=True,
                                bam_fn=self.fns['bam'],
                               )
+
+    def count_reads(self):
+        guide_library = ddr.guide_library.GuideLibrary('/home/jah/projects/prime_editing_screens', 'DDR_library')
+        resolver = utilities.get_one_mismatch_resolver(guide_library.guides_df['protospacer']).get
+        
+        counts = Counter()
+        
+        reads = fastq.reads(self.fns['R1'])
+
+        for read in tqdm.tqdm_notebook(reads):
+            prefix = read.seq[:20]
+            guide = resolver(prefix, {'unknown'})
+            if len(guide) > 1:
+                raise ValueError(read.seq[:20], guide)
+            else:
+                guide = next(iter(guide))
+                counts[guide] += 1
+
+        counts = pd.Series(counts).sort_index()
+        counts.to_csv(self.fns['direct_guide_counts'], header=False)
 
     def count_alignments(self):
         header = sam.get_header(self.fns['bam'])
@@ -104,11 +130,16 @@ class Sample():
         pd.DataFrame(edit_distance).T.to_csv(self.fns['edit_distance_distributions'])
 
         guide_counts = pd.Series(guide_counts).sort_index()
-        guide_counts.to_csv(self.fns['guide_counts'])
+        guide_counts.to_csv(self.fns['guide_counts'], header=False)
 
     @memoized_property
     def guide_counts(self):
         counts = pd.read_csv(self.fns['guide_counts'], squeeze=True, index_col=0, header=None)
+        return counts
+
+    @memoized_property
+    def direct_guide_counts(self):
+        counts = pd.read_csv(self.fns['direct_guide_counts'], squeeze=True, index_col=0, header=None)
         return counts
 
     @memoized_property
