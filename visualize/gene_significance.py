@@ -20,7 +20,9 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
         return scipy.stats.binom.cdf(outcome_count, UMI_count, nt_fraction)
 
     def pval_up(outcome_count, UMI_count, nt_fraction):
-        return 1 - scipy.stats.binom.cdf(outcome_count - 1, UMI_count, nt_fraction)
+        # sf required to maintain precision
+        # since sf is P(> n), outcome_count - 1 required to produce P(>= n)
+        return scipy.stats.binom.sf(outcome_count - 1, UMI_count, nt_fraction)
 
     n_choose_k = scipy.special.comb
 
