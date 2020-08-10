@@ -534,10 +534,9 @@ def add_frequencies(fig, ax, count_source, outcome_order, fixed_guide='none', te
         
         ax.set_ylim(-0.5, len(outcome_order) - 0.5)
 
-def add_values(fig, ax, vals):
+def add_values(fig, ax, vals, width=0.2):
     ax_p = ax.get_position()
     
-    width = 0.2
     offset = 0.04
 
     ys = np.arange(len(vals) - 1, -1, -1)
@@ -561,7 +560,7 @@ def add_values(fig, ax, vals):
 
 def plot_with_frequencies(pool, outcomes, fixed_guide='none', text_only=False, count_source=None, **kwargs):
     if count_source is None:
-        count_source is pool
+        count_source = pool
 
     fig = plot(outcomes, pool.target_info, fixed_guide=fixed_guide, **kwargs)
     num_outcomes = kwargs.get('num_outcomes')

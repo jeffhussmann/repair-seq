@@ -62,7 +62,7 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
 
     capped_fc = np.minimum(2**5, np.maximum(2**-5, frequencies / nt_fraction))
 
-    df = pd.DataFrame({'total_UMIs': UMI_counts,
+    guides_df = pd.DataFrame({'total_UMIs': UMI_counts,
                        'outcome_count': numerator_counts,
                        'frequency': frequencies,
                        'log2_fold_change': np.log2(capped_fc),
@@ -70,14 +70,14 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
                        'p_up': ps_up,
                        'gene': genes,
                       })
-    df = df.drop(guides_to_omit, errors='ignore')
+    guides_df = guides_df.drop(guides_to_omit, errors='ignore')
     
     ps = defaultdict(list)
 
     max_k = 9
 
     gene_order = []
-    for gene, rows in df.groupby('gene'):
+    for gene, rows in guides_df.groupby('gene'):
         gene_order.append(gene)
         for direction in ('down', 'up'):
             sorted_ps = sorted(rows[f'p_{direction}'].values)
@@ -85,21 +85,50 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
             for k in range(1, max_k + 1):
                 ps[direction, k].append(p_k_of_n_less(n, k, sorted_ps))
             
-    p_df = pd.DataFrame(ps, index=gene_order).min(axis=1, level=0)
+    uncorrected_ps_df = pd.DataFrame(ps, index=gene_order).min(axis=1, level=0)
 
-    guides_per_gene = df.groupby('gene').size()
+    guides_per_gene = guides_df.groupby('gene').size()
     bonferonni_factor = np.minimum(max_k, guides_per_gene)
-    corrected_ps = np.minimum(1, p_df.multiply(bonferonni_factor, axis=0))
+    corrected_ps_df = np.minimum(1, uncorrected_ps_df.multiply(bonferonni_factor, axis=0))
 
-    df['interval_bottom'], df['interval_top'] = utilities.clopper_pearson_fast(df['outcome_count'], df['total_UMIs'])
+    guides_df['interval_bottom'], guides_df['interval_top'] = utilities.clopper_pearson_fast(guides_df['outcome_count'], guides_df['total_UMIs'])
 
-    df['log2_fold_change_interval_bottom'] = np.maximum(-6, np.log2(df['interval_bottom'] / nt_fraction))
-    df['log2_fold_change_interval_top'] = np.minimum(5, np.log2(df['interval_top'] / nt_fraction))
+    guides_df['log2_fold_change_interval_bottom'] = np.maximum(-6, np.log2(guides_df['interval_bottom'] / nt_fraction))
+    guides_df['log2_fold_change_interval_top'] = np.minimum(5, np.log2(guides_df['interval_top'] / nt_fraction))
+
+    guides_df['p_relevant'] = guides_df[['p_down', 'p_up']].min(axis=1)
+    guides_df['-log10_p_relevant'] = -np.log10(np.maximum(np.finfo(np.float64).tiny, guides_df['p_relevant']))
 
     for direction in ['down', 'up']:
-        df[f'gene_p_{direction}'] = np.array([corrected_ps.loc[row['gene'], direction] for guide, row in df.iterrows()])
+        guides_df[f'gene_p_{direction}'] = np.array([corrected_ps_df.loc[row['gene'], direction] for guide, row in guides_df.iterrows()])
 
-    return df, nt_fraction, corrected_ps
+    guides_df.index.name = 'guide'
+
+    targeting_ps = corrected_ps_df.drop(index='negative_control')
+
+    up_genes = targeting_ps.query('up < down')['up'].sort_values(ascending=False).index
+
+    grouped_fcs = guides_df.groupby('gene')['log2_fold_change']
+
+    gene_log2_fold_changes = pd.DataFrame({'up': grouped_fcs.nlargest(2).mean(level=0), 'down': grouped_fcs.nsmallest(2).mean(level=0)})
+
+    gene_log2_fold_changes['relevant'] = gene_log2_fold_changes['down']
+    gene_log2_fold_changes.loc[up_genes, 'relevant'] = gene_log2_fold_changes.loc[up_genes, 'up']
+
+    corrected_ps_df['relevant'] = corrected_ps_df['down']
+    corrected_ps_df.loc[up_genes, 'relevant'] = corrected_ps_df.loc[up_genes, 'up']
+
+    genes_df = pd.concat({'log2 fold change': gene_log2_fold_changes, 'p': corrected_ps_df}, axis=1)
+
+    negative_log10_p = -np.log10(np.maximum(np.finfo(np.float64).tiny, genes_df['p']))
+
+    negative_log10_p = pd.concat({'-log10 p': negative_log10_p}, axis=1)
+
+    genes_df = pd.concat([genes_df, negative_log10_p], axis=1)
+
+    genes_df.index.name = 'gene'
+
+    return guides_df, nt_fraction, genes_df
 
 def compute_table(base_dir, pool_names, outcome_groups,
                   pickle_fn=None,
@@ -524,7 +553,7 @@ def gene_significance_simple(pool, outcomes,
     if manual_label_offsets is None:
         manual_label_offsets = {}
 
-    df, nt_fraction, p_df = get_outcome_statistics(pool, outcomes, fixed_guide=fixed_guide, denominator_outcomes=denominator_outcomes)
+    df, nt_fraction, genes_df = get_outcome_statistics(pool, outcomes, fixed_guide=fixed_guide, denominator_outcomes=denominator_outcomes)
 
     df['x'] = np.arange(len(df))
 
@@ -552,7 +581,7 @@ def gene_significance_simple(pool, outcomes,
         y_key = 'log2_fold_change'
         bottom_key = 'log2_fold_change_interval_bottom'
         top_key = 'log2_fold_change_interval_top'
-        y_label = 'log2 fold change'
+        y_label = 'log2 fold change from non-targeting'
 
     if y_lims is not None:
         min_y, max_y = y_lims
@@ -567,17 +596,20 @@ def gene_significance_simple(pool, outcomes,
     labels = list(df.index)
 
     gene_to_color = {g: f'C{i % 10}' for i, g in enumerate(pool.variable_guide_library.genes)}
+    gene_to_color['negative_control'] = 'grey'
 
     fig, ax = plt.subplots(figsize=figsize)
 
     global_max_y = 0
+
+    p_df = genes_df['p']
 
     gene_label_size = 8
     if genes_to_label is not None:
         all_genes_to_label = set(genes_to_label)
         gene_label_size = 12
     elif label_by == 'significance':
-        ordered = p_df.min(axis=1).sort_values()
+        ordered = p_df['relevant'].sort_values()
         below_threshold = ordered[ordered <= p_val_threshold]
         all_genes_to_label = set(below_threshold.index[:max_num_to_label])
     else:
@@ -790,6 +822,8 @@ def genetics_of_stat(stat_series,
     labels = list(df.index)
 
     gene_to_color = {g: f'C{i % 10}' for i, g in enumerate(pool.variable_guide_library.genes)}
+
+    gene_to_color['negative_control'] = 'grey'
 
     fig, ax = plt.subplots(figsize=(27, 6))
 

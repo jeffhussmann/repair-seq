@@ -9,15 +9,15 @@ import hits.utilities
 import ddr.visualize.heatmap
 import ddr.visualize.outcome_diagrams
 
-def plot_correlations(pool, guide, num_outcomes, label=True, extra_genes=None):
-    fig, ax = plt.subplots(figsize=(8, 6))
+def plot_correlations(pool, guide, num_outcomes, label=True, extra_genes=None, n_highest=5, legend=True):
 
     gene = pool.variable_guide_library.guide_to_gene[guide]
-    gene_guides = pool.variable_guide_library.gene_guides(gene)
 
     outcomes = pool.most_frequent_outcomes('none')[:num_outcomes]
     log2_fcs = pool.log2_fold_changes('perfect', 'none')['none'].loc[outcomes].drop(columns=['all_non_targeting'])
     correlations = log2_fcs.corr().loc[guide].sort_values(ascending=False)
+
+    fig, ax = plt.subplots(figsize=(8 * len(correlations) / 1513, 6))
 
     df = pd.DataFrame({'correlation': correlations})
     df['gene'] = pool.variable_guide_library.guides_df['gene'].loc[df.index]
@@ -31,7 +31,8 @@ def plot_correlations(pool, guide, num_outcomes, label=True, extra_genes=None):
     ax.scatter('x', 'correlation', c='C1', s=15, data=df.query('gene == "negative_control"'), clip_on=False, label='non-targeting guides')
     ax.scatter('x', 'correlation', c='grey', s=1, data=df.query('gene != "negative_control" and gene != @gene'), clip_on=False, label='other guides')
     
-    ax.legend()
+    if legend:
+        ax.legend()
 
     for y in [-1, -0.75, -0.5, -0.25, 0, 0.25, 0.5, 0.75, 1]:
         ax.axhline(y, color='black', alpha=0.5 if y == 0 else 0.1)
@@ -51,38 +52,17 @@ def plot_correlations(pool, guide, num_outcomes, label=True, extra_genes=None):
                                               color='C0',
                                              )
         
-#         for guide, row in df.query('gene == @gene').iterrows():
-#             ax.annotate(guide,
-#                         xy=(row['x'], row['correlation']),
-#                         xytext=(5, 0),
-#                         textcoords='offset points',
-#                         ha='left',
-#                         va='center',
-#                         color='C1',
-#                         size=6,
-#                        )
-        
         if extra_genes is not None:
             other_guides = df.loc[df['gene'].isin(list(extra_genes)) & df['best_promoter']]
             to_label = other_guides
         else:
             other_guides = df.query('gene != "negative_control" and gene != @gene')
-            to_label = pd.concat([other_guides.iloc[:5], other_guides.iloc[-5:]])
+            to_label = pd.concat([other_guides.iloc[:n_highest], other_guides.iloc[-n_highest:]])
          
         to_label = to_label.sort_values('correlation', ascending=False)
         to_label.index.name = 'short_name'
             
         hits.visualize.label_scatter_plot(ax, 'x', 'correlation', 'short_name', to_label, avoid=True, initial_distance=10, vector='sideways')
-#         for guide, row in to_label.iterrows():
-#             ax.annotate(guide,
-#                         xy=(row['x'], row['correlation']),
-#                         xytext=(5, 0),
-#                         textcoords='offset points',
-#                         ha='left',
-#                         va='center',
-#                         color='grey',
-#                         size=8,
-#                        )
             
     for side in ['top', 'bottom', 'right']:
         ax.spines[side].set_visible(False)
@@ -114,8 +94,9 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
 
     masked = np.ma.array(correlations, mask=mask)
 
-    size = 16 * len(guide_order) / 100
-    fig, correlation_ax = plt.subplots(figsize=(size, size))
+    inches_per_guide = 16 / 100
+    corr_size = len(guide_order) * inches_per_guide
+    fig, correlation_ax = plt.subplots(figsize=(corr_size, corr_size))
 
     correlation_im = correlation_ax.imshow(masked, cmap=cmap, vmin=-1, vmax=1)
 
@@ -170,10 +151,10 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
             **title_kwargs,
     )
 
-    ax_p = correlation_ax.get_position()
+    corr_ax_p = correlation_ax.get_position()
 
     # Draw correlation colorbar.
-    cbar_ax = fig.add_axes((ax_p.x1 - ax_p.width * 0.1, ax_p.y0 + ax_p.height * 0.4, ax_p.width * 0.02, ax_p.height * 0.4))
+    cbar_ax = fig.add_axes((corr_ax_p.x1 - corr_ax_p.width * 0.1, corr_ax_p.y0 + corr_ax_p.height * 0.4, corr_ax_p.width * 0.02, corr_ax_p.height * 0.4))
     cbar = fig.colorbar(correlation_im, cax=cbar_ax, ticks=[-1, 0, 1])
     cbar_ax.annotate('correlation\nbetween\noutcome\nredistribution\nprofiles',
                      xy=(1, 0.5),
@@ -186,17 +167,17 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
 
     cbar.outline.set_alpha(0.1)
 
-    width = ax_p.width
-    height = width * len(clustered_outcome_order) / len(guide_order)
+    heatmap_width = corr_ax_p.width
+    heatmap_height = heatmap_width * len(clustered_outcome_order) / len(guide_order)
     # Make gap equal to height for 5 outcome rows.
-    gap = height / len(clustered_outcome_order) * 5
+    gap = heatmap_height / len(clustered_outcome_order) * 5
 
     if upside_down:
-        y0 = ax_p.y1 + gap
+        y0 = corr_ax_p.y1 + gap
     else:
-        y0 = ax_p.y0 - height - gap
+        y0 = corr_ax_p.y0 - heatmap_height - gap
 
-    fc_ax = fig.add_axes((ax_p.x0, y0, width, height))
+    fc_ax = fig.add_axes((corr_ax_p.x0, y0, heatmap_width, heatmap_height))
 
     fcs = pool.log2_fold_changes('perfect', fixed_guide)[fixed_guide].loc[clustered_outcome_order, guide_order]
 
@@ -207,7 +188,7 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
 
     fc_ax_p = fc_ax.get_position()
 
-    diagram_width = fc_ax_p.width * 0.3
+    diagram_width = fc_ax_p.width * 0.6
     diagram_gap = diagram_width * 0.02
 
     diagram_ax = fig.add_axes((fc_ax_p.x0 - diagram_width - diagram_gap, fc_ax_p.y0, diagram_width, fc_ax_p.height), sharey=fc_ax)
@@ -226,9 +207,9 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
 
     frequencies = pool.non_targeting_fractions('perfect', 'none').loc[clustered_outcome_order]
 
-    frequency_ax.plot(np.log10(frequencies), np.arange(len(frequencies)), '.', markeredgewidth=0, markersize=10, alpha=0.9)
+    frequency_ax.plot(np.log10(frequencies), np.arange(len(frequencies)), '.', markeredgewidth=0, markersize=10, alpha=0.9, clip_on=False)
 
-    x_lims = np.log10(np.array([1e-3, 2e-1]))
+    x_lims = np.log10(np.array([2e-3, 2e-1]))
 
     for exponent in [3, 2, 1]:
         xs = np.log10(np.arange(1, 10) * 10**-exponent)        
@@ -236,7 +217,7 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
             if x_lims[0] <= x <= x_lims[1]:
                 frequency_ax.axvline(x, color='black', alpha=0.07, clip_on=False)
 
-    x_ticks = [x for x in [1e-3, 5e-3, 1e-2, 5e-2, 1e-1, 2e-1] if x_lims[0] <= np.log10(x) <= x_lims[1]]
+    x_ticks = [x for x in [2e-3, 5e-3, 1e-2, 5e-2, 1e-1, 2e-1] if x_lims[0] <= np.log10(x) <= x_lims[1]]
 
     frequency_ax.set_xticks(np.log10(x_ticks))
     frequency_ax.set_xticklabels([f'{100 * x:g}' for x in x_ticks])
@@ -247,7 +228,7 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
     frequency_ax.xaxis.tick_top()
     frequency_ax.set_xlim(*x_lims)
 
-    frequency_ax.set_title('frequency of outcome\nin cells containing\nnon-targeting guides\n(percentage)', size=10, pad=15)
+    frequency_ax.set_title('percentage of outcomes\nin cells containing\nnon-targeting guides', size=10, pad=15)
 
     ddr.visualize.heatmap.add_fold_change_colorbar(fig, heatmap_im, -0.05, 0.4, 0.15, 0.02)
 
@@ -484,7 +465,7 @@ def draw_ssODN_configurations(pools=None, tis=None):
             
     return fig
 
-def conversion_tracts(pool, genes, fc_ylims=None):
+def conversion_tracts(pool, genes=None, guides=None, fc_ylims=None):
     f = draw_ssODN_configurations([pool])
 
     ax = f.axes[0]
@@ -497,13 +478,13 @@ def conversion_tracts(pool, genes, fc_ylims=None):
     ax = f.add_axes([ax_p.x0, ax_p.y0 - 0.5 * ax_p.height, ax_p.width, 0.5 * ax_p.height], sharex=ax)
 
     ys = pool.conversion_fractions['all_non_targeting']
-    ax.plot(xs, ys, 'o-', color='black', linewidth=2)
+    ax.plot(xs, ys * 100, 'o-', color='black', linewidth=2)
 
     ax.axvline(0, linestyle='--', color='black', alpha=0.5)
     
-    ax.set_ylim(0, max(ys) * 1.1)
+    ax.set_ylim(0, max(ys * 100) * 1.1)
 
-    ax.set_ylabel('overall\nconversion\nfrequency')
+    ax.set_ylabel('overall\nconversion\npercentage')
 
     # log2 fold changes plot
 
@@ -511,17 +492,31 @@ def conversion_tracts(pool, genes, fc_ylims=None):
     ax = f.add_axes([ax_p.x0, ax_p.y0 - 2.2 * ax_p.height, ax_p.width, 2 * ax_p.height], sharex=ax)
 
     guide_sets = [
-        ('negative_control', 'non-targeting', dict(color='black', alpha=0.2)),
+        ('negative_control', pool.variable_guide_library.non_targeting_guides, 'non-targeting', dict(color='black', alpha=0.2)),
     ]
 
-    for gene_i, gene in enumerate(genes):
-        guide_sets.append((gene, None, dict(color=ddr.visualize.heatmap.good_colors[gene_i], alpha=0.8, linewidth=1.5)))
+    if genes is not None:
+        for gene_i, gene in enumerate(genes):
+            guide_sets.append((gene,
+                               pool.variable_guide_library.gene_guides(gene),
+                               None,
+                               dict(color=ddr.visualize.heatmap.good_colors[gene_i], alpha=0.8, linewidth=1.5),
+                              )
+                             )
+    elif guides is not None:
+        for gene_i, guide in enumerate(guides):
+            guide_sets.append((pool.variable_guide_library.guide_to_gene[guide],
+                               [guide],
+                               None,
+                               dict(color=ddr.visualize.heatmap.good_colors[gene_i], alpha=0.8, linewidth=1.5),
+                              )
+                             )
 
     max_y = 1
     min_y = -2
     
-    for gene, label, kwargs in guide_sets:
-        for i, guide in enumerate(pool.variable_guide_library.gene_guides(gene)):
+    for gene, gene_guides, label, kwargs in guide_sets:
+        for i, guide in enumerate(gene_guides):
             ys = pool.conversion_log2_fold_changes[guide]
 
             max_y = np.ceil(max(max_y, max(ys)))
@@ -634,8 +629,11 @@ def scatter_and_pc(pool,
                    lims=(-4, 2),
                    avoid_overlapping_labels=False,
                    pn_to_name=None,
+                   column_order=None,
                   ):
     data = results['full_df'].xs('log2_fold_change', axis=1, level=1).copy()
+    if column_order is not None:
+        data = data[column_order]
     best_promoter = pool.variable_guide_library.guides_df['best_promoter']
     guide_to_gene = results['full_df']['gene']
         
@@ -659,7 +657,7 @@ def scatter_and_pc(pool,
     fig_width, fig_height = fig.get_size_inches()
     scatter_height = pc_ax_p.height
     scatter_width = fig_height / fig_width * scatter_height
-    scatter_ax = fig.add_axes((pc_ax_p.x1 + pc_ax_p.width * 0.5, pc_ax_p.y0, scatter_width, scatter_height), sharey=pc_ax) 
+    scatter_ax = fig.add_axes((pc_ax_p.x1 + 2 / fig_width, pc_ax_p.y0, scatter_width, scatter_height), sharey=pc_ax) 
 
     scatter(data, scatter_ax,
             x_column,
@@ -770,7 +768,6 @@ def scatter(data, ax, x_column, y_column,
                                       avoid_existing=avoid_overlapping_labels,
                                      )
         
-
 def parallel_coordinates(data, ax,
                          guides_to_label,
                          guide_to_gene,
@@ -829,7 +826,9 @@ def parallel_coordinates(data, ax,
                 )
 
         
-    ax.legend(bbox_to_anchor=(-0.2, 1), loc='upper right')
+    ax.legend(bbox_to_anchor=(-0.35, 1),
+              loc='upper right',
+             )
         
     ax.set_ylabel('log2 fold-change from all non-targeting', size=12)
 
@@ -954,3 +953,426 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name):
                 xy=(0, sgRNA_y),
                 **common_kwargs,
             )
+
+def deletion_heatmap(pool, buffer, groups, grids, guide=None, log2_fold_change=False, min_MH=2, max_offset=30):
+    def extract_grid(grids, key):
+        return grids.loc[key].unstack().reindex(index=np.arange(buffer, -(max_offset + 1), -1), columns=np.arange(-buffer + 1, max_offset)).fillna(0)
+    
+    nt_grid = 100 * extract_grid(grids, 'all_non_targeting')
+    
+    if guide is None:
+        grid = nt_grid
+        cmap = hits.visualize.greens
+        #cmap = plt.get_cmap('Greens')
+        v_min = 0
+        v_max = grid.max().max()
+        colorbar_label = f'percentage of outcomes'
+        title = f'{pool.short_name}\nall non-targeting'
+   
+    else:
+        guide_grid = 100 * extract_grid(grids, guide)
+        grid = guide_grid - nt_grid
+        
+        if log2_fold_change:
+            grid = np.log2(grid / nt_grid)
+            v_min = -2
+            v_max = 2
+        
+        else:
+            largest = grid.abs().max().max()
+            v_min = -largest
+            v_max = largest
+        
+        cmap = plt.get_cmap('bwr')
+        
+        colorbar_label = f'change in\npercentage of outcomes'
+        title = f'{pool.short_name}\n{guide}'
+        
+    rows, cols = grid.shape
+
+    fig, ax = plt.subplots(figsize=(12, 12))
+
+    im = ax.imshow(grid,
+                   cmap=cmap,
+                   vmin=v_min,
+                   vmax=v_max,
+                  )
+
+    left_offset_to_y = lambda left_offset: buffer - left_offset
+    right_offset_to_x = lambda right_offset: right_offset + buffer - 1
+
+    for group in groups:
+        if len(group) > min_MH:
+            first, *middle, last = group
+            ys = [left_offset_to_y(first[0]), left_offset_to_y(last[0])]
+            xs = [right_offset_to_x(first[1]), right_offset_to_x(last[1])]
+            ax.plot(xs, ys, alpha=0.1 * len(group), linewidth=1 + 0.1 * len(group), color='black')
+
+    intervals = [
+        ((pool.target_info.PAM_slice.start, pool.target_info.PAM_slice.stop - 1), 'green'),
+        ((pool.target_info.sgRNA_feature.start, pool.target_info.sgRNA_feature.end), 'blue'),
+    ]
+    
+    for (start, end), color in intervals:
+        absolute_start = right_offset_to_x(start - pool.target_info.cut_after - 0.5)
+        absolute_end = right_offset_to_x(end - pool.target_info.cut_after + 0.5)
+        
+        if absolute_start < 0 and absolute_end < 0:
+            continue
+
+        absolute_start = max(absolute_start, -0.5)
+        absolute_end = max(absolute_end, -0.5)
+            
+        x0, x1 = absolute_start, absolute_end
+        y0, y1 = 1.03, 1
+
+        path = [
+            [x0, y0],
+            [x0, y1],
+            [x1, y1],
+            [x1, y0],
+        ]
+            
+        patch = plt.Polygon(path,
+                            fill=True,
+                            closed=True,
+                            alpha=0.3,
+                            color=color,
+                            linewidth=0,
+                            clip_on=False,
+                            transform=ax.get_xaxis_transform(),
+                           )
+        ax.add_patch(patch)
+        
+    for (start, end), color in intervals:
+        absolute_start = left_offset_to_y(start - pool.target_info.cut_after - 0.5)
+        absolute_end = left_offset_to_y(end - pool.target_info.cut_after + 0.5)
+        
+        if absolute_start < 0 and absolute_end < 0:
+            continue
+
+        absolute_start = max(absolute_start, -0.5)
+        absolute_end = max(absolute_end, -0.5)
+            
+        x0, x1 = -0.03, 0
+        y0, y1 = absolute_start, absolute_end
+
+        path = [
+            [x0, y0],
+            [x0, y1],
+            [x1, y1],
+            [x1, y0],
+        ]
+            
+        patch = plt.Polygon(path,
+                            fill=True,
+                            closed=True,
+                            alpha=0.3,
+                            color=color,
+                            linewidth=0,
+                            clip_on=False,
+                            transform=ax.get_yaxis_transform(),
+                           )
+        ax.add_patch(patch)
+        
+    for right_offset in np.arange(-buffer, max_offset):
+        b = pool.target_info.target_sequence[pool.target_info.cut_after + right_offset]
+        ax.annotate(b, 
+                    xy=(right_offset_to_x(right_offset), 1),
+                    xycoords=('data', 'axes fraction'),
+                    xytext=(0, 5),
+                    textcoords='offset points',
+                    ha='center',
+                    annotation_clip=True,
+                   )
+    
+    for left_offset in np.arange(-max_offset, buffer + 1):
+        b = pool.target_info.target_sequence[pool.target_info.cut_after + left_offset]
+        ax.annotate(b,
+                    xy=(0, left_offset_to_y(left_offset)),
+                    xycoords=('axes fraction', 'data'),
+                    xytext=(-5, 0),
+                    textcoords='offset points',
+                    va='center',
+                    ha='right',
+                    rotation=90,
+                    annotation_clip=True,
+                   )
+
+    cut_offsets = [c - pool.target_info.cut_after for c in pool.target_info.cut_afters.values()]
+
+    for cut_offset in cut_offsets:
+        ax.axvline(right_offset_to_x(cut_offset + 0.5), linestyle='--', color='black')
+        ax.axhline(left_offset_to_y(cut_offset + 0.5), linestyle='--', color='black')
+
+    ax.set_xlim(-0.5, max_offset + 0.5)
+    ax.set_ylim(max_offset + 0.5, -0.5)
+
+    ax.set_xticks([])
+    ax.set_yticks([])
+
+    for side in ax.spines:
+        ax.spines[side].set_visible(False)
+        
+    ax.set_xlabel('first base remaining after deletion on right', labelpad=30, size=14)
+    ax.xaxis.set_label_position('top')
+    
+    ax.set_ylabel('last base remaining before deletion on left', labelpad=30, size=14)
+    
+    cax = ax.inset_axes((1.15, 0.25, 0.03, 0.5))
+    colorbar = fig.colorbar(im, cax=cax)
+    cax.set_title(colorbar_label)
+
+    fig.suptitle(title, y=1.2, size=20)
+    
+    ax_p = ax.get_position()
+    
+    marginal_right_ax = fig.add_axes([ax_p.x0, ax_p.y1 + ax_p.height * 0.1, ax_p.width, ax_p.height * 0.2], sharex=ax)
+    
+    ys = grid.sum(axis=0).values
+    xs = np.arange(len(ys))
+
+    if guide is not None:
+        marginal_right_ax.plot(xs, guide_grid.sum(axis=0).values, '.-', color='C1')
+    marginal_right_ax.plot(xs, nt_grid.sum(axis=0).values, '.-', color='black')
+    
+    for side in marginal_right_ax.spines:
+        marginal_right_ax.spines[side].set_visible(False)
+        
+    marginal_right_ax.axhline(0, color='black', clip_on=False, alpha=0.5)
+        
+    marginal_left_ax = fig.add_axes([ax_p.x0 - ax_p.width * 0.3, ax_p.y0, ax_p.width * 0.2, ax_p.height], sharey=ax)
+    marginal_left_ax.axhline(left_offset_to_y(0.5), linestyle='--', color='black')
+    marginal_left_ax.patch.set_alpha(0)
+    marginal_right_ax.patch.set_alpha(0)
+    
+    xs = grid.sum(axis=1).values
+    ys = np.arange(len(xs))
+
+    if guide is not None:
+        marginal_left_ax.plot(guide_grid.sum(axis=1).values, ys, '.-', color='C1')
+    marginal_left_ax.plot(nt_grid.sum(axis=1).values, ys, '.-', color='black')
+    marginal_left_ax.invert_xaxis()
+    
+    for side in marginal_left_ax.spines:
+        marginal_left_ax.spines[side].set_visible(False)
+        
+    marginal_left_ax.axvline(0, color='black', clip_on=False, alpha=0.5)
+
+    marginal_right_ax.axvline(right_offset_to_x(0.5), linestyle='--', color='black')
+    
+    marginal_left_ax.xaxis.tick_top()
+    
+    #t = matplotlib.transforms.blended_transform_factory(fig.transFigure, ax.transData)
+    #ax.plot([0, 1], [left_offset_to_y(0.5), left_offset_to_y(0.5)], linestyle='--', color='black', transform=t, clip_on=False)
+    
+    #t = matplotlib.transforms.blended_transform_factory(ax.transData, fig.transFigure)
+    #ax.plot([right_offset_to_x(0.5), right_offset_to_x(0.5)], [0, 1], linestyle='--', color='black', transform=t, clip_on=False)
+    
+    return fig
+
+
+def sorted_by_significance(pool, outcomes,
+                           top_n_guides=None,
+                           show_non_top=False,
+                           n_up=20,
+                           n_down=20,
+                           y_lims=None,
+                           quantity_to_plot='log2_fold_change',
+                          ):
+
+    df, nt_frac, gene_df = ddr.visualize.gene_significance.get_outcome_statistics(pool, outcomes)
+                          
+    if quantity_to_plot == 'log2_fold_change':
+        y_key = 'log2_fold_change'
+        bottom_key = 'log2_fold_change_interval_bottom'
+        top_key = 'log2_fold_change_interval_top'
+
+        y_label = 'log2 fold-change from non-targeting'
+
+        hline_y = 0
+
+    else:
+        if quantity_to_plot == 'percentage':
+            nt_percentage = nt_frac * 100
+            df['percentage'] = df['frequency'] * 100
+            df['percentage_interval_bottom'] = df['interval_bottom'] * 100
+            df['percentage_interval_top'] = df['interval_top'] * 100
+
+            y_key = 'percentage'
+            bottom_key = 'percentage_interval_bottom'
+            top_key = 'percentage_interval_top'
+            y_label = 'percentage of outcomes'
+
+            hline_y = nt_percentage
+
+        else:
+            y_key = 'frequency'
+            bottom_key = 'interval_bottom'
+            top_key = 'interval_top'
+
+            hline_y = nt_frac
+
+    targeting_ps = gene_df['p'].drop(index='negative_control')
+
+    down_genes = targeting_ps.query('down < up')['down'].sort_values().index
+    up_genes = targeting_ps.query('up < down')['up'].sort_values(ascending=False).index
+
+    gene_order = np.concatenate([down_genes, ['negative_control'], up_genes])
+
+    guide_order = []
+    xs = []
+
+    gap = 20
+    x = 0
+
+    gene_to_color = {}
+
+    guides_in_top_n = set(pool.variable_guide_library.non_targeting_guides)
+
+    for gene_i, gene in enumerate(gene_order):
+        guides = pool.variable_guide_library.gene_guides(gene)
+        if gene == 'negative_control' or top_n_guides is None:
+            top_guides = guides
+        else:
+            ordered_guides = df.reindex(guides)[y_key].sort_values().index
+            if gene in up_genes:
+                top_guides = ordered_guides[-top_n_guides:]
+            else:
+                top_guides = ordered_guides[:top_n_guides]
+
+        guides_in_top_n.update(top_guides)
+
+        if show_non_top:
+            guides_to_plot = guides
+        else:
+            guides_to_plot = [g for g in guides if g in top_guides]
+                
+        for guide in guides_to_plot:
+            if guide in df.index:
+                guide_order.append(guide)
+                xs.append(x)
+                x += 1
+
+        if gene_i < n_down or gene_i > len(gene_order) - n_up - 1 - 1:
+            x += gap
+
+        if gene == 'negative_control':
+            color = 'grey'
+        else:
+            color = f'C{gene_i % 10}'
+
+        gene_to_color[gene] = color
+
+
+    df_ordered = df.reindex(guide_order)
+    df_ordered['x'] = xs
+
+    fig, ax = plt.subplots(figsize=(15, 6))
+
+    colors = df_ordered['gene'].map(gene_to_color)
+
+    genes_to_label = np.concatenate([gene_order[:n_down], ['negative_control'], gene_order[-n_up:]])
+
+    guides_to_label = set()
+
+    for gene in genes_to_label:
+        gene_rows = df_ordered.query('gene == @gene')
+
+        guides_to_label.update(gene_rows.index)
+
+        if gene in down_genes or gene == 'negative_control':
+            y = gene_rows[bottom_key].min()
+            va = 'top'
+            y_offset = -5
+        else:
+            y = gene_rows[top_key].max()
+            va = 'bottom'
+            y_offset = 5
+
+        x = gene_rows['x'].mean()
+
+        ax.annotate(gene,
+                    xy=(x, y),
+                    xytext=(0, y_offset),
+                    textcoords='offset points',
+                    size=8,
+                    color=gene_to_color[gene],
+                    va=va,
+                    ha='center',
+                   )
+
+    guides_to_label = guides_to_label & guides_in_top_n
+
+    point_colors = matplotlib.colors.to_rgba_array(colors)
+    point_alphas = [0.95 if guide in guides_to_label else 0.25 for guide in df_ordered.index]
+    point_colors[:, 3] = point_alphas
+
+    line_colors = matplotlib.colors.to_rgba_array(colors)
+    line_alphas = [0.3 if guide in guides_to_label else 0.15 for guide in df_ordered.index]
+    line_colors[:, 3] = line_alphas
+
+    ax.scatter(x='x', y=y_key, c=point_colors, data=df_ordered, s=15, linewidths=(0,))
+    ax.set_xlim(-10, xs[-1] +  10)
+
+    ax.axhline(hline_y, color='black', alpha=0.5)
+
+    for (_, row), line_color in zip(df_ordered.iterrows(), line_colors):
+        x = row['x']
+        ax.plot([x, x], [row[bottom_key], row[top_key]], color=line_color)
+        
+    for side in ax.spines:
+        ax.spines[side].set_visible(False)
+
+    if quantity_to_plot == 'log2_fold_change':
+        if y_lims is None:
+            y_min = int(np.floor(min(df_ordered[bottom_key])))
+            y_max = int(np.ceil(max(df_ordered[top_key])))
+        else:
+            y_min, y_max = y_lims
+        ax.set_yticks(np.arange(y_min, y_max + 1))
+
+        for y in np.arange(y_min, y_max + 1):
+            ax.axhline(y, color='black', alpha=0.1, clip_on=False)
+
+    else:
+        if y_lims is None:
+            y_lims = (0, None)
+
+        y_min, y_max = y_lims
+        ax.grid(axis='y', color='black', alpha=0.1, clip_on=False)
+
+    ax.set_ylabel(y_label)
+            
+    ax.set_ylim(y_min, y_max)
+
+    ax.set_xticks([])
+
+    ax.annotate('most significant genes down',
+                xy=(0, 0),
+                xycoords='axes fraction',
+                xytext=(0, -10),
+                textcoords='offset points',
+                ha='left',
+                va='top',
+    )
+
+    ax.annotate('most significant genes up',
+                xy=(1, 0),
+                xycoords='axes fraction',
+                xytext=(0, -10),
+                textcoords='offset points',
+                ha='right',
+                va='top',
+    )
+
+    ax.annotate('guides grouped by gene,\nsorted by gene-level significance',
+                xy=(0.5, 0),
+                xycoords='axes fraction',
+                xytext=(0, -10),
+                textcoords='offset points',
+                ha='center',
+                va='top',
+    )
+    
+    return fig

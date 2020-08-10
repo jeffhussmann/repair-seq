@@ -837,7 +837,7 @@ def guide(pool, gene, number,
     
     return fig, data
 
-def gene(pool, gene, subset_query=None):
+def gene(pool, gene, **kwargs):
     guides = pool.variable_guide_library.gene_guides(gene)
 
     fig, axs = plt.subplots(len(guides), 1, figsize=(10, 10 * len(guides)))
@@ -845,6 +845,6 @@ def gene(pool, gene, subset_query=None):
         axs = [axs]
 
     for i, ax in enumerate(axs):
-        guide(pool, gene, i, ax=ax, subset_query=subset_query)
+        guide(pool, gene, i, ax=ax, **kwargs)
 
     return fig
