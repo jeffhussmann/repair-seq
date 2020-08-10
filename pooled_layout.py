@@ -216,12 +216,17 @@ class Layout:
         if ti.donor is not None:
             targets.append((ti.donor, ti.donor_sequence))
 
-        target_window_start = ti.features[ti.target, 'sgRNA constant region E+F'].start
-        target_window_end = ti.features[ti.target, 'EF1a'].end + 1
+        try:
+            target_window_start = ti.features[ti.target, 'sgRNA constant region E+F'].start
+            target_window_end = ti.features[ti.target, 'EF1a'].end + 1
 
-        ref_intervals = {
-            ti.target: interval.Interval(target_window_start, target_window_end),
-        }
+            ref_intervals = {
+                ti.target: interval.Interval(target_window_start, target_window_end),
+            }
+        except KeyError:
+            ref_intervals = {
+                ti.target: ti.amplicon_interval,
+            }
 
         if ti.donor is not None:
             ref_intervals[ti.donor] = interval.Interval(0, len(ti.donor_sequence) - 1)
@@ -275,11 +280,6 @@ class Layout:
 
         return edge_als
 
-    @memoized_property
-    def expected_target_strand(self):
-        ti = self.target_info
-        return ti.features[ti.target, 'sequencing_start'].strand
-    
     def get_target_edge_alignments(self, alignments):
         ''' Get target alignments that make it to the read edges. '''
         edge_alignments = {'left': [], 'right':[]}
@@ -294,7 +294,7 @@ class Layout:
             all_split_als.extend(extended)
 
         for al in all_split_als:
-            if sam.get_strand(al) != self.expected_target_strand:
+            if sam.get_strand(al) != self.target_info.sequencing_direction:
                 continue
 
             covered = interval.get_covered(al)
