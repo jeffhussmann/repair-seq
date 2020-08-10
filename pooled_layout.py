@@ -798,7 +798,7 @@ class Layout:
                     start = 0
                     end = length
                 else:
-                    start = len(self.seq) - length
+                    start = max(0, len(self.seq) - length)
                     end = len(self.seq)
 
                 als = self.seed_and_extend('target', start, end)
