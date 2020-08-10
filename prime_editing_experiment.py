@@ -12,6 +12,8 @@ from hits import fastq, utilities, adapters
 from knock_knock import experiment, read_outcome, visualize, svg
 from ddr import prime_editing_layout, pooled_layout
 
+from hits.utilities import memoized_property
+
 class PrimeEditingExperiment(experiment.Experiment):
     def __init__(self, base_dir, group, name, **kwargs):
         super().__init__(base_dir, group, name, **kwargs)
@@ -21,7 +23,6 @@ class PrimeEditingExperiment(experiment.Experiment):
         ]
 
         self.layout_mode = 'amplicon'
-        self.layout_module = prime_editing_layout
         self.max_qual = 41
 
         self.fns['fastq'] = self.data_dir / self.description['fastq_fn']
@@ -29,20 +30,64 @@ class PrimeEditingExperiment(experiment.Experiment):
 
         self.outcome_fn_keys = ['outcome_list']
 
-        self.max_relevant_length = 325
         self.length_to_store_unknown = None
         self.length_plot_smooth_window = 0
         self.x_tick_multiple = 50
+
+        label_offsets = {}
+        for (seq_name, feature_name), feature in self.target_info.features.items():
+            if feature.feature.startswith('donor_insertion'):
+                label_offsets[feature_name] = 2
+            elif feature.feature.startswith('donor_deletion'):
+                label_offsets[feature_name] = 2
+            elif feature_name.startswith('HA_RT'):
+                label_offsets[feature_name] = 1
+
+        label_offsets[f'{self.target_info.primary_sgRNA}_PAM'] = 2
+
+        self.target_info.features_to_show.update(set(self.target_info.PAM_features))
+        
+        self.diagram_kwargs.update(draw_sequence=True,
+                                   flip_target=self.target_info.sequencing_direction == '-',
+                                   flip_donor=True,
+                                   highlight_SNPs=True,
+                                   center_on_primers=True,
+                                   split_at_indels=True,
+                                   force_left_aligned=False,
+                                   label_offsets=label_offsets,
+                                  )
+
+    @memoized_property
+    def layout_module(self):
+        return prime_editing_layout
+
+    @memoized_property
+    def max_relevant_length(self):
+        outcomes = self.outcome_iter()
+        return max(outcome.length for outcome in outcomes)
                
     def preprocess(self):
+        # Trim a random length barcode from the beginning by searching for the expected starting sequence.
+        ti = self.target_info
+
+        if ti.sequencing_direction == '+':
+            start = ti.sequencing_start.start
+            prefix = ti.target_sequence[start:start + 6]
+        else:
+            end = ti.sequencing_start.end
+            prefix = utilities.reverse_complement(ti.target_sequence[end - 5:end + 1])
+
+        prefix = prefix.upper()
+
         trimmed_fn = self.fns_by_read_type['fastq']['trimmed']
         with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
             reads = fastq.reads(self.fns['fastq'])
             #reads = itertools.islice(reads, 1000)
             for read in self.progress(reads, desc='Trimming reads'):
                 try:
-                    start = read.seq.index('GCCTTT', 0, 20)
-                    trimmed_fh.write(str(read[start:]))
+                    start = read.seq.index(prefix, 0, 20)
+                    end = adapters.trim_by_local_alignment(adapters.truseq_R2_rc, read.seq)
+                    trimmed_fh.write(str(read[start:end]))
                 except ValueError:
                     pass
 
@@ -54,8 +99,8 @@ class PrimeEditingExperiment(experiment.Experiment):
                 self.generate_supplemental_alignments(read_type='trimmed', min_length=20)
                 self.combine_alignments(read_type='trimmed')
             elif stage == 'categorize':
-                #self.categorize_outcomes(read_type='trimmed')
-                #self.count_read_lengths()
+                self.categorize_outcomes(read_type='trimmed')
+                self.count_read_lengths()
                 self.extract_templated_insertion_info()
             elif stage == 'visualize':
                 lengths_fig = self.length_distribution_figure()
@@ -104,9 +149,9 @@ class PrimeEditingExperiment(experiment.Experiment):
                 if layout.seq is None:
                     length = 0
                 else:
-                    length = len(layout.seq)
+                    length = layout.inferred_amplicon_length
 
-                outcome = read_outcome.Outcome(name, length, category, subcategory, details)
+                outcome = self.final_Outcome(name, length, category, subcategory, details)
                 fh.write(f'{outcome}\n')
 
         counts = {description: len(names) for description, names in outcomes.items()}
@@ -155,9 +200,20 @@ class PrimeEditingExperiment(experiment.Experiment):
     def get_read_layout(self, read_id, fn_key=None, outcome=None, read_type='trimmed'):
         return super().get_read_layout(read_id, fn_key='bam_by_name', outcome=outcome, read_type=read_type)
 
+    def get_read_diagram(self, read_id, **kwargs):
+        return super().get_read_diagram(read_id, read_type='trimmed', **kwargs)
+
     def alignment_groups(self, fn_key='bam_by_name', outcome=None, read_type='trimmed'):
         groups = super().alignment_groups(fn_key=fn_key, outcome=outcome, read_type=read_type)
         return groups
+
+    @memoized_property
+    def qname_to_inferred_length(self):
+        qname_to_inferred_length = {}
+        for outcome in self.outcome_iter():
+            qname_to_inferred_length[outcome.query_name] = outcome.length
+
+        return qname_to_inferred_length
 
     generate_supplemental_alignments = experiment.IlluminaExperiment.generate_supplemental_alignments
 
@@ -166,7 +222,7 @@ class PrimeEditingExperiment(experiment.Experiment):
 
         al_groups = self.alignment_groups(outcome=outcome, read_type='trimmed')
         for name, als in al_groups:
-            length = als[0].query_length
+            length = self.qname_to_inferred_length[name]
             by_length[length].add((name, als))
         
         if outcome is None:
@@ -190,10 +246,7 @@ class PrimeEditingExperiment(experiment.Experiment):
         for length, sampler in items:
             diagrams = self.alignment_groups_to_diagrams(sampler.sample,
                                                          num_examples=num_examples,
-                                                         split_at_indels=True,
-                                                         flip_donor=True,
-                                                         highlight_SNPs=True,
-                                                         flip_target=self.target_info.sequencing_start.strand == '-',
+                                                         **self.diagram_kwargs,
                                                         )
             im = visualize.make_stacked_Image(diagrams, titles='')
             fn = fns['length_range_figure'](length, length)
@@ -206,7 +259,7 @@ class PrimeEditingExperiment(experiment.Experiment):
 
         with open(self.fns['outcome_list']) as outcomes_fh:
             for line in outcomes_fh:
-                outcome = read_outcome.Outcome.from_line(line)
+                outcome = self.final_Outcome.from_line(line)
             
                 if outcome.category == 'unintended donor integration':
                     insertion_outcome = prime_editing_layout.LongTemplatedInsertionOutcome.from_string(outcome.details)
@@ -278,14 +331,14 @@ class PrimeEditingExperiment(experiment.Experiment):
 
 class PrimeEditingFixedOffsetExperiment(PrimeEditingExperiment):
     def preprocess(self):
-        offset = self.description['offset']
+        start = self.description['offset']
+
         trimmed_fn = self.fns_by_read_type['fastq']['trimmed']
-
-        truseq_R2_rc = adapters.truseq_R2_rc.encode()
-
         with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
             reads = fastq.reads(self.fns['fastq'])
-            #reads = itertools.islice(reads, 10000)
+            #reads = itertools.islice(reads, 2000)
             for read in self.progress(reads, desc='Trimming reads'):
-                adapter_start = adapters.find_adapter(truseq_R2_rc, 2, read.seq.encode())
-                trimmed_fh.write(str(read[offset:adapter_start]))
+                end = adapters.trim_by_local_alignment(adapters.truseq_R2_rc, read.seq)
+                trimmed_read = read[start:end]
+                if len(trimmed_read) > 0:
+                    trimmed_fh.write(str(read[start:end]))

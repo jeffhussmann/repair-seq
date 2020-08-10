@@ -141,6 +141,12 @@ class Layout:
         if len(als) == 0:
             return als
 
+        # Synthesis errors in primers frequently result in one or more short deletions
+        # in the primer and cause alignments to end at one of these deletions.
+        # If initial alignments don't reach the read ends, look for more lenient alignments
+        # between read edges and primers.
+        # An alternative strategy here might be to use sw.extend_repeatedly.
+
         # If the left edge of the read isn't covered, try to merge a primer alignment to the left-most alignment.
         existing_covered = interval.get_disjoint_covered(als)
         realigned_to_primers = {}
@@ -156,19 +162,24 @@ class Layout:
 
                 als = others + [merged]
 
-        #if existing_covered.end <= len(self.seq) - 1 - 5:
-        #    realigned_to_primers[3] = self.realign_edges_to_primers(3)
-        #    if realigned_to_primers[3] is not None:
-        #        right_most = max(als, key=lambda al: interval.get_covered(al).end)
-        #        others = [al for al in als if al != right_most]
-        #        merged = sam.merge_adjacent_alignments(right_most, realigned_to_primers[3], self.target_info.reference_sequences)
-        #        if merged is None:
-        #            merged = right_most
+        # 7.27.20: this was commented out, I think because of behavior on screen data
+        if existing_covered.end <= len(self.seq) - 1 - 5:
+            realigned_to_primers[3] = self.realign_edges_to_primers(3)
+            if realigned_to_primers[3] is not None:
+                right_most = max(als, key=lambda al: interval.get_covered(al).end)
+                others = [al for al in als if al != right_most]
+                merged = sam.merge_adjacent_alignments(right_most, realigned_to_primers[3], self.target_info.reference_sequences)
+                if merged is None:
+                    merged = right_most
 
-        #        als = others + [merged]
+                als = others + [merged]
 
-        # If processed alignments don't cover either edge, this typically means non-specific amplification.
-        # Try to realign each uncovered edge to the relevant primer to check for this.
+
+        # Non-specific amplification of a genomic region that imperfectly matches primers
+        # can produce a chimera of the relevant genomic region and primer sequence.
+        # Check if more lenient alignments of read edge to primers produces a set of alignments
+        # that make up a such a chimera. 
+
         existing_covered = interval.get_disjoint_covered(als)
 
         possible_edge_als = []
@@ -176,8 +187,9 @@ class Layout:
         if existing_covered.start >= 5:
             possible_edge_als.append(realigned_to_primers[5])
 
-        #if existing_covered.end <= len(self.seq) - 1 - 5:
-        #    possible_edge_als.append(realigned_to_primers[3])
+        # 7.27.20: this was commented out, I think because of behavior on screen data
+        if existing_covered.end <= len(self.seq) - 1 - 5:
+            possible_edge_als.append(realigned_to_primers[3])
 
         edge_als = []
 
@@ -206,19 +218,24 @@ class Layout:
                 best_edge_al = max(edge_als_by_side[edge], key=lambda al: al.query_alignment_length)
                 als.append(best_edge_al)
 
-        # If the right edge of the read isn't covered, try to merge a perfect edge alignment to the right-most alignment.
+
+        # One-sided sequencing reads of outcomes that represent complex rearrangments may end
+        # a short way into a new segment that is too short to produce an initial alignment.
+        # To catch some such cases, look for perfect alignments between uncovered read edges
+        # and perfect alignment to relevant sequences.
+
         covered = interval.get_disjoint_covered(als)
 
-        #if len(self.seq) - 1 not in covered:
-        #    right_most = max(als, key=lambda al: interval.get_covered(al).end)
-        #    other = [al for al in als if al != right_most]
+        if len(self.seq) - 1 not in covered:
+            right_most = max(als, key=lambda al: interval.get_covered(al).end)
+            other = [al for al in als if al != right_most]
 
-        #    perfect_edge_als = self.perfect_edge_alignments
-        #    merged = sam.merge_adjacent_alignments(right_most, perfect_edge_als['right'], self.target_info.reference_sequences)
-        #    if merged is None:
-        #        merged = right_most
+            perfect_edge_als = self.perfect_edge_alignments
+            merged = sam.merge_adjacent_alignments(right_most, perfect_edge_als['right'], self.target_info.reference_sequences)
+            if merged is None:
+                merged = right_most
 
-        #    als = other + [merged]
+            als = other + [merged]
         
         if 0 not in covered:
             left_most = min(als, key=lambda al: interval.get_covered(al).start)
@@ -230,6 +247,10 @@ class Layout:
                 merged = left_most
 
             als = other + [merged]
+
+
+        # If the end result of all of these alignment attempts is two mergeable alignments,
+        # merge them.
 
         if len(als) == 2 and sam.get_strand(als[0]) == sam.get_strand(als[1]):
             upstream, downstream = sorted(als, key=lambda al: al.reference_start)
@@ -248,9 +269,9 @@ class Layout:
         for al in self.target_alignments + self.donor_alignments:
             split_als = layout.comprehensively_split_alignment(al,
                                                                self.target_info,
+                                                               'illumina',
                                                                self.ins_size_to_split_at,
                                                                self.del_size_to_split_at,
-                                                               'illumina',
                                                               )
 
             if al.reference_name == self.target_info.target:
@@ -291,7 +312,12 @@ class Layout:
 
         all_split_als = []
         for al in alignments:
-            split_als = layout.comprehensively_split_alignment(al, self.target_info, self.ins_size_to_split_at, self.del_size_to_split_at, 'illumina')
+            split_als = layout.comprehensively_split_alignment(al,
+                                                               self.target_info,
+                                                               'illumina',
+                                                               self.ins_size_to_split_at,
+                                                               self.del_size_to_split_at,
+                                                              )
             
             target_seq_bytes = self.target_info.reference_sequences[al.reference_name].encode()
             extended = [sw.extend_alignment(split_al, target_seq_bytes) for split_al in split_als]
@@ -299,18 +325,15 @@ class Layout:
             all_split_als.extend(extended)
 
         for al in all_split_als:
-            if sam.get_strand(al) != self.expected_target_strand:
+            if sam.get_strand(al) != self.target_info.sequencing_direction:
                 continue
 
             covered = interval.get_covered(al)
 
-            if covered.start <= 5:
+            if covered.start <= 5 or self.overlaps_left_primer(al):
                 edge_alignments['left'].append(al)
             
-            # The reverse primer check here is from pilot experiments in the opposite orientation
-            # as the screen.
-            #if covered.end >= len(self.seq) - 1 - 5 or self.extends_past_reverse_primer(al):
-            if covered.end >= len(self.seq) - 1 - 5:
+            if covered.end >= len(self.seq) - 1 - 5 or self.overlaps_right_primer(al):
                 edge_alignments['right'].append(al)
 
         for edge in ['left', 'right']:
@@ -321,12 +344,21 @@ class Layout:
 
         return edge_alignments
 
-    def extends_past_reverse_primer(self, al):
-        if (self.target_info.target, 'reverse_primer') in self.target_info.features:
-            reverse_primer = self.target_info.features[self.target_info.target, 'reverse_primer']
-            return al.reference_start <= reverse_primer.end <= al.reference_end
-        else:
-            return False
+    def overlaps_right_primer(self, al):
+        primer = self.target_info.primers_by_side_of_read['right']
+        num_overlapping_bases = al.get_overlap(primer.start, primer.end + 1)
+        overlaps = num_overlapping_bases > 0
+        correct_strand = sam.get_strand(al) == self.target_info.sequencing_direction 
+
+        return correct_strand and overlaps
+
+    def overlaps_left_primer(self, al):
+        primer = self.target_info.primers_by_side_of_read['left']
+        num_overlapping_bases = al.get_overlap(primer.start, primer.end + 1)
+        overlaps = num_overlapping_bases > 0
+        correct_strand = sam.get_strand(al) == self.target_info.sequencing_direction 
+
+        return correct_strand and overlaps
 
     @memoized_property
     def whole_read(self):
@@ -370,8 +402,8 @@ class Layout:
             return False
         else:
             not_too_much = {
-                'start': missing_from['start'] <= 5,
-                'end': (missing_from['end'] <= 5) or self.extends_past_reverse_primer(self.single_target_alignment),
+                'start': missing_from['start'] <= 5 or self.overlaps_left_primer(self.single_target_alignment),
+                'end': (missing_from['end'] <= 5) or self.overlaps_right_primer(self.single_target_alignment),
                 'middle': missing_from['middle'] <= 5,
             }
 
@@ -391,7 +423,7 @@ class Layout:
     @memoized_property
     def starts_at_expected_location(self):
         edge_al = self.target_edge_alignments['left']
-        return sam.overlaps_feature(edge_al, self.target_info.sequencing_start)
+        return self.overlaps_left_primer(edge_al)
 
     @memoized_property
     def Q30_fractions(self):
@@ -746,10 +778,6 @@ class Layout:
         return valids
 
     @memoized_property
-    def valid_strand_for_edge_alignments(self):
-        return '-'
-
-    @memoized_property
     def perfect_edge_alignments_and_gap(self):
         # Set up keys to prioritize alignments.
         # Prioritize by (correct strand and side of cut, length (longer better), distance from cut (closer better)) 
@@ -758,7 +786,7 @@ class Layout:
             length = al.query_alignment_length
 
             valid_int = self.valid_intervals_for_edge_alignments[side]
-            valid_strand = self.valid_strand_for_edge_alignments
+            valid_strand = self.target_info.sequencing_direction
 
             correct_strand = sam.get_strand(al) == valid_strand
 
@@ -1045,18 +1073,18 @@ class Layout:
         return best_explanation
 
     @memoized_property
-    def primer_dimer(self):
-        primers = self.target_info.primers_by_side_of_target
+    def non_primer_nts(self):
+        primers = self.target_info.primers_by_side_of_read
         left_al = self.target_edge_alignments['left']
         if left_al is None:
             return len(self.seq)
-        left_primer_interval = interval.Interval.from_feature(primers[5])
+        left_primer_interval = interval.Interval.from_feature(primers['left'])
         left_al_cropped_to_primer = sam.crop_al_to_ref_int(left_al, left_primer_interval.start, left_primer_interval.end)
 
         right_al = self.target_edge_alignments['right']
         if right_al is None:
             return len(self.seq)
-        right_primer_interval = interval.Interval.from_feature(primers[3])
+        right_primer_interval = interval.Interval.from_feature(primers['right'])
         right_al_cropped_to_primer = sam.crop_al_to_ref_int(right_al, right_primer_interval.start, right_primer_interval.end)
 
         not_covered_by_primer_als = self.whole_read - interval.get_disjoint_covered([left_al_cropped_to_primer, right_al_cropped_to_primer])
@@ -1142,8 +1170,12 @@ class Layout:
         # TODO: re-examine concatamer
         relevant_alignments = details['full_alignments']# + details['concatamer_alignments']
 
-        self.category = 'unintended donor integration'
-        self.subcategory = subcategory
+        if self.donor_insertion_matches_intended:
+            self.category = 'intended edit'
+            self.subcategory = 'insertion'
+        else:
+            self.category = 'unintended donor integration'
+            self.subcategory = subcategory
         self.relevant_alignments = relevant_alignments
         self.special_alignment = details['candidate_alignment']
 
@@ -1704,10 +1736,9 @@ class Layout:
 
                 else: # one indel, not a donor deletion
                     if self.has_donor_SNV:
+                        # 20.08.09: commented out below, more parsimonious
                         # Edit + indel can be a donor insertion
-                        if self.donor_insertion is not None:
-                            self.register_donor_insertion()
-                        elif indel.kind == 'D':
+                        if indel.kind == 'D':
                             self.category = 'edit + indel'
                             self.subcategory = 'edit + deletion'
                             HDR_outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
@@ -1736,7 +1767,7 @@ class Layout:
                             self.subcategory = 'clean'
 
                         if indel.kind == 'D':
-                            if self.primer_dimer == 0:
+                            if self.non_primer_nts <= 5:
                                 self.category = 'nonspecific amplification'
                                 self.subcategory = 'primer dimer'
                                 self.details = 'n/a'
@@ -1754,7 +1785,7 @@ class Layout:
                             self.relevant_alignments = [self.single_target_alignment]
 
             else: # more than one indel
-                if self.primer_dimer <= 50:
+                if self.non_primer_nts <= 50:
                     self.category = 'nonspecific amplification'
                     self.subcategory = 'unknown'
                     self.details = 'n/a'
@@ -1764,10 +1795,6 @@ class Layout:
                     self.subcategory = 'uncategorized'
                     self.details = 'n/a'
                     self.relevant_alignments = self.uncategorized_relevant_alignments
-
-        elif self.is_valid_SD_MMEJ:
-            #TODO: if gap length is zero, classify as deletion
-            self.register_SD_MMEJ()
 
         elif self.long_duplication is not None:
             subcategory, ref_junctions = self.long_duplication
@@ -1783,7 +1810,7 @@ class Layout:
         elif self.genomic_insertion is not None:
             self.register_genomic_insertion()
 
-        elif self.primer_dimer <= 50:
+        elif self.non_primer_nts <= 50:
             self.category = 'nonspecific amplification'
             self.subcategory = 'unknown'
             self.details = 'n/a'
@@ -1849,20 +1876,20 @@ class Layout:
         
         gap_covers = []
         
-        target_interval = interval.Interval(ti.features[ti.target, 'polyT-track'].start, ti.sequencing_start.end)
+        target_interval = ti.amplicon_interval
         
         for gap in initial_uncovered:
             start = max(0, gap.start - 5)
             end = min(len(self.seq) - 1, gap.end + 5)
             extended_gap = interval.Interval(start, end)
-            
+
             als = sw.align_read(self.read,
                                 [(ti.target, ti.target_sequence)],
                                 4,
                                 ti.header,
-                                read_interval=extended_gap,
                                 N_matches=False,
                                 max_alignments_per_target=5,
+                                read_interval=extended_gap,
                                 ref_intervals={ti.target: target_interval},
                             )
             
@@ -1931,19 +1958,27 @@ class Layout:
             (duplication, iterated) - multiple uses of the same junction
             (duplication, complex)  - multiple junctions that are not exactly the same
         '''
-
         # Order target als by position on the query from left to right.
         target_als = sorted(self.target_gap_covering_alignments, key=interval.get_covered)
 
-        covered = interval.get_disjoint_covered(target_als)
+        correct_strand = [al for al in target_als if sam.get_strand(al) == self.target_info.sequencing_direction]
+
+        covered = interval.get_disjoint_covered(correct_strand)
         uncovered = self.whole_read_minus_edges(2) - covered
         
-        if len(target_als) == 1 or uncovered.total_length > 0:
+        if len(correct_strand) == 1 or uncovered.total_length > 0:
             return None
         
         ref_junctions = []
 
-        for junction_i, (left_al, right_al) in enumerate(zip(target_als, target_als[1:])):
+        if self.target_info.sequencing_direction == '+':
+            get_left_end = lambda al: al.reference_end - 1 
+            get_right_end = lambda al: al.reference_start
+        else:
+            get_left_end = lambda al: al.reference_start
+            get_right_end = lambda al: al.reference_end - 1 
+
+        for junction_i, (left_al, right_al) in enumerate(zip(correct_strand, correct_strand[1:])):
             switch_results = sam.find_best_query_switch_after(left_al, right_al, self.target_info.target_sequence, self.target_info.target_sequence, max)
 
             left_switch_after = max(switch_results['best_switch_points'])
@@ -1956,12 +1991,12 @@ class Layout:
             if left_al_cropped is None:
                 left = -1
             else:
-                left = left_al_cropped.reference_start
+                left = get_left_end(left_al_cropped)
 
             if right_al_cropped is None:
                 right = -1
             else:
-                right = right_al_cropped.reference_end - 1
+                right = get_right_end(right_al_cropped)
 
             ref_junction = (left, right)
             ref_junctions.append(ref_junction)
@@ -1990,6 +2025,26 @@ class Layout:
     @memoized_property
     def uncategorized_relevant_alignments(self):
         return self.target_gap_covering_alignments + self.donor_alignments + interval.make_parsimonious(self.nonredundant_supplemental_alignments)
+
+    @memoized_property
+    def inferred_amplicon_length(self):
+        right_al = self.get_target_edge_alignments(self.target_gap_covering_alignments)['right']
+
+        if right_al is None:
+            return len(self.seq)
+        else:
+            right_al_edge = sam.reference_edges(right_al)[3]
+
+            right_primer = self.target_info.primers_by_side_of_read['right']
+
+            if self.target_info.sequencing_direction == '+':
+                right_primer_edge = right_primer.end
+                inferred_extra = right_primer_edge - right_al_edge
+            else:
+                right_primer_edge = right_primer.start
+                inferred_extra = right_al_edge - right_primer_edge
+
+            return len(self.seq) + max(inferred_extra, 0)
 
 category_order = [
     ('wild type',
