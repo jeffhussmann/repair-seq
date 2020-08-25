@@ -43,6 +43,9 @@ class SingleGuideExperiment(experiment.Experiment):
         if self.pool is None:
             self.pool = PooledScreen(base_dir, group)
 
+        self.fixed_guide = fixed_guide
+        self.variable_guide = variable_guide
+        
         super().__init__(base_dir, group, name, **kwargs)
 
         self.fns.update({
@@ -65,9 +68,6 @@ class SingleGuideExperiment(experiment.Experiment):
             'reads_per_UMI': self.dir / 'reads_per_UMI.pkl',
         })
 
-        self.fixed_guide = fixed_guide
-        self.variable_guide = variable_guide
-        
         self.max_insertion_length = None
         self.max_qual = 41
 
@@ -85,9 +85,11 @@ class SingleGuideExperiment(experiment.Experiment):
             'bosTau7',
         ]
 
-        self.layout_mode = 'placeholder'
+        self.layout_mode = 'error_corrected'
 
         self.min_reads_per_UMI = self.pool.min_reads_per_UMI
+
+        self.outcome_fn_keys = ['filtered_cell_outcomes']
 
         self.final_Outcome = coherence.Pooled_UMI_Outcome
 
@@ -337,7 +339,7 @@ class SingleGuideExperiment(experiment.Experiment):
                     if name != read.name:
                         raise ValueError('iters out of sync', name, read.name)
 
-                    layout = Layout(als, self.target_info)
+                    layout = Layout(als, self.target_info, mode=self.layout_mode)
                     total += 1
                     try:
                         category, subcategory, details, outcome = layout.categorize()
@@ -583,7 +585,7 @@ class SingleGuideExperiment(experiment.Experiment):
             als = self.get_read_alignments(read_id, outcome=outcome)
         else:
             als = qname_to_als[read_id]
-        layout = self.layout_module.Layout(als, self.target_info)
+        layout = self.layout_module.Layout(als, self.target_info, mode=self.layout_mode)
         return layout
 
     def get_read_diagram(self, read_id, only_relevant=True, qname_to_als=None, outcome=None, **diagram_kwargs):
@@ -793,7 +795,9 @@ class SingleGuideExperiment(experiment.Experiment):
 class SingleGuideNoUMIExperiment(SingleGuideExperiment):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+
         self.final_Outcome = coherence.gDNA_Outcome
+        self.outcome_fn_keys = ['outcome_list']
 
     def merge_read_chunks(self):
         with gzip.open(self.fns_by_read_type['fastq']['collapsed_R2'], 'wt', compresslevel=1) as combined_fh:
@@ -1146,6 +1150,15 @@ class PooledScreen:
         for fixed_guide in self.fixed_guide_library.gene_guides(second_gene):
             for variable_guide in self.variable_guide_library.gene_guides(first_gene):
                 combinations.add((fixed_guide, variable_guide))
+
+        return sorted(combinations)
+
+    def guide_combinations_for_ordered_gene_pair(self, fixed_gene, variable_gene):
+        combinations = []
+
+        for fixed_guide in self.fixed_guide_library.gene_guides(fixed_gene):
+            for variable_guide in self.variable_guide_library.gene_guides(variable_gene):
+                combinations.append((fixed_guide, variable_guide))
 
         return sorted(combinations)
 

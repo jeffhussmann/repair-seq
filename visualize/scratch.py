@@ -69,33 +69,56 @@ def plot_correlations(pool, guide, num_outcomes, label=True, extra_genes=None, n
     
     return fig, df
 
-def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, layout_kwargs=None, fixed_guide='none'):
+def correlation_heatmap(pool,
+                        outcomes=40,
+                        guides=100,
+                        upside_down=False,
+                        layout_kwargs=None,
+                        fixed_guide='none',
+                        cluster='both',
+                        outcome_diagram='heatmap',
+                        nt_guide_color='C1',
+                        gene_to_color=None,
+                        min_UMIs=None,
+                        draw_colorbars=True,
+                       ):
+
     if layout_kwargs is None:
         layout_kwargs = {}
+
+    if gene_to_color is None:
+        gene_to_color = {}
 
     cmap = plt.get_cmap('PuOr_r')
     cmap.set_bad('white')
 
     clustered_guide_order, clustered_outcome_order, correlations = ddr.visualize.heatmap.cluster(pool,
-                                                                             num_outcomes,
-                                                                             guides,
-                                                                             method='average',
-                                                                             fixed_guide=fixed_guide,
+                                                                            outcomes,
+                                                                            guides,
+                                                                            method='average',
+                                                                            fixed_guide=fixed_guide,
+                                                                            min_UMIs=min_UMIs,
                                                                             )
-    if isinstance(guides, int):
-        guide_order = clustered_guide_order
+
+    if cluster == 'both' or cluster == 'guides':
+        final_guide_order = clustered_guide_order
     else:
-        guide_order = guides
+        final_guide_order = sorted(clustered_guide_order)
+
+    if cluster == 'both' or cluster == 'outcomes':
+        final_outcome_order = clustered_outcome_order
+    else:
+        final_outcome_order = outcomes
 
     if upside_down:
-        mask = np.triu(np.ones((len(correlations), len(correlations))), k=1)
+        mask = np.triu(np.ones((len(correlations['guides']), len(correlations['guides']))), k=1)
     else:
-        mask = np.tri(len(correlations), k=-1)
+        mask = np.tri(len(correlations['guides']), k=-1)
 
-    masked = np.ma.array(correlations, mask=mask)
+    masked = np.ma.array(correlations['guides'], mask=mask)
 
     inches_per_guide = 16 / 100
-    corr_size = len(guide_order) * inches_per_guide
+    corr_size = len(final_guide_order) * inches_per_guide
     fig, correlation_ax = plt.subplots(figsize=(corr_size, corr_size))
 
     correlation_im = correlation_ax.imshow(masked, cmap=cmap, vmin=-1, vmax=1)
@@ -110,7 +133,7 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
 
     correlation_im.set_transform(transform)
 
-    diag_length = np.sqrt(2 * len(correlations)**2)
+    diag_length = np.sqrt(2 * len(correlations['guides'])**2)
 
     if upside_down:
         correlation_ax.set_ylim(diag_length / 2 + 1, 0)
@@ -119,17 +142,21 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
 
     correlation_ax.set_xlim(-np.sqrt(2) / 2, -np.sqrt(2) / 2 + diag_length)
 
-    for i, guide in enumerate(guide_order):
+    for i, guide in enumerate(final_guide_order):
         x = 2**0.5 * i
+        gene = pool.variable_guide_library.guide_to_gene[guide]
+        color = gene_to_color.get(gene, 'black')
         correlation_ax.annotate(guide,
-                    xy=(x, 0),
-                    xytext=(0, 3 if upside_down else -3),
-                    textcoords='offset points',
-                    rotation=90,
-                    ha='center',
-                    va='bottom' if upside_down else 'top',
-                    size=6,
-                )
+                                xy=(x, 0),
+                                xytext=(0, 3 if upside_down else -3),
+                                textcoords='offset points',
+                                rotation=90,
+                                ha='center',
+                                va='bottom' if upside_down else 'top',
+                                size=7 if color == 'black' else 8,
+                                color=color,
+                                weight='normal' if color == 'black' else 'bold',
+                               )
 
     if upside_down:
         title_kwargs = dict(
@@ -144,33 +171,35 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
             va='bottom',
         )
 
-    correlation_ax.annotate(pool.group,
-            xycoords='axes fraction',
-            textcoords='offset points',
-            ha='center',
-            **title_kwargs,
-    )
+    if draw_colorbars:
+        correlation_ax.annotate(pool.group,
+                xycoords='axes fraction',
+                textcoords='offset points',
+                ha='center',
+                **title_kwargs,
+        )
 
     corr_ax_p = correlation_ax.get_position()
 
-    # Draw correlation colorbar.
-    cbar_ax = fig.add_axes((corr_ax_p.x1 - corr_ax_p.width * 0.1, corr_ax_p.y0 + corr_ax_p.height * 0.4, corr_ax_p.width * 0.02, corr_ax_p.height * 0.4))
-    cbar = fig.colorbar(correlation_im, cax=cbar_ax, ticks=[-1, 0, 1])
-    cbar_ax.annotate('correlation\nbetween\noutcome\nredistribution\nprofiles',
-                     xy=(1, 0.5),
-                     xycoords='axes fraction',
-                     xytext=(60, 0),
-                     textcoords='offset points',
-                     ha='center',
-                     va='center',
-                    )
+    if draw_colorbars:
+        # Draw correlation colorbar.
+        cbar_ax = fig.add_axes((corr_ax_p.x1 - corr_ax_p.width * 0.1, corr_ax_p.y0 + corr_ax_p.height * 0.4, corr_ax_p.width * 0.02, corr_ax_p.height * 0.4))
+        cbar = fig.colorbar(correlation_im, cax=cbar_ax, ticks=[-1, 0, 1])
+        cbar_ax.annotate('correlation\nbetween\noutcome\nredistribution\nprofiles',
+                        xy=(1, 0.5),
+                        xycoords='axes fraction',
+                        xytext=(60, 0),
+                        textcoords='offset points',
+                        ha='center',
+                        va='center',
+                        )
 
-    cbar.outline.set_alpha(0.1)
+        cbar.outline.set_alpha(0.1)
 
     heatmap_width = corr_ax_p.width
-    heatmap_height = heatmap_width * len(clustered_outcome_order) / len(guide_order)
-    # Make gap equal to height for 5 outcome rows.
-    gap = heatmap_height / len(clustered_outcome_order) * 5
+    heatmap_height = heatmap_width * len(final_outcome_order) / len(final_guide_order)
+    # Make gap equal to height for 7 outcome rows.
+    gap = heatmap_height / len(final_outcome_order) * 6
 
     if upside_down:
         y0 = corr_ax_p.y1 + gap
@@ -179,7 +208,7 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
 
     fc_ax = fig.add_axes((corr_ax_p.x0, y0, heatmap_width, heatmap_height))
 
-    fcs = pool.log2_fold_changes('perfect', fixed_guide)[fixed_guide].loc[clustered_outcome_order, guide_order]
+    fcs = pool.log2_fold_changes('perfect', fixed_guide)[fixed_guide].loc[final_outcome_order, final_guide_order]
 
     heatmap_kwargs = dict(cmap=plt.get_cmap('RdBu_r'), vmin=-2, vmax=2)
     heatmap_im = fc_ax.imshow(fcs, **heatmap_kwargs)
@@ -188,11 +217,14 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
 
     fc_ax_p = fc_ax.get_position()
 
-    diagram_width = fc_ax_p.width * 0.6
+    window_start, window_end = layout_kwargs['window']
+    window_size = window_end - window_start
+
+    diagram_width = fc_ax_p.width * 0.15 * window_size / 20
     diagram_gap = diagram_width * 0.02
 
     diagram_ax = fig.add_axes((fc_ax_p.x0 - diagram_width - diagram_gap, fc_ax_p.y0, diagram_width, fc_ax_p.height), sharey=fc_ax)
-    _ = ddr.visualize.outcome_diagrams.plot(clustered_outcome_order[::-1],
+    _ = ddr.visualize.outcome_diagrams.plot(final_outcome_order[::-1],
                               pool.target_info,
                               ax=diagram_ax,
                               **layout_kwargs,
@@ -200,39 +232,73 @@ def correlation_heatmap(pool, num_outcomes=40, guides=100, upside_down=False, la
 
     diagram_ax.set_title('distance from cut site (nts)', size=10, pad=15)
 
-    frequency_width = fc_ax_p.width * 0.15
-    frequency_gap = frequency_width * 0.1
+    outcome_corr_ax = fig.add_axes((fc_ax_p.x0, fc_ax_p.y0, fc_ax_p.height, fc_ax_p.height))
 
-    frequency_ax = fig.add_axes((fc_ax_p.x1 + frequency_gap, fc_ax_p.y0, frequency_width, fc_ax_p.height), sharey=fc_ax)
+    for side in ['left', 'top', 'bottom']:
+        outcome_corr_ax.spines[side].set_visible(False)
 
-    frequencies = pool.non_targeting_fractions('perfect', 'none').loc[clustered_outcome_order]
+    outcome_corr_ax.spines['right'].set_color('white')
 
-    frequency_ax.plot(np.log10(frequencies), np.arange(len(frequencies)), '.', markeredgewidth=0, markersize=10, alpha=0.9, clip_on=False)
+    if outcome_diagram == 'heatmap' and (cluster == 'both' or cluster == 'outcomes'):
+        mask = np.tri(len(correlations['outcomes']), k=-1)
+        masked = np.ma.array(correlations['outcomes'], mask=mask)
 
-    x_lims = np.log10(np.array([2e-3, 2e-1]))
+        correlation_im = outcome_corr_ax.imshow(masked, cmap=cmap, vmin=-1, vmax=1)
 
-    for exponent in [3, 2, 1]:
-        xs = np.log10(np.arange(1, 10) * 10**-exponent)        
-        for x in xs:
-            if x_lims[0] <= x <= x_lims[1]:
-                frequency_ax.axvline(x, color='black', alpha=0.07, clip_on=False)
+        transform = matplotlib.transforms.Affine2D().rotate_deg(45) + outcome_corr_ax.transData
+        correlation_im.set_transform(transform)
 
-    x_ticks = [x for x in [2e-3, 5e-3, 1e-2, 5e-2, 1e-1, 2e-1] if x_lims[0] <= np.log10(x) <= x_lims[1]]
+    outcome_corr_ax.set_xticks([])
+    outcome_corr_ax.set_yticks([])
 
-    frequency_ax.set_xticks(np.log10(x_ticks))
-    frequency_ax.set_xticklabels([f'{100 * x:g}' for x in x_ticks])
+    diag_length = np.sqrt(2 * len(correlations['outcomes'])**2)
 
-    for side in ['left', 'right', 'bottom']:
-        frequency_ax.spines[side].set_visible(False)
+    outcome_corr_ax.set_xlim(0, diag_length / 2)
+    outcome_corr_ax.set_ylim(-np.sqrt(2) / 2, -np.sqrt(2) / 2 + diag_length)
 
-    frequency_ax.xaxis.tick_top()
-    frequency_ax.set_xlim(*x_lims)
+    # Can't figure out how to prevent re-positioning of the axes, so simply reset it
+    # to the intended position after done.
+    outcome_corr_ax.set_position((fc_ax_p.x1 + 0.01 * fc_ax_p.width, fc_ax_p.y0, fc_ax_p.height / 2, fc_ax_p.height))
 
-    frequency_ax.set_title('percentage of outcomes\nin cells containing\nnon-targeting guides', size=10, pad=15)
+    if outcome_diagram != 'heatmap' or (cluster != 'both' and cluster != 'outcomes'):
+        # Draw non-targeting fractions.
 
-    ddr.visualize.heatmap.add_fold_change_colorbar(fig, heatmap_im, -0.05, 0.4, 0.15, 0.02)
+        frequency_width = fc_ax_p.width * 0.15
+        frequency_gap = frequency_width * 0.1
 
-    return fig, guide_order, clustered_outcome_order
+        frequency_ax = fig.add_axes((fc_ax_p.x1 + frequency_gap, fc_ax_p.y0, frequency_width, fc_ax_p.height), sharey=fc_ax)
+
+        frequencies = pool.non_targeting_fractions('perfect', 'none').loc[final_outcome_order]
+
+        xs = np.log10(frequencies)
+        ys = np.arange(len(frequencies))
+        frequency_ax.plot(xs, ys, '.-', markeredgewidth=0, markersize=10, alpha=0.9, clip_on=False, color=nt_guide_color)
+
+        x_lims = np.log10(np.array([2e-3, 2e-1]))
+
+        for exponent in [3, 2, 1]:
+            xs = np.log10(np.arange(1, 10) * 10**-exponent)        
+            for x in xs:
+                if x_lims[0] <= x <= x_lims[1]:
+                    frequency_ax.axvline(x, color='black', alpha=0.07, clip_on=False)
+
+        x_ticks = [x for x in [2e-3, 5e-3, 1e-2, 5e-2, 1e-1, 2e-1] if x_lims[0] <= np.log10(x) <= x_lims[1]]
+
+        frequency_ax.set_xticks(np.log10(x_ticks))
+        frequency_ax.set_xticklabels([f'{100 * x:g}' for x in x_ticks])
+
+        for side in ['left', 'right', 'bottom']:
+            frequency_ax.spines[side].set_visible(False)
+
+        frequency_ax.xaxis.tick_top()
+        frequency_ax.set_xlim(*x_lims)
+
+        frequency_ax.set_title('percentage of outcomes\nin cells containing\nnon-targeting guides', size=10, pad=15)
+
+    if draw_colorbars:
+        ddr.visualize.heatmap.add_fold_change_colorbar(fig, heatmap_im, -0.05, 0.4, 0.15, 0.02)
+
+    return fig, final_guide_order, final_outcome_order
 
 def draw_ssODN_configurations(pools=None, tis=None):
     if pools is None:
@@ -549,7 +615,7 @@ def conversion_tracts(pool, genes=None, guides=None, fc_ylims=None):
 
     return f
 
-def fraction_removed(pool, genes, fraction_y_lims=(5e-4, 1), fold_change_y_lims=(-4, 2)):
+def fraction_removed(pool, genes, fraction_y_lims=(5e-4, 1), fold_change_y_lims=(-4, 2), fixed_guide='none'):
     fig, (fraction_ax, fc_ax) = plt.subplots(2, 1, figsize=(12, 12), sharex=True, gridspec_kw=dict(hspace=0.05))
 
     guide_sets = [
@@ -560,8 +626,8 @@ def fraction_removed(pool, genes, fraction_y_lims=(5e-4, 1), fold_change_y_lims=
         guide_sets.append((gene, f'{gene} guides', dict(color=ddr.visualize.heatmap.good_colors[gene_i], alpha=0.8, linewidth=1.5)))
 
     kwargs = dict(color='black', alpha=0.9, linewidth=2, label='all non-targeting guides')
-    fraction_ax.plot(pool.fraction_removed['all_non_targeting'], '-', **kwargs)
-    fc_ax.plot(pool.fraction_removed_log2_fold_changes['all_non_targeting'], '-', **kwargs)    
+    fraction_ax.plot(pool.fraction_removed[fixed_guide, 'all_non_targeting'], '-', **kwargs)
+    fc_ax.plot(pool.fraction_removed_log2_fold_changes[fixed_guide, 'all_non_targeting'], '-', **kwargs)    
 
     for gene, label, kwargs in guide_sets:
         guides = pool.variable_guide_library.gene_guides(gene, only_best_promoter=True)
@@ -572,9 +638,9 @@ def fraction_removed(pool, genes, fraction_y_lims=(5e-4, 1), fold_change_y_lims=
             else:
                 label_to_use = ''
             
-            ys = pool.fraction_removed[guide].replace(to_replace=0, value=np.nan)
+            ys = pool.fraction_removed[fixed_guide, guide].replace(to_replace=0, value=np.nan)
             fraction_ax.plot(ys, '-', label=label_to_use, **kwargs)
-            fc_ax.plot(pool.fraction_removed_log2_fold_changes[guide], '-', label=label_to_use, **kwargs)
+            fc_ax.plot(pool.fraction_removed_log2_fold_changes[fixed_guide, guide], '-', label=label_to_use, **kwargs)
 
     fraction_ax.legend()
     for ax in [fraction_ax, fc_ax]:
@@ -598,6 +664,54 @@ def fraction_removed(pool, genes, fraction_y_lims=(5e-4, 1), fold_change_y_lims=
         fc_ax.set_xlabel('distance from primary cut site (nts)', size=12)
 
     return fig
+
+def compare_fraction_removed(numerator_pool,
+                             denominator_pool,
+                             fraction_y_lims=(5e-4, 1),
+                             fold_change_y_lims=(-4, 2),
+                             normalize_to_non_HDR_edited=False,
+                            ):
+    fig, (fraction_ax, fc_ax) = plt.subplots(2, 1, figsize=(8, 8), sharex=True, gridspec_kw=dict(hspace=0.05))
+
+    pools = {'numerator': numerator_pool, 'denominator': denominator_pool}
+    fractions = {}
+
+    for k in ['numerator', 'denominator']:
+        pool = pools[k]
+
+        fraction_removed = pool.fraction_removed['all_non_targeting', 'all_non_targeting']
+
+        if normalize_to_non_HDR_edited:
+            nt_fracs = pool.non_targeting_fractions('perfect', 'none')
+            normalization = 1 - nt_fracs.loc['wild type'].sum() - nt_fracs.loc['donor'].sum()
+            fraction_removed = fraction_removed / normalization
+
+        fractions[k] = fraction_removed
+
+        fraction_ax.plot(fraction_removed, '-', linewidth=2, label=pool.short_name)
+
+    fc_ax.plot(np.log2(fractions['numerator'] / fractions['denominator']), '-', linewidth=2, color='C1')
+
+    fraction_ax.set_ylim(*fraction_y_lims)
+    fraction_ax.set_yscale('log')
+    if normalize_to_non_HDR_edited:
+        title = 'fraction of edited, non-HDR\noutcomes with position deleted'
+    else:
+        title = 'fraction of outcomes with position deleted'
+    fraction_ax.set_ylabel(title, size=12)
+
+    fc_ax.set_ylim(*fold_change_y_lims)
+    fc_ax.set_ylabel(f'log2 ratio', size=12)
+    
+    fc_ax.set_xlabel('distance from primary cut site (nts)', size=12)
+    fc_ax.axhline(0, linewidth=2, color='C0')
+
+    fraction_ax.legend()
+    for ax in [fraction_ax, fc_ax]:
+        ax.set_xlim(numerator_pool.fraction_removed.index[0], numerator_pool.fraction_removed.index[-1])
+
+    return fig
+
 
 def make_color_column(guide_to_gene, genes, full_gene_list=None, default_color='silver'):
     if full_gene_list is None:

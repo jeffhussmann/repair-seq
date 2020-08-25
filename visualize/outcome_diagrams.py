@@ -24,6 +24,8 @@ def plot(outcome_order,
          text_size=8,
          fixed_guide='none',
          features_to_draw=None,
+         replacement_text_for_complex=None,
+         protospacer_color='blue',
         ):
     if isinstance(window, int):
         window_left, window_right = -window, window
@@ -203,7 +205,7 @@ def plot(outcome_order,
             guide_start = guide.start - 0.5 - offset
             guide_end = guide.end + 0.5 - offset
 
-            draw_rect(guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='blue')
+            draw_rect(guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, 0.3, color=protospacer_color)
             draw_rect(PAM_start, PAM_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='green')
 
         if not on_top:
@@ -424,6 +426,8 @@ def plot(outcome_order,
             
         else:
             label = '{}, {}, {}'.format(category, subcategory, details)
+            if replacement_text_for_complex is not None:
+                label = replacement_text_for_complex
             ax.annotate(label,
                         xy=(0, y),
                         xycoords='data', 
@@ -465,7 +469,7 @@ def plot(outcome_order,
     ax.set_yticks([])
     ax.axhline(num_outcomes + 0.5 - 1, color='black', alpha=0.75, clip_on=False)
     
-    return fig
+    return fig, ax
 
 def add_frequencies(fig, ax, count_source, outcome_order, fixed_guide='none', text_only=False):
     if isinstance(count_source, (dict, pd.Series)):
@@ -566,3 +570,87 @@ def plot_with_frequencies(pool, outcomes, fixed_guide='none', text_only=False, c
     num_outcomes = kwargs.get('num_outcomes')
     add_frequencies(fig, fig.axes[0], count_source, outcomes[:num_outcomes], text_only=text_only)
     return fig
+
+class DiagramGrid:
+    def __init__(self, outcomes, target_info):
+
+        self.outcomes = outcomes
+        self.target_info = target_info
+
+        self.fig = None
+
+        self.ordered_axs = []
+
+        self.axs_by_name = {}
+
+        self.widths = {}
+
+    def plot_diagrams(self, **diagram_kwargs):
+        self.fig, ax = plot(self.outcomes, self.target_info, **diagram_kwargs)
+        self.axs_by_name['diagram'] = ax
+        self.ordered_axs.append(ax)
+
+        ax_p = ax.get_position()
+        self.widths['diagram'] = ax_p.width
+        self.offset = ax_p.width * 0.07
+
+        return self.fig
+
+    def add_ax(self, name, width_multiple=0.3, title=''):
+        ax_p = self.ordered_axs[-1].get_position()
+
+        x0 = ax_p.x1 + self.offset
+        y0 = ax_p.y0
+        width = self.widths['diagram'] * width_multiple
+        height = ax_p.height
+
+        ax = self.fig.add_axes((x0, y0, width, height), sharey=self.axs_by_name['diagram'])
+        self.axs_by_name[name] = ax
+        self.ordered_axs.append(ax)
+
+        ax.set_yticks([])
+        ax.xaxis.tick_top()
+        ax.spines['left'].set_alpha(0.3)
+        ax.spines['right'].set_alpha(0.3)
+        ax.tick_params(labelsize=6)
+        ax.grid(axis='x', alpha=0.3)
+        
+        ax.spines['bottom'].set_visible(False)
+        
+        ax.xaxis.set_label_position('top')
+
+        ax.annotate(title,
+                    xy=(0.5, 1),
+                    xycoords='axes fraction',
+                    xytext=(0, 20),
+                    textcoords='offset points',
+                    ha='center',
+                    va='bottom',
+                   )
+        
+        return ax
+
+    def plot_on_ax(self, name, value_source, **plot_kwargs):
+        ys = np.arange(len(self.outcomes) - 1, -1, -1)
+        xs = [value_source.get(outcome, 0) for outcome in self.outcomes]
+        ax = self.axs_by_name[name]
+
+        ax.plot(xs, ys, **plot_kwargs)
+
+    def style_log10_frequency_ax(self, name):
+        ax = self.axs_by_name[name]
+
+        x_min, x_max = ax.get_xlim()
+
+        for exponent in [3, 2, 1]:
+            xs = np.log10(np.arange(1, 10) * 10**-exponent)        
+            for x in xs:
+                if x < x_max:
+                    ax.axvline(x, color='black', alpha=0.1, clip_on=False)
+
+        x_ticks = [x for x in [1e-3, 5e-3, 1e-2, 5e-2, 1e-1] if x_min <= np.log10(x) <= x_max]
+        ax.set_xticks(np.log10(x_ticks))
+        ax.set_xticklabels([f'{100 * x:g}' for x in x_ticks])
+
+        for side in ['left', 'right', 'bottom']:
+            ax.spines[side].set_visible(False)

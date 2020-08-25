@@ -13,7 +13,7 @@ from knock_knock.target_info import DegenerateDeletion, DegenerateInsertion, SNV
 from knock_knock import layout
 
 class Layout:
-    def __init__(self, alignments, target_info, mode=None):
+    def __init__(self, alignments, target_info, mode='error_corrected'):
         self.alignments = [al for al in alignments if not al.is_unmapped]
         self.target_info = target_info
         
@@ -31,12 +31,13 @@ class Layout:
         
         self.relevant_alignments = self.alignments
 
-        if mode == 'split everything':
-            self.ins_size_to_split_at = 1
-            self.del_size_to_split_at = 1
+        self.ins_size_to_split_at = 3
+        self.del_size_to_split_at = 2
+
+        if mode == 'error_corrected':
+            self.error_corrected = True
         else:
-            self.ins_size_to_split_at = 3
-            self.del_size_to_split_at = 2
+            self.error_corrected = False
 
     @classmethod
     def from_read(cls, read, target_info):
@@ -189,7 +190,7 @@ class Layout:
     def split_target_and_donor_alignments(self):
         all_split_als = []
         for al in self.target_alignments + self.donor_alignments:
-            split_als = layout.comprehensively_split_alignment(al, self.target_info, self.ins_size_to_split_at, self.del_size_to_split_at, 'illumina')
+            split_als = layout.comprehensively_split_alignment(al, self.target_info, 'illumina', self.ins_size_to_split_at, self.del_size_to_split_at)
 
             if al.reference_name == self.target_info.target:
                 seq_bytes = self.target_info.target_sequence_bytes
@@ -286,7 +287,7 @@ class Layout:
 
         all_split_als = []
         for al in alignments:
-            split_als = layout.comprehensively_split_alignment(al, self.target_info, self.ins_size_to_split_at, self.del_size_to_split_at, 'illumina')
+            split_als = layout.comprehensively_split_alignment(al, self.target_info, 'illumina', self.ins_size_to_split_at, self.del_size_to_split_at)
             
             target_seq_bytes = self.target_info.reference_sequences[al.reference_name].encode()
             extended = [sw.extend_alignment(split_al, target_seq_bytes) for split_al in split_als]
@@ -349,11 +350,6 @@ class Layout:
                 'middle': (ignoring_edges - covered).total_length,
             }
 
-            forward_primer = self.target_info.primers['forward_primer']
-            # primer is annotated on strand it targets, not sequenced strand
-            if sam.overlaps_feature(t_al, forward_primer, require_same_strand=False):
-                missing_from['end'] = 0
-
             return missing_from
 
     @memoized_property
@@ -365,11 +361,27 @@ class Layout:
         else:
             not_too_much = {
                 'start': missing_from['start'] <= 2,
-                'end': missing_from['end'] <= 2,
+                'end': (missing_from['end'] <= 2) or self.overlaps_right_primer(self.single_target_alignment),
                 'middle': missing_from['middle'] <= 5,
             }
 
             return all(not_too_much.values())
+
+    def overlaps_right_primer(self, al):
+        primer = self.target_info.primers_by_side_of_read['right']
+        num_overlapping_bases = al.get_overlap(primer.start, primer.end + 1)
+        overlaps = num_overlapping_bases > 0
+        correct_strand = sam.get_strand(al) == self.target_info.sequencing_direction 
+
+        return correct_strand and overlaps
+
+    def overlaps_left_primer(self, al):
+        primer = self.target_info.primers_by_side_of_read['left']
+        num_overlapping_bases = al.get_overlap(primer.start, primer.end + 1)
+        overlaps = num_overlapping_bases > 0
+        correct_strand = sam.get_strand(al) == self.target_info.sequencing_direction 
+
+        return correct_strand and overlaps
 
     @memoized_property
     def target_reference_edges(self):
@@ -735,19 +747,23 @@ class Layout:
     
     @memoized_property
     def valid_intervals_for_edge_alignments(self):
-        # this primer should be annotated 'R2' or 'expected start'
         ti = self.target_info
-        forward_primer = ti.primers_by_side_of_target[5]
-        reverse_primer = ti.primers_by_side_of_target[3]
-        valids = {
-            'left': interval.Interval(ti.cut_after + 1, reverse_primer.end),
-            'right': interval.Interval(forward_primer.start, ti.cut_after + 1),
-        }
-        return valids
+        primers = ti.primers_by_side_of_read
+        if ti.sequencing_direction == '+':
+            valid_intervals = {
+                'left': interval.Interval(primers['left'].start, ti.cut_after),
+                'right': interval.Interval(ti.cut_after + 1, primers['right'].end),
+            }
+        else:
+            valid_intervals = {
+                'left': interval.Interval(ti.cut_after + 1, primers['left'].end),
+                'right': interval.Interval(primers['right'].start, ti.cut_after),
+            }
+        return valid_intervals
 
     @memoized_property
     def valid_strand_for_edge_alignments(self):
-        return '-'
+        return self.target_info.sequencing_direction
 
     @memoized_property
     def perfect_edge_alignments_and_gap(self):
@@ -790,7 +806,7 @@ class Layout:
         
         best_edge_als = {'left': None, 'right': None}
 
-        # Insist that the alignments be to the right side and strand, even if longer ones
+        # Insist that the alignments be to the correct side and strand, even if longer ones
         # to the wrong side or strand exist.
         for side in ['left', 'right']:
             for length in range(20, 3, -1):
@@ -802,6 +818,9 @@ class Layout:
                     end = len(self.seq)
 
                 als = self.seed_and_extend('target', start, end)
+
+                for al in als:
+                    print(is_valid(al, side))
 
                 valid = [al for al in als if is_valid(al, side)]
                 if len(valid) > 0:
@@ -1065,8 +1084,31 @@ class Layout:
 
         self.outcome = outcome
 
-        # Transversion if read starts with genomic insertion
-        if outcome.left_insertion_query_bound == 0:
+        # Check for non-specific amplification.
+        if outcome.left_target_ref_bound is None:
+            left_target_past_primer = 0
+        else:
+            left_primer = self.target_info.primers_by_side_of_read['left']
+            if self.target_info.sequencing_direction == '-':
+                left_target_past_primer = left_primer.start - outcome.left_target_ref_bound
+            else:
+                left_target_past_primer = outcome.left_target_ref_bound - left_primer.end
+            
+        if outcome.right_target_ref_bound is None:
+            right_target_past_primer = 0
+        else:
+            right_primer = self.target_info.primers_by_side_of_read['right']
+            if self.target_info.sequencing_direction == '-':
+                right_target_past_primer = outcome.right_target_ref_bound - right_primer.end
+            else:
+                right_target_past_primer = right_primer.start - outcome.right_target_ref_bound
+
+        if left_target_past_primer < 10 and right_target_past_primer < 10 and details['total_gap_length'] < 5:
+            self.category = 'nonspecific amplification'
+            self.subcategory = outcome.source
+
+        elif outcome.left_insertion_query_bound == 0:
+            # Transversion if read starts with genomic insertion
             self.category = 'transversion'
 
             # Check if sequence at start of read matches NotI restriction site.
@@ -1492,7 +1534,7 @@ class Layout:
                 # than donor insertions, enforce a more stringent minimum length.
 
                 if insertion_length <= 25:
-                    details['filed'] = f'insertion length = {insertion_length}'
+                    details['failed'] = f'insertion length = {insertion_length}'
                     continue
 
             if source == 'donor':
@@ -1681,11 +1723,15 @@ class Layout:
                     # If extra bases synthesized during SD-MMEJ are the same length
                     # as the total resections, there will not be an indel, so check if
                     # the mismatches can be explained by SD-MMEJ.
-                    if self.is_valid_SD_MMEJ:
+                    if self.error_corrected and self.is_valid_SD_MMEJ:
                         self.register_SD_MMEJ()
                     else:
                         if self.starts_at_expected_location:
-                            self.category = 'mismatches'
+                            if self.error_corrected:
+                                self.category = 'mismatches'
+                            else:
+                                self.category = 'wild type'
+
                             self.subcategory = 'mismatches'
                             self.outcome = MismatchOutcome(self.non_donor_SNVs)
                             self.details = str(self.outcome)
@@ -1785,10 +1831,16 @@ class Layout:
                                             self.details = str(self.outcome)
                                             self.relevant_alignments = self.uncategorized_relevant_alignments
                                         else:
-                                            self.category = 'uncategorized'
-                                            self.subcategory = 'deletion plus non-adjacent mismatch'
-                                            self.details = 'n/a'
-                                            self.relevant_alignments = self.uncategorized_relevant_alignments
+                                            if self.error_corrected:
+                                                self.category = 'uncategorized'
+                                                self.subcategory = 'deletion plus non-adjacent mismatch'
+                                                self.details = 'n/a'
+                                                self.relevant_alignments = self.uncategorized_relevant_alignments
+                                            else:
+                                                self.category = 'deletion'
+                                                self.subcategory = 'clean'
+                                                self.details = self.indels_string
+                                                self.outcome = DeletionOutcome(indel)
                                     else:
                                         if self.donor_insertion is not None:
                                             self.register_donor_insertion()
@@ -1798,10 +1850,16 @@ class Layout:
                                             self.details = 'n/a'
                                             self.relevant_alignments = self.uncategorized_relevant_alignments
                                 else:
-                                    self.category = 'uncategorized'
-                                    self.subcategory = 'insertion plus one mismatch'
-                                    self.details = 'n/a'
-                                    self.relevant_alignments = self.uncategorized_relevant_alignments
+                                    if self.error_corrected:
+                                        self.category = 'uncategorized'
+                                        self.subcategory = 'insertion plus one mismatch'
+                                        self.details = 'n/a'
+                                        self.relevant_alignments = self.uncategorized_relevant_alignments
+                                    else:
+                                        self.category = 'insertion'
+                                        self.subcategory = 'insertion'
+                                        self.details = self.indels_string
+                                        self.outcome = InsertionOutcome(indel)
                             else:
                                 self.category = 'uncategorized'
                                 self.subcategory = 'one indel plus more than one mismatch'
@@ -1823,10 +1881,16 @@ class Layout:
                             self.details = self.indels_string
 
                         else:
-                            self.category = 'uncategorized'
-                            self.subcategory = 'indel far from cut'
-                            self.details = 'n/a'
-                            self.relevant_alignments = self.uncategorized_relevant_alignments
+                            if indel.length <= 3 and not self.error_corrected:
+                                self.category = 'wild type'
+                                self.subcategory = 'indels'
+                                self.details = 'n/a'
+                            
+                            else:
+                                self.category = 'uncategorized'
+                                self.subcategory = 'indel far from cut'
+                                self.details = 'n/a'
+                                self.relevant_alignments = self.uncategorized_relevant_alignments
 
                         self.relevant_alignments = [self.single_target_alignment]
 
@@ -1994,6 +2058,8 @@ donor_misintegration_subcategories = tuple(donor_misintegration_subcategories)
 category_order = [
     ('wild type',
         ('clean',
+         'mismatches',
+         'indels',
         ),
     ),
     ('mismatches',
@@ -2042,6 +2108,14 @@ category_order = [
     ('transversion',
         ('NotI',
          'non-NotI',
+        ),
+    ),
+    ('nonspecific amplification',
+        ('hg19',
+         'bosTau7',
+         'e_coli',
+         'primer dimer',
+         'unknown',
         ),
     ),
     ('donor misintegration',

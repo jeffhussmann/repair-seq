@@ -100,6 +100,8 @@ def genes(pool,
           show_ax_titles=True,
           overall_title=None,
           use_high_frequency=False,
+          different_colors_if_one_gene=True,
+          log10_x_lims=None,
          ):
 
     if heatmap_pools is None:
@@ -120,7 +122,8 @@ def genes(pool,
     if gene_to_colors is None:
         gene_to_colors = {'negative_control': ['C0']*1000}
         real_genes = [g for g in genes if g != 'negative_control']
-        if len(real_genes) > 1:
+
+        if len(real_genes) > 1 or not different_colors_if_one_gene:
             gene_to_colors.update(dict(zip(real_genes, colors_list)))
 
         elif len(real_genes) == 1:
@@ -301,7 +304,6 @@ def genes(pool,
                 if highlight_targeting_guides:
                     if pool.variable_guide_library.guide_to_gene[guide] == 'negative_control':
                         kwargs = dict(line_alpha=0.15, marker_size=2)
-                        color = 'C0'
                     else:
                         kwargs = dict(line_alpha=0.45, marker_size=5, line_width=1.5)
                 else:
@@ -309,6 +311,9 @@ def genes(pool,
 
                 xs = fractions[guide]
                 if 'log10' in key:
+                    UMIs = pool.UMI_counts(guide_status).loc[fixed_guide, guide]
+                    min_frac = 0.5 / UMIs
+                    xs = np.maximum(xs, min_frac)
                     xs = np.log10(xs)
                 else:
                     xs = xs * 100
@@ -337,6 +342,9 @@ def genes(pool,
                     ha='center',
                     va='bottom',
                     )
+
+    if log10_x_lims is None:
+        log10_x_lims = (np.log10(0.0008), np.log10(0.41))
     
     for key, line_x, title, x_lims in [
         ('change', 0, 'change in percentage', (-8, 8)),
@@ -344,7 +352,7 @@ def genes(pool,
         ('fold_change', 1, 'fold change', (0, 5)),
         ('log2_fold_change', 0, 'log2 fold change\nfrom non-targeting', (-3, 3)),
         ('frequency', None, 'percentage of\nrepair outcomes', (0, nt_fracs.max() * 100 * frequency_max_multiple)),
-        ('log10_frequency', None, 'percentage of repair outcomes', (np.log10(0.0008), np.log10(0.41))),
+        ('log10_frequency', None, 'percentage of repair outcomes', log10_x_lims),
         ('frequency_zoom', None, 'percentage\n(zoomed)', (0, nt_fracs.max() * 100 * 0.3)),
        ]:
 
@@ -378,15 +386,15 @@ def genes(pool,
         # Apply specific visual styling to log10_frequency panel.
         if key == 'log10_frequency':
             ax = axs['log10_frequency']
-            for exponent in [3, 2, 1]:
+            for exponent in [4, 3, 2, 1]:
                 xs = np.log10(np.arange(1, 10) * 10**-exponent)        
                 for x in xs:
-                    if x < x_lims[1]:
+                    if x_lims[0] <= x <= x_lims[1]:
                         ax.axvline(x, color='black', alpha=0.1, clip_on=False)
 
             x_ticks = [x for x in [1e-3, 5e-3, 1e-2, 5e-2, 1e-1] if x_lims[0] <= np.log10(x) <= x_lims[1]]
             ax.set_xticks(np.log10(x_ticks))
-            ax.set_xticklabels([f'{100 * x:g}' for x in x_ticks])
+            ax.set_xticklabels([f'{100 * x:g}%' for x in x_ticks])
 
             for side in ['left', 'right', 'bottom']:
                 ax.spines[side].set_visible(False)
@@ -643,6 +651,7 @@ def guide_pairs(pool,
                 guide_aliases=None,
                 gene_to_sort_by=None,
                 show_ax_titles=True,
+                log10_x_lims=None,
          ):
 
     colors = itertools.cycle(bokeh.palettes.Set2[8])
@@ -775,6 +784,9 @@ def guide_pairs(pool,
                     ha='center',
                     va='bottom',
                     )
+
+    if log10_x_lims is None:
+        log10_x_lims = (np.log10(0.0008), np.log10(0.41))
     
     for key, line_x, title, x_lims in [
         ('change', 0, 'change in percentage', (-8, 8)),
@@ -782,7 +794,7 @@ def guide_pairs(pool,
         ('fold_change', 1, 'fold change', (0, 5)),
         ('log2_fold_change', 0, 'log2 fold change\nfrom non-targeting', (-3, 3)),
         ('frequency', None, 'percentage of\nrepair outcomes', (0, nt_fracs.max() * 100 * frequency_max_multiple)),
-        ('log10_frequency', None, 'percentage of repair outcomes', (np.log10(0.0008), np.log10(0.41))),
+        ('log10_frequency', None, 'percentage of repair outcomes', log10_x_lims),
         ('frequency_zoom', None, 'percentage\n(zoomed)', (0, nt_fracs.max() * 100 * 0.3)),
        ]:
 
@@ -1174,7 +1186,7 @@ def big_heatmap(pool_list,
 
     return fig
 
-def cluster(pool, outcomes, guides, metric='correlation', method='single', fixed_guide='none'):
+def cluster(pool, outcomes, guides, metric='correlation', method='single', fixed_guide='none', min_UMIs=None):
     if isinstance(outcomes, int):
         outcomes = pool.most_frequent_outcomes(fixed_guide)[:outcomes]
 
@@ -1184,6 +1196,11 @@ def cluster(pool, outcomes, guides, metric='correlation', method='single', fixed
 
     if isinstance(guides, int):
         phenotype_strengths = pool.chi_squared_per_guide(outcomes, fixed_guide=fixed_guide)
+        if min_UMIs is not None:
+            UMIs = pool.UMI_counts('perfect').loc[fixed_guide]
+            enough_UMIs = UMIs[UMIs > min_UMIs].index
+            phenotype_strengths = phenotype_strengths[phenotype_strengths.index.isin(enough_UMIs)]
+
         guides = phenotype_strengths.index[:guides]
 
     guide_linkage = scipy.cluster.hierarchy.linkage(l2_fcs[guides].T,
@@ -1210,7 +1227,12 @@ def cluster(pool, outcomes, guides, metric='correlation', method='single', fixed
 
     outcome_order = outcome_dendro['ivl']
 
-    correlations = l2_fcs[guide_order].corr()
+    l2_fcs = l2_fcs.loc[outcome_order, guide_order]
+
+    correlations = {
+        'guides': l2_fcs.corr(),
+        'outcomes': l2_fcs.T.corr(),
+    }
 
     return guide_order, outcome_order, correlations
 

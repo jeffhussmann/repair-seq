@@ -48,37 +48,35 @@ def parallel(args):
             print('error in parallel')
             sys.exit(1)
 
-    #process_stage(0)
+    process_stage(0)
+    pool.make_common_sequences()
+    parallel_common_sequences(pool, args.max_procs)
+    pool.write_common_outcome_files()
 
     if not gDNA:
-        pool.make_common_sequences()
-        parallel_common_sequences(args)
-        pool.write_common_outcome_files()
         pool.merge_common_sequence_special_alignments()
 
     process_stage(1)
 
-    #pool.make_outcome_counts()
+    pool.make_outcome_counts()
     pool.merge_templated_insertion_details()
-
+    pool.merge_templated_insertion_details(fn_key='filtered_duplication_details')
+    pool.make_high_frequency_outcome_counts()
+    pool.compute_fraction_removed()
     #pool.merge_special_alignments()
 
-def parallel_common_sequences(args):
-    from ddr import pooled_screen
-
-    pool = pooled_screen.PooledScreen(args.base_dir, args.pool)
-    
+def parallel_common_sequences(pool, max_procs):
     parallel_command = [
         'parallel',
         '-n', '2', 
         '--bar',
-        '--max-procs', str(args.max_procs),
+        '--max-procs', str(max_procs),
         'ddr',
-        '--base_dir', str(args.base_dir),
+        '--base_dir', str(pool.base_dir),
         'process_common_sequences', ':::',
     ]
 
-    arg_pairs = [(args.pool, chunk_name) for chunk_name in pool.common_sequence_chunk_names]
+    arg_pairs = [(pool.group, chunk_name) for chunk_name in pool.common_sequence_chunk_names]
     for pair in sorted(arg_pairs):
         parallel_command.extend(pair)
     

@@ -29,6 +29,7 @@ def outcome(outcome,
             guide_status='perfect',
             guide_subset=None,
             draw_marginals='hist',
+            draw_negative_control_marginals=False,
             draw_diagram=True,
             gene_to_color=None,
             color_labels=False,
@@ -41,14 +42,15 @@ def outcome(outcome,
             avoid_label_overlap=False,
             flip_axes=False,
             draw_intervals=True,
+            nt_guide_color='C0',
            ):
     if guide_aliases is None:
         guide_aliases = {}
 
     if big_labels:
-        axis_label_size = 20
+        axis_label_size = 18
         tick_label_size = 14
-        big_guide_label_size = 18
+        big_guide_label_size = 10
         small_guide_label_size = 8
     else:
         axis_label_size = 12
@@ -197,7 +199,7 @@ def outcome(outcome,
     #df.loc[df.query('significant').index, 'color'] = 'C1'
     df.loc[df.query('significant').index, 'color'] = 'silver'
     nt_guide_pairs = [(fg, vg) for fg, vg in pool.guide_combinations if fg == fixed_guide and vg in pool.variable_guide_library.non_targeting_guides]
-    df.loc[nt_guide_pairs, 'color'] = 'C0'
+    df.loc[nt_guide_pairs, 'color'] = nt_guide_color
 
     if gene_to_color is not None:
         for gene, color in gene_to_color.items():
@@ -259,7 +261,8 @@ def outcome(outcome,
                 shade=True,
             )
             sns.kdeplot(df[fraction_key], color='grey', **fraction_kwargs)
-            sns.kdeplot(df.query('gene == "negative_control"')[fraction_key], color='C0', alpha=0.4, **fraction_kwargs)
+            if draw_negative_control_marginals:
+                sns.kdeplot(df.query('variable_gene == "negative_control"')[fraction_key], color=nt_guide_color, alpha=0.4, **fraction_kwargs)
 
             num_cells_kwargs = dict(
                 ax=marg_axs['num_cells'],
@@ -268,8 +271,10 @@ def outcome(outcome,
                 linewidth=1.5,
                 shade=True,
             )
+
             sns.kdeplot(df['num_cells'], color='grey', **num_cells_kwargs)
-            #sns.kdeplot(df.query('gene == "negative_control"')['num_cells'], color='C0', **num_cells_kwargs)
+            if draw_negative_control_marginals:
+                sns.kdeplot(df.query('varible_gene == "negative_control"')['num_cells'], color=nt_guide_color, **num_cells_kwargs)
 
         elif draw_marginals == 'hist':
             orientation = {k: 'horizontal' if axis == 'y' else 'vertical' for k, axis in quantity_to_axis.items()}
@@ -277,12 +282,14 @@ def outcome(outcome,
             bins = np.linspace(fraction_min, fraction_max, 100)
             hist_kwargs = dict(orientation=orientation[fraction_key], alpha=0.5, density=True, bins=bins, linewidth=2)
             marg_axs[fraction_key].hist(fraction_key, data=df, color='silver', **hist_kwargs)
-            #g.ax_marg_y.hist(y_key, data=df.query('gene == "negative_control"'), color='C0', **hist_kwargs)
+            if draw_negative_control_marginals:
+                marg_axs[fraction_key].hist(fraction_key, data=df.query('variable_gene == "negative_control"'), color=nt_guide_color, **hist_kwargs)
 
             bins = np.linspace(0, max_cells, 30)
             hist_kwargs = dict(orientation=orientation['num_cells'], alpha=0.5, density=True, bins=bins, linewidth=2)
             marg_axs['num_cells'].hist('num_cells', data=df, color='silver', **hist_kwargs)
-            #g.ax_marg_x.hist('num_cells', data=df.query('gene == "negative_control"'), color='C0', **hist_kwargs)
+            if draw_negative_control_marginals:
+                marg_axs['num_cells'].hist('num_cells', data=df.query('variable_gene == "negative_control"'), color=nt_guide_color, **hist_kwargs)
 
         median_UMIs = int(df['num_cells'].median())
 
@@ -388,7 +395,7 @@ def outcome(outcome,
     else:
         if non_targeting_label_location == 'floating':
             floating_labels = [
-                ('individual non-targeting guides', -50, 'C0'),
+                ('individual non-targeting guides', -50, nt_guide_color),
                 #('{} p-value < 1e-{}'.format(p_val_method, p_cutoff), -25, 'C1'),
             ]
             for text, offset, color in floating_labels:
@@ -404,7 +411,7 @@ def outcome(outcome,
                                 )
 
         else:
-            highest_nt_guide = df.query('gene == "negative_control"').sort_values('num_cells').iloc[-1]
+            highest_nt_guide = df.query('variable_gene == "negative_control"').sort_values('num_cells').iloc[-1]
 
             vals = {
                 'num_cells': highest_nt_guide['num_cells'],
@@ -431,11 +438,11 @@ def outcome(outcome,
             g.ax_joint.annotate(xy=(x, y),
                                 xycoords='data',
                                 textcoords='offset points',
-                                color='C0',
+                                color=nt_guide_color,
                                 size=10,
                                 arrowprops={'arrowstyle': '-',
                                             'alpha': 0.5,
-                                            'color': 'C0',
+                                            'color': nt_guide_color,
                                             },
                                 **annotate_kwargs,
                             )
@@ -609,7 +616,7 @@ def outcome(outcome,
                                           avoid=avoid_label_overlap,
                                           avoid_axis_labels=True,
                                           avoid_existing=True,
-                                          min_arrow_distance=0,
+                                          min_arrow_distance=10,
                                           text_kwargs=dict(size=big_guide_label_size),
                                           **kwargs,
                                          )
