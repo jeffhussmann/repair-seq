@@ -137,10 +137,9 @@ def build_all_singles(base_dir, original_target_name, original_genbank_name, gui
             tasks_done_queue.get()
             progress.update()
 
-def build_all_doubles():
+def build_all_doubles(base_dir):
     warnings.simplefilter('ignore')
 
-    base_dir = '/home/jah/projects/ddr'
     original_target = target_info.TargetInfo(base_dir, 'doubles_vector')
 
     original_target.make_references()
@@ -173,6 +172,7 @@ def build_all_doubles():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('--base_dir', type=Path, default=Path.home() / 'projects' / 'ddr')
     parser.add_argument('vector')
 
     args = parser.parse_args()
@@ -184,10 +184,9 @@ if __name__ == '__main__':
     #    guide_library_names = ['DDR_library']
     #    build_all_singles(base_dir, original_target, original_genbank_name, guide_library_names)
     if args.vector == 'singles':
-        base_dir = '/home/jah/projects/ddr'
         original_target = 'pooled_vector'
         original_genbank_name = 'pooled_vector'
         guide_library_names = ['DDR_library', 'DDR_sublibrary']
-        build_all_singles(base_dir, original_target, original_genbank_name, guide_library_names)
+        build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)
     elif args.vector == 'doubles':
-        build_all_doubles()
+        build_all_doubles(args.base_dir)
