@@ -1,6 +1,8 @@
 import warnings
 import multiprocessing
 import argparse
+import os.path
+from pathlib import Path
 
 import pandas as pd
 import Bio.SeqIO
@@ -30,15 +32,24 @@ def build_guide_specific_target(original_target,
     ps_seq = guide_library.guides_df.loc[guide, 'protospacer']
     gb.seq = gb.seq[:protospacer.start] + ps_seq + gb.seq[protospacer.end + 1:]
 
-    Bio.SeqIO.write(gb, str(new_dir / f'{original_genbank_name}.gb'), 'genbank')
+    new_gb_fn = new_dir / f'{original_genbank_name}.gb'
+    if new_gb_fn.exists():
+        new_gb_fn.unlink() 
+    Bio.SeqIO.write(gb, str(new_gb_fn), 'genbank')
 
-    fns_to_copy = [f'{source}.gb' for source in original_target.sources]
+    fns_to_copy = [f'{source}.gb' for source in original_target.sources if source != original_genbank_name]
     fns_to_copy.append('manifest.yaml')
+
+    relative_original_dir = Path(os.path.relpath(original_target.dir, new_dir))
+
     for fn in fns_to_copy:
-        try:
-            (new_dir / fn).symlink_to(original_target.dir / fn)
-        except FileExistsError:
-            pass
+        new_fn = new_dir / fn
+        old_fn = relative_original_dir / fn
+
+        if new_fn.exists():
+            new_fn.unlink()
+
+        new_fn.symlink_to(old_fn)
 
     new_ti = target_info.TargetInfo(original_target.base_dir, new_name)
 
