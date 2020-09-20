@@ -8,8 +8,9 @@ import pandas as pd
 import h5py
 import numpy as np
 
+import hits.visualize
 from hits import fastq, utilities, adapters
-from knock_knock import experiment, read_outcome, visualize, svg
+from knock_knock import experiment, visualize, svg
 from ddr import prime_editing_layout, pooled_layout
 
 from hits.utilities import memoized_property
@@ -22,11 +23,13 @@ class PrimeEditingExperiment(experiment.Experiment):
             'trimmed',
         ]
 
+        self.default_read_type = 'trimmed'
+
         self.layout_mode = 'amplicon'
         self.max_qual = 41
 
         self.fns['fastq'] = self.data_dir / self.description['fastq_fn']
-        self.fns['templated_insertion_details'] = self.fns['dir'] / 'templated_insertion_details.hdf5'
+        self.fns['templated_insertion_details'] = self.results_dir / 'templated_insertion_details.hdf5'
 
         self.outcome_fn_keys = ['outcome_list']
 
@@ -51,7 +54,7 @@ class PrimeEditingExperiment(experiment.Experiment):
         
         self.diagram_kwargs.update(draw_sequence=True,
                                    flip_target=self.target_info.sequencing_direction == '-',
-                                   flip_donor=self.target_info.sgRNA_feature.strand == '+',
+                                   flip_donor=self.target_info.sgRNA_feature.strand == self.target_info.sequencing_direction,
                                    highlight_SNPs=True,
                                    center_on_primers=True,
                                    split_at_indels=True,
@@ -60,15 +63,15 @@ class PrimeEditingExperiment(experiment.Experiment):
                                   )
 
     @memoized_property
-    def layout_module(self):
-        return prime_editing_layout
+    def categorizer(self):
+        return prime_editing_layout.Layout
 
     @memoized_property
     def max_relevant_length(self):
         outcomes = self.outcome_iter()
         return max(outcome.length for outcome in outcomes)
                
-    def preprocess(self):
+    def trim_reads(self):
         # Trim a random length barcode from the beginning by searching for the expected starting sequence.
         ti = self.target_info
 
@@ -88,17 +91,19 @@ class PrimeEditingExperiment(experiment.Experiment):
             for read in self.progress(reads, desc='Trimming reads'):
                 try:
                     start = read.seq.index(prefix, 0, 20)
-                    end = adapters.trim_by_local_alignment(adapters.truseq_R2_rc, read.seq)
-                    trimmed_fh.write(str(read[start:end]))
                 except ValueError:
-                    pass
+                    start = 0
+
+                end = adapters.trim_by_local_alignment(adapters.truseq_R2_rc, read.seq)
+                trimmed_fh.write(str(read[start:end]))
 
     def process(self, stage):
         try:
-            if stage == 'align':
-                self.preprocess()
+            if stage == 'preprocess':
+                self.trim_reads()
+            elif stage == 'align':
                 self.generate_alignments(read_type='trimmed')
-                self.generate_supplemental_alignments(read_type='trimmed', min_length=20)
+                self.generate_supplemental_alignments_with_STAR(read_type='trimmed', min_length=20)
                 self.combine_alignments(read_type='trimmed')
             elif stage == 'categorize':
                 self.categorize_outcomes(read_type='trimmed')
@@ -109,12 +114,7 @@ class PrimeEditingExperiment(experiment.Experiment):
                 lengths_fig.savefig(self.fns['lengths_figure'], bbox_inches='tight')
                 self.generate_all_outcome_length_range_figures()
                 svg.decorate_outcome_browser(self)
-                self.generate_all_outcome_example_figures(num_examples=5,
-                                                          split_at_indels=True,
-                                                          flip_donor=True,
-                                                          flip_target=self.target_info.sequencing_start.strand == '-',
-                                                          highlight_SNPs=True,
-                                                         )
+                self.generate_all_outcome_example_figures(num_examples=5)
         except:
             print(self.group, self.name)
             raise
@@ -138,7 +138,7 @@ class PrimeEditingExperiment(experiment.Experiment):
 
             for name, als in self.progress(alignment_groups, desc=description):
                 try:
-                    layout = self.layout_module.Layout(als, self.target_info, mode=self.layout_mode)
+                    layout = self.categorizer(als, self.target_info, mode=self.layout_mode)
                     category, subcategory, details, outcome = layout.categorize()
                     if outcome is not None:
                         details = str(outcome.perform_anchor_shift(self.target_info.anchor))
@@ -196,19 +196,6 @@ class PrimeEditingExperiment(experiment.Experiment):
         for outcome, fh in bam_fhs.items():
             fh.close()
 
-    def get_read_alignments(self, read_id, fn_key=None, outcome=None, read_type='trimmed'):
-        return super().get_read_alignments(read_id, fn_key='bam_by_name', outcome=outcome, read_type=read_type)
-
-    def get_read_layout(self, read_id, fn_key=None, outcome=None, read_type='trimmed'):
-        return super().get_read_layout(read_id, fn_key='bam_by_name', outcome=outcome, read_type=read_type)
-
-    def get_read_diagram(self, read_id, **kwargs):
-        return super().get_read_diagram(read_id, read_type='trimmed', **kwargs)
-
-    def alignment_groups(self, fn_key='bam_by_name', outcome=None, read_type='trimmed'):
-        groups = super().alignment_groups(fn_key=fn_key, outcome=outcome, read_type=read_type)
-        return groups
-
     @memoized_property
     def qname_to_inferred_length(self):
         qname_to_inferred_length = {}
@@ -216,8 +203,6 @@ class PrimeEditingExperiment(experiment.Experiment):
             qname_to_inferred_length[outcome.query_name] = outcome.length
 
         return qname_to_inferred_length
-
-    generate_supplemental_alignments = experiment.IlluminaExperiment.generate_supplemental_alignments
 
     def generate_length_range_figures(self, outcome=None, num_examples=1):
         by_length = defaultdict(lambda: utilities.ReservoirSampler(num_examples))
@@ -250,7 +235,7 @@ class PrimeEditingExperiment(experiment.Experiment):
                                                          num_examples=num_examples,
                                                          **self.diagram_kwargs,
                                                         )
-            im = visualize.make_stacked_Image(diagrams, titles='')
+            im = hits.visualize.make_stacked_Image([d.fig for d in diagrams])
             fn = fns['length_range_figure'](length, length)
             im.save(fn)
 
@@ -330,17 +315,3 @@ class PrimeEditingExperiment(experiment.Experiment):
         ys = np.array([counts[x] for x in xs])
 
         return xs, ys
-
-class PrimeEditingFixedOffsetExperiment(PrimeEditingExperiment):
-    def preprocess(self):
-        start = self.description['offset']
-
-        trimmed_fn = self.fns_by_read_type['fastq']['trimmed']
-        with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
-            reads = fastq.reads(self.fns['fastq'])
-            #reads = itertools.islice(reads, 1000)
-            for read in self.progress(reads, desc='Trimming reads'):
-                end = adapters.trim_by_local_alignment(adapters.truseq_R2_rc, read.seq)
-                trimmed_read = read[start:end]
-                if len(trimmed_read) > 0:
-                    trimmed_fh.write(str(trimmed_read))

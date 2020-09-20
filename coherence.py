@@ -2,27 +2,12 @@ from collections import Counter
 
 import pandas as pd
 
-from knock_knock import experiment, read_outcome
+from knock_knock import experiment, outcome_record
 from hits.utilities import group_by
 
 from .collapse_cython import hamming_distance_matrix, register_corrections
 
-UMI_Outcome = read_outcome.Outcome_factory(
-    columns_arg=[
-        'cell_BC',
-        'UMI',
-        'num_reads',
-        'category',
-        'subcategory',
-        'details',
-        'query_name',
-    ],
-    converters_arg={
-        'num_reads': int,
-    },
-)
-
-Pooled_UMI_Outcome = read_outcome.Outcome_factory(
+Pooled_UMI_Outcome = outcome_record.OutcomeRecord_factory(
     columns_arg=[
         'UMI',
         'guide_mismatch',
@@ -39,9 +24,9 @@ Pooled_UMI_Outcome = read_outcome.Outcome_factory(
     },
 )
 
-gDNA_Outcome = read_outcome.Outcome_factory(
+gDNA_Outcome = outcome_record.OutcomeRecord_factory(
     columns_arg=[
-        'standardized_qname',
+        'query_name',
         'category',
         'subcategory',
         'details',
@@ -51,14 +36,9 @@ gDNA_Outcome = read_outcome.Outcome_factory(
 )
 
 def load_UMI_outcomes(fn, pooled=True):
-    if pooled:
-        Outcome = Pooled_UMI_Outcome
-    else:
-        Outcome = UMI_Outcome
-
     UMI_outcomes = []
     for line in fn.open():
-        UMI_outcome = Outcome.from_line(line)
+        UMI_outcome = Pooled_UMI_Outcome.from_line(line)
         UMI_outcomes.append(UMI_outcome)
 
     return UMI_outcomes

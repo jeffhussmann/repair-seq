@@ -14,17 +14,18 @@ import tqdm
 
 from hits import fastq, fasta, utilities
 import ddr.guide_library
+import ddr.pooled_screen
 
-def load_sample_sheet(base_dir, group):
-    sample_sheet_fn = Path(base_dir) / 'data' / group / 'gDNA_sample_sheet.yaml'
+def load_sample_sheet(base_dir, batch):
+    sample_sheet_fn = Path(base_dir) / 'data' / batch / 'gDNA_sample_sheet.yaml'
     sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
-    pool_details = load_pool_details(base_dir, group)
+    pool_details = load_pool_details(base_dir, batch)
     if pool_details is not None:
         sample_sheet['pool_details'] = pool_details
     return sample_sheet
 
-def load_pool_details(base_dir, group):
-    pool_details_fn = Path(base_dir) / 'data' / group / 'gDNA_pool_details.csv'
+def load_pool_details(base_dir, batch):
+    pool_details_fn = Path(base_dir) / 'data' / batch / 'gDNA_pool_details.csv'
     if pool_details_fn.exists():
         pool_details = pd.read_csv(pool_details_fn, index_col='pool_name').replace({np.nan: None})
         for key_to_split in ['I7_index', 'I5_index', 'sgRNA', 'primer_names']:
@@ -35,8 +36,8 @@ def load_pool_details(base_dir, group):
         pool_details = None
     return pool_details
 
-def make_pool_sample_sheets(base_dir, group):
-    sample_sheet = load_sample_sheet(base_dir, group)
+def make_pool_sample_sheets(base_dir, batch):
+    sample_sheet = load_sample_sheet(base_dir, batch)
 
     for pool_name, details in sample_sheet['pool_details'].items():
         pool_sample_sheet = {
@@ -64,24 +65,26 @@ def make_pool_sample_sheets(base_dir, group):
         pool_sample_sheet_fn.parent.mkdir(parents=True, exist_ok=True)
         pool_sample_sheet_fn.write_text(yaml.safe_dump(pool_sample_sheet, default_flow_style=False))
 
+    return sample_sheet['pool_details']
+
 def chunk_number_to_string(chunk_number):
     return f'{chunk_number:06d}'
 
 class FastqChunker:
-    def __init__(self, base_dir, group, quartet_name, which, reads_per_chunk=None, queue=None):
+    def __init__(self, base_dir, batch, quartet_name, which, reads_per_chunk=None, queue=None):
         self.base_dir = Path(base_dir)
-        self.group = group
+        self.batch = batch
         self.quartet_name = quartet_name
         self.which = which
         self.reads_per_chunk = reads_per_chunk
         self.queue = queue
         
-        sample_sheet = load_sample_sheet(self.base_dir, self.group)
+        sample_sheet = load_sample_sheet(self.base_dir, self.batch)
         quartet = sample_sheet['quartets'][quartet_name]
         
         self.fn_name = quartet[self.which]
         
-        group_dir = self.base_dir / 'data' / self.group
+        group_dir = self.base_dir / 'data' / self.batch
         self.input_fn = (group_dir / self.fn_name).with_suffix('.fastq.gz')
         
         self.chunks_dir = group_dir / 'gDNA_chunks'
@@ -126,11 +129,11 @@ class FastqChunker:
         self.queue.put(('chunk', self.quartet_name, self.which, 'DONE'))
 
 class Writers:
-    def __init__(self, base_dir, group, quartet_name, chunk_number):
+    def __init__(self, base_dir, batch, quartet_name, chunk_number):
         self.base_dir = Path(base_dir)
         
-        sample_sheet = load_sample_sheet(base_dir, group)
-        self.group_name = sample_sheet['group_name']
+        sample_sheet = load_sample_sheet(base_dir, batch)
+        self.batch = sample_sheet['group_name']
         
         self.chunk_string = f'{quartet_name}_{chunk_number_to_string(chunk_number)}'
 
@@ -140,13 +143,21 @@ class Writers:
         return self.writers[key]
 
     def write(self):
+        pools = {}
+
         for sample, fixed_guide, variable_guide in sorted(self.writers):
+            if sample not in pools:
+                pool_name = f'{self.batch}_{sample}'
+                pool = ddr.pooledScreen.PooledScreenNoUMI(self.base_dir, pool_name)
+                pools[sample] = pool
+
+            pool = pools[sample]
+
             reads = self.writers[sample, fixed_guide, variable_guide]
             sorted_reads = sorted(reads, key=lambda r: r.name)
 
-            pool_name = f'{self.group_name}_{sample}'
-            guides_name = f'{fixed_guide}-{variable_guide}'
-            output_dir = self.base_dir / 'results' / pool_name / guides_name / 'chunks'
+            exp = pool.single_guide_experiment(fixed_guide, variable_guide)
+            output_dir = exp.fns['chunks']
             output_dir.mkdir(exist_ok=True, parents=True)
             
             fn = output_dir / f'{self.chunk_string}_R2.fastq.gz'
@@ -346,15 +357,15 @@ def merge_ids(base_dir, group):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('base_dir', type=Path, default=Path.home() / 'projects' / 'ddr')
-    parser.add_argument('group_name')
+    parser.add_argument('batch')
 
     args = parser.parse_args()
     base_dir = args.base_dir
-    group = args.group_name
+    batch = args.batch
     
-    make_pool_sample_sheets(base_dir, group)
+    pool_details = make_pool_sample_sheets(base_dir, batch)
 
-    sample_sheet = load_sample_sheet(base_dir, group)
+    sample_sheet = load_sample_sheet(base_dir, batch)
     
     quartet_names = sorted(sample_sheet['quartets'])
     reads_per_chunk = int(5e6)
@@ -383,7 +394,7 @@ if __name__ == '__main__':
         
         for quartet_name in quartet_names:
             for which in fastq.quartet_order:
-                args = (base_dir, group, quartet_name, which, reads_per_chunk, tasks_done_queue)
+                args = (base_dir, batch, quartet_name, which, reads_per_chunk, tasks_done_queue)
                 chunk_result = chunk_pool.apply_async(split_into_chunks, args)
                 if debug:
                     print(chunk_result.get())
@@ -408,7 +419,7 @@ if __name__ == '__main__':
                     if chunks_done[quartet_name, chunk_number] == set(fastq.quartet_order):
                         chunk_progress.update()
                         
-                        args = (base_dir, group, quartet_name, chunk_number, tasks_done_queue)
+                        args = (base_dir, batch, quartet_name, chunk_number, tasks_done_queue)
                         demux_result = demux_pool.apply_async(demux_chunk, args)
                         if debug:
                             print(demux_result.get())
@@ -444,10 +455,10 @@ if __name__ == '__main__':
 
     merge_pool = multiprocessing.Pool(processes=3)
     merge_results = []
-    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'I5')))
-    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'I7')))
-    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'variable_guide')))
-    merge_results.append(merge_pool.apply_async(merge_ids, args=(base_dir, group)))
+    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'I5')))
+    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'I7')))
+    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'variable_guide')))
+    merge_results.append(merge_pool.apply_async(merge_ids, args=(base_dir, batch)))
 
     merge_pool.close()
     merge_pool.join()
@@ -456,5 +467,14 @@ if __name__ == '__main__':
         if not merge_result.successful():
             print(merge_result.get())
 
-    #chunk_dir = base_dir / 'data' / group / 'gDNA_chunks'
+    #chunk_dir = base_dir / 'data' / batch / 'gDNA_chunks'
     #chunk_dir.rmdir()
+
+    merged_fn = Path(base_dir) / 'data' / batch / 'id_stats.txt'
+    id_counts = pd.read_csv(merged_fn, sep='\t', header=None, names=['pool', 'fixed_guide', 'variable_guide', 'num_reads'], index_col=[0, 1, 2], squeeze=True)
+
+    for pool_name in sample_sheet:
+        full_pool_name = f'{batch}_{pool_name}'
+        pool = ddr.pooled_screen.PooledScreen(base_dir, full_pool_name)
+        counts = id_counts.loc[pool_name].sort_values(ascending=False)
+        counts.to_csv(pool.fns['read_counts'], sep='\t', header=True)

@@ -1,4 +1,3 @@
-import re
 from collections import Counter, defaultdict
 from itertools import product
 
@@ -12,16 +11,165 @@ from hits.utilities import memoized_property
 from knock_knock.target_info import DegenerateDeletion, DegenerateInsertion, SNV, SNVs
 from knock_knock import layout
 
-class Layout:
+from ddr.outcome import *
+
+side_categories = [
+    'intended',
+    'unintended',
+    'blunt',
+    'concatamer',
+    'ambiguous',
+]
+
+donor_misintegration_subcategories = []
+
+for l_cat, r_cat in product(side_categories, repeat=2):
+    subcat = f'left {l_cat}, right {r_cat}'
+    donor_misintegration_subcategories.append(subcat)
+    subcat_no_SNVs = f'{subcat} (no SNVs)'
+    donor_misintegration_subcategories.append(subcat_no_SNVs)
+
+donor_misintegration_subcategories = tuple(donor_misintegration_subcategories)
+
+class Layout(layout.Categorizer):
+    category_order = [
+        ('wild type',
+            ('clean',
+             'mismatches',
+             'indels',
+            ),
+        ),
+        ('mismatches',
+            ('mismatches',
+            ),
+        ),
+        ('donor',
+            ('clean',
+             'synthesis errors',
+             'deletion',
+             'other',
+             'collapsed',
+            ),
+        ),
+        ('donor + deletion',
+            ('donor + deletion',
+            ),
+        ),
+        ('donor + insertion',
+            ('donor + insertion',
+            ),
+        ),
+        ('deletion',
+            ('clean',
+            ),
+        ),
+        ('deletion + adjacent mismatch',
+            ('deletion + adjacent mismatch',
+            ),
+        ),
+        ('insertion',
+            ('insertion',
+            ),
+        ),
+        ('SD-MMEJ',
+            ('loop-out',
+             'snap-back',
+             'multi-step',
+            ),
+        ),
+        ('genomic insertion',
+            ('hg19',
+             'bosTau7',
+            ),
+        ),
+        ('transversion',
+            ('NotI',
+             'non-NotI',
+            ),
+        ),
+        ('nonspecific amplification',
+            ('hg19',
+             'bosTau7',
+             'e_coli',
+             'primer dimer',
+             'unknown',
+            ),
+        ),
+        ('donor misintegration',
+            donor_misintegration_subcategories,
+        ),
+        ('blunt misintegration',
+            ("5' HDR, 3' blunt",
+             "5' blunt, 3' HDR",
+             "5' blunt, 3' blunt",
+             "5' blunt, 3' imperfect",
+             "5' imperfect, 3' blunt",
+            ),
+        ),
+        ('incomplete HDR',
+            ("5' HDR, 3' imperfect",
+             "5' imperfect, 3' HDR",
+             "5' imperfect, 3' imperfect",
+             "5' HDR, 3' HDR",
+            ),
+        ),
+        ('complex misintegration',
+            ("5' imperfect, 3' imperfect",
+            'other',
+            ),
+        ),
+        ('complex templated insertion',
+            ('genomic',
+             'donor',
+             'mixed',
+            ),
+        ),
+        ('truncation',
+            ('clean',
+             'mismatches',
+            ),
+        ),
+        ('phiX',
+            ('phiX',
+            ),
+        ),
+        ('uncategorized',
+            ('uncategorized',
+             'indel far from cut',
+             'deletion far from cut plus mismatch',
+             'deletion plus non-adjacent mismatch',
+             'insertion plus one mismatch',
+             'donor deletion plus at least one non-donor mismatch',
+             'donor SNV with non-donor insertion',
+             'one indel plus more than one mismatch',
+             'multiple indels',
+             'multiple indels plus at least one mismatch',
+             'multiple indels including donor deletion',
+             'multiple indels plus at least one donor SNV',
+            ),
+        ),
+        ('bad sequence',
+            ('too many Ns',
+             'long polyG',
+             'low quality',
+             'low quality tail',
+             'no alignments detected',
+             'non-overlapping',
+            ),
+        ), 
+    ]
+
     def __init__(self, alignments, target_info, mode='error_corrected'):
         self.alignments = [al for al in alignments if not al.is_unmapped]
         self.target_info = target_info
         
         alignment = alignments[0]
-        self.name = alignment.query_name
+        self.query_name = alignment.query_name
         self.seq = sam.get_original_seq(alignment)
-        self.seq_bytes = self.seq.encode()
-        self.qual = np.array(sam.get_original_qual(alignment))
+
+        if self.seq is not None:
+            self.seq_bytes = self.seq.encode()
+            self.qual = np.array(sam.get_original_qual(alignment))
         
         self.primary_ref_names = set(self.target_info.reference_sequences)
 
@@ -38,6 +186,8 @@ class Layout:
             self.error_corrected = True
         else:
             self.error_corrected = False
+
+        self.inferred_amplicon_length = len(self.seq) if self.seq is not None else -1
 
     @classmethod
     def from_read(cls, read, target_info):
@@ -112,6 +262,32 @@ class Layout:
         covered = interval.get_covered(al)
 
         return len(self.whole_read - covered) == 0
+
+    @memoized_property
+    def non_primer_nts(self):
+        primers = self.target_info.primers_by_side_of_read
+        left_al = self.target_edge_alignments['left']
+        if left_al is None:
+            return len(self.seq)
+        left_primer_interval = interval.Interval.from_feature(primers['left'])
+        left_al_cropped_to_primer = sam.crop_al_to_ref_int(left_al, left_primer_interval.start, left_primer_interval.end)
+
+        if left_al_cropped_to_primer is None:
+            return len(self.seq)
+
+        right_al = self.target_edge_alignments['right']
+        if right_al is None:
+            return len(self.seq)
+        right_primer_interval = interval.Interval.from_feature(primers['right'])
+        right_al_cropped_to_primer = sam.crop_al_to_ref_int(right_al, right_primer_interval.start, right_primer_interval.end)
+
+        if right_al_cropped_to_primer is None:
+            return len(self.seq)
+
+        covered_by_primers = interval.get_disjoint_covered([left_al_cropped_to_primer, right_al_cropped_to_primer])
+        not_covered_between_primers = interval.Interval(covered_by_primers.start, covered_by_primers.end) - covered_by_primers 
+
+        return not_covered_between_primers.total_length
 
     @memoized_property
     def merged_perfect_edge_alignments(self):
@@ -550,14 +726,21 @@ class Layout:
         _, string_summary = self.donor_SNV_locii_summary
         return string_summary
 
-    @memoized_property
-    def indels(self):
+    def extract_indels_from_alignments(self, als):
         ti = self.target_info
 
-        around_cut_interval = ti.around_cuts(10)
+        around_cut_interval = ti.around_cuts(5)
+
+        primer_intervals = interval.make_disjoint([interval.Interval.from_feature(p) for p in ti.primers.values()])
+
+        polyT = ti.features.get((ti.target, 'polyT-track'))
+        if polyT is not None:
+            polyT_interval = interval.Interval(polyT.start, polyT.end)
+        else:
+            polyT_interval = interval.Interval.empty()
 
         indels = []
-        for al in self.parsimonious_target_alignments:
+        for al in als:
             for i, (cigar_op, length) in enumerate(al.cigar):
                 if cigar_op == sam.BAM_CDEL:
                     nucs_before = sam.total_reference_nucs(al.cigar[:i])
@@ -583,23 +766,21 @@ class Layout:
                     continue
 
                 near_cut = len(indel_interval & around_cut_interval) > 0
+                entirely_in_primer = indel_interval in primer_intervals
+                entirely_in_polyT = indel_interval in polyT_interval
 
                 indel = self.target_info.expand_degenerate_indel(indel)
-                indels.append((indel, near_cut))
+                indels.append((indel, near_cut, entirely_in_primer))
 
-        # Ignore any 1 nt deletions in the polyT track.
-        polyT = self.target_info.features.get((self.target_info.target, 'polyT-track'))
-        if polyT is not None:
-            polyT_interval = interval.Interval(polyT.start, polyT.end)
-            def should_ignore(indel):
-                if indel.kind != 'D' or indel.length != 1:
-                    return False
-                deletion_interval = interval.Interval(min(indel.starts_ats), max(indel.ends_ats))
-                return len(deletion_interval & polyT_interval) >= 1
+        # Ignore any indels entirely contained in primers.
 
-            indels = [(indel, near_cut) for indel, near_cut in indels if not should_ignore(indel)]
+        indels = [(indel, near_cut) for indel, near_cut, entirely_in_primer in indels if not entirely_in_primer and not entirely_in_polyT]
 
         return indels
+
+    @memoized_property
+    def indels(self):
+        return self.extract_indels_from_alignments(self.parsimonious_target_alignments)
 
     @memoized_property
     def indels_near_cut(self):
@@ -607,9 +788,9 @@ class Layout:
 
     @memoized_property
     def indels_string(self):
-        reps = [str(indel) for indel in self.indels_near_cut]
-        string = ' '.join(reps)
-        return string
+        if len(self.indels) > 1:
+            raise NotImplementedError
+        return str(self.indels[0][0])
 
     @memoized_property
     def covered_from_target_edges(self):
@@ -678,7 +859,7 @@ class Layout:
 
     @memoized_property
     def read(self):
-        return fastq.Read(self.name, self.seq, fastq.encode_sanger(self.qual))
+        return fastq.Read(self.query_name, self.seq, fastq.encode_sanger(self.qual))
 
     @memoized_property
     def sw_alignments(self):
@@ -743,7 +924,7 @@ class Layout:
 
     def seed_and_extend(self, on, query_start, query_end):
         extender = self.target_info.seed_and_extender[on]
-        return extender(self.seq_bytes, query_start, query_end, self.name)
+        return extender(self.seq_bytes, query_start, query_end, self.query_name)
     
     @memoized_property
     def valid_intervals_for_edge_alignments(self):
@@ -818,9 +999,6 @@ class Layout:
                     end = len(self.seq)
 
                 als = self.seed_and_extend('target', start, end)
-
-                for al in als:
-                    print(is_valid(al, side))
 
                 valid = [al for al in als if is_valid(al, side)]
                 if len(valid) > 0:
@@ -1690,6 +1868,12 @@ class Layout:
             self.details = 'n/a'
             self.outcome = None
 
+        elif len(self.seq) <= self.target_info.combined_primer_length + 10:
+            self.category = 'nonspecific amplification'
+            self.subcategory = 'unknown'
+            self.details = 'n/a'
+            self.relevant_alignments = self.uncategorized_relevant_alignments
+
         elif self.single_alignment_covers_read:
             if len(self.indels) == 0:
                 if len(self.non_donor_SNVs) == 0:
@@ -1720,10 +1904,16 @@ class Layout:
                         self.relevant_alignments = [self.single_target_alignment]
 
                 else: # no indels but mismatches
-                    # If extra bases synthesized during SD-MMEJ are the same length
-                    # as the total resections, there will not be an indel, so check if
-                    # the mismatches can be explained by SD-MMEJ.
-                    if self.error_corrected and self.is_valid_SD_MMEJ:
+                    if self.has_donor_SNV and not self.error_corrected:
+                        self.category = 'donor'
+                        self.subcategory = 'clean'
+                        self.outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
+                        self.details = str(self.outcome)
+                        self.relevant_alignments = [self.single_target_alignment] + self.donor_alignments
+                    elif self.error_corrected and self.is_valid_SD_MMEJ:
+                        # If extra bases synthesized during SD-MMEJ are the same length
+                        # as the total resections, there will not be an indel, so check if
+                        # the mismatches can be explained by SD-MMEJ.
                         self.register_SD_MMEJ()
                     else:
                         if self.starts_at_expected_location:
@@ -1751,7 +1941,9 @@ class Layout:
                         self.relevant_alignments = [self.single_target_alignment]
 
             elif len(self.indels) == 1:
+
                 indel, near_cut = self.indels[0]
+
                 if len(self.donor_deletions_seen) == 1:
                     if len(self.non_donor_SNVs) == 0:
                         self.category = 'donor'
@@ -1811,8 +2003,9 @@ class Layout:
                                         self.details = 'n/a'
                                         self.relevant_alignments = self.uncategorized_relevant_alignments
 
-                        elif self.is_valid_SD_MMEJ:
+                        elif self.error_corrected and self.is_valid_SD_MMEJ:
                             self.register_SD_MMEJ()
+
                         else:
                             if len(self.non_donor_SNVs) == 1:
                                 SNV_position = self.non_donor_SNVs.positions[0]
@@ -1841,6 +2034,7 @@ class Layout:
                                                 self.subcategory = 'clean'
                                                 self.details = self.indels_string
                                                 self.outcome = DeletionOutcome(indel)
+                                                self.relevant_alignments = [self.single_target_alignment]
                                     else:
                                         if self.donor_insertion is not None:
                                             self.register_donor_insertion()
@@ -1869,16 +2063,22 @@ class Layout:
                     else: # no SNVs
                         if len(self.indels_near_cut) == 1:
                             if indel.kind == 'D':
-                                self.category = 'deletion'
-                                self.subcategory = 'clean'
-                                self.outcome = DeletionOutcome(indel)
+                                if self.non_primer_nts <= 10:
+                                    self.category = 'nonspecific amplification'
+                                    self.subcategory = 'primer dimer'
+                                    self.details = 'n/a'
+                                    self.relevant_alignments = self.uncategorized_relevant_alignments
+                                else:
+                                    self.category = 'deletion'
+                                    self.subcategory = 'clean'
+                                    self.details = self.indels_string
+                                    self.outcome = DeletionOutcome(indel)
 
                             elif indel.kind == 'I':
                                 self.category = 'insertion'
                                 self.subcategory = 'insertion'
+                                self.details = self.indels_string
                                 self.outcome = InsertionOutcome(indel)
-
-                            self.details = self.indels_string
 
                         else:
                             if indel.length <= 3 and not self.error_corrected:
@@ -2020,6 +2220,11 @@ class Layout:
                 
             self.relevant_alignments = self.uncategorized_relevant_alignments
 
+        if self.outcome is not None:
+            # Translate positions to be relative to a registered anchor
+            # on the target sequence.
+            self.details = str(self.outcome.perform_anchor_shift(self.target_info.anchor))
+
         return self.category, self.subcategory, self.details, self.outcome
 
     @memoized_property
@@ -2036,385 +2241,3 @@ class Layout:
     @memoized_property
     def uncategorized_relevant_alignments(self):
         return self.target_alignments + self.donor_alignments + interval.make_parsimonious(self.nonredundant_supplemental_alignments)
-
-side_categories = [
-    'intended',
-    'unintended',
-    'blunt',
-    'concatamer',
-    'ambiguous',
-]
-
-donor_misintegration_subcategories = []
-
-for l_cat, r_cat in product(side_categories, repeat=2):
-    subcat = f'left {l_cat}, right {r_cat}'
-    donor_misintegration_subcategories.append(subcat)
-    subcat_no_SNVs = f'{subcat} (no SNVs)'
-    donor_misintegration_subcategories.append(subcat_no_SNVs)
-
-donor_misintegration_subcategories = tuple(donor_misintegration_subcategories)
-
-category_order = [
-    ('wild type',
-        ('clean',
-         'mismatches',
-         'indels',
-        ),
-    ),
-    ('mismatches',
-        ('mismatches',
-        ),
-    ),
-    ('donor',
-        ('clean',
-         'synthesis errors',
-         'deletion',
-         'other',
-         'collapsed',
-        ),
-    ),
-    ('donor + deletion',
-        ('donor + deletion',
-        ),
-    ),
-    ('donor + insertion',
-        ('donor + insertion',
-        ),
-    ),
-    ('deletion',
-        ('clean',
-        ),
-    ),
-    ('deletion + adjacent mismatch',
-        ('deletion + adjacent mismatch',
-        ),
-    ),
-    ('insertion',
-        ('insertion',
-        ),
-    ),
-    ('SD-MMEJ',
-        ('loop-out',
-         'snap-back',
-         'multi-step',
-        ),
-    ),
-    ('genomic insertion',
-        ('hg19',
-         'bosTau7',
-        ),
-    ),
-    ('transversion',
-        ('NotI',
-         'non-NotI',
-        ),
-    ),
-    ('nonspecific amplification',
-        ('hg19',
-         'bosTau7',
-         'e_coli',
-         'primer dimer',
-         'unknown',
-        ),
-    ),
-    ('donor misintegration',
-        donor_misintegration_subcategories,
-    ),
-    ('complex templated insertion',
-        ('genomic',
-         'donor',
-         'mixed',
-        ),
-    ),
-    ('truncation',
-        ('clean',
-         'mismatches',
-        ),
-    ),
-    ('phiX',
-        ('phiX',
-        ),
-    ),
-    ('uncategorized',
-        ('uncategorized',
-         'indel far from cut',
-         'deletion far from cut plus mismatch',
-         'deletion plus non-adjacent mismatch',
-         'insertion plus one mismatch',
-         'donor deletion plus at least one non-donor mismatch',
-         'donor SNV with non-donor insertion',
-         'one indel plus more than one mismatch',
-         'multiple indels',
-         'multiple indels plus at least one mismatch',
-         'multiple indels including donor deletion',
-         'multiple indels plus at least one donor SNV',
-        ),
-    ),
-    ('bad sequence',
-        ('too many Ns',
-         'long polyG',
-         'low quality',
-         'low quality tail',
-         'no alignments detected',
-        ),
-    ), 
-]
-
-class Outcome:
-    def perform_anchor_shift(self, anchor):
-        return self
-
-    def undo_anchor_shift(self, anchor):
-        return self.perform_anchor_shift(-anchor)
-
-class DeletionOutcome(Outcome):
-    def __init__(self, deletion):
-        self.deletion = deletion
-
-    @classmethod
-    def from_string(cls, details_string):
-        deletion = DegenerateDeletion.from_string(details_string)
-        return cls(deletion)
-
-    def __str__(self):
-        return str(self.deletion)
-
-    def perform_anchor_shift(self, anchor):
-        shifted_starts_ats = [starts_at - anchor for starts_at in self.deletion.starts_ats]
-        shifted_deletion = DegenerateDeletion(shifted_starts_ats, self.deletion.length)
-        return type(self)(shifted_deletion)
-
-class InsertionOutcome(Outcome):
-    def __init__(self, insertion):
-        self.insertion = insertion
-
-    @classmethod
-    def from_string(cls, details_string):
-        insertion = DegenerateInsertion.from_string(details_string)
-        return cls(insertion)
-
-    def __str__(self):
-        return str(self.insertion)
-
-    def perform_anchor_shift(self, anchor):
-        shifted_starts_afters = [starts_after - anchor for starts_after in self.insertion.starts_afters]
-        shifted_insertion = DegenerateInsertion(shifted_starts_afters, self.insertion.seqs)
-        return type(self)(shifted_insertion)
-
-class HDROutcome(Outcome):
-    def __init__(self, donor_SNV_read_bases, donor_deletions):
-        self.donor_SNV_read_bases = donor_SNV_read_bases
-        self.donor_deletions = donor_deletions
-
-    @classmethod
-    def from_string(cls, details_string):
-        SNV_string, donor_deletions_string = details_string.split(';', 1)
-        if donor_deletions_string == '':
-            deletions = []
-        else:
-            deletions = [DegenerateDeletion.from_string(s) for s in donor_deletions_string.split(';')]
-        return HDROutcome(SNV_string, deletions)
-
-    def __str__(self):
-        donor_deletions_string = ';'.join(str(d) for d in self.donor_deletions)
-        return f'{self.donor_SNV_read_bases};{donor_deletions_string}'
-
-class HDRPlusDeletionOutcome(Outcome):
-    def __init__(self, HDR_outcome, deletion_outcome):
-        self.HDR_outcome = HDR_outcome
-        self.deletion_outcome = deletion_outcome
-    
-    @classmethod
-    def from_string(cls, details_string):
-        deletion_string, HDR_string = details_string.split(';', 1)
-        deletion_outcome = DeletionOutcome.from_string(deletion_string)
-        HDR_outcome = HDROutcome.from_string(HDR_string)
-
-        return HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
-
-    def __str__(self):
-        return f'{self.deletion_outcome};{self.HDR_outcome}'
-
-class HDRPlusInsertionOutcome(Outcome):
-    def __init__(self, HDR_outcome, insertion_outcome):
-        self.HDR_outcome = HDR_outcome
-        self.insertion_outcome = insertion_outcome
-    
-    @classmethod
-    def from_string(cls, details_string):
-        insertion_string, HDR_string = details_string.split(';', 1)
-        insertion_outcome = InsertionOutcome.from_string(insertion_string)
-        HDR_outcome = HDROutcome.from_string(HDR_string)
-
-        return HDRPlusDeletionOutcome(HDR_outcome, insertion_outcome)
-
-    def __str__(self):
-        return f'{self.insertion_outcome};{self.HDR_outcome}'
-
-class MismatchOutcome(Outcome):
-    def __init__(self, snvs):
-        self.snvs = snvs
-
-    @classmethod
-    def from_string(cls, details_string):
-        snvs = SNVs.from_string(details_string)
-        return MismatchOutcome(snvs)
-
-    def __str__(self):
-        return str(self.snvs)
-
-    def perform_anchor_shift(self, anchor):
-        shifted_snvs = SNVs([SNV(s.position - anchor, s.basecall, s.quality) for s in self.snvs])
-        return type(self)(shifted_snvs)
-
-class TruncationOutcome(Outcome):
-    def __init__(self, edge):
-        self.edge = edge
-
-    @classmethod
-    def from_string(cls, details_string):
-        return TruncationOutcome(int(details_string))
-
-    def __str__(self):
-        return str(self.edge)
-
-    def perform_anchor_shift(self, anchor):
-        return TruncationOutcome(self.edge - anchor)
-
-class DeletionPlusMismatchOutcome(Outcome):
-    def __init__(self, deletion_outcome, mismatch_outcome):
-        self.deletion_outcome = deletion_outcome
-        self.mismatch_outcome = mismatch_outcome
-
-    @classmethod
-    def from_string(cls, details_string):
-        deletion_string, mismatch_string = details_string.split(';', 1)
-        deletion_outcome = DeletionOutcome.from_string(deletion_string)
-        mismatch_outcome = MismatchOutcome.from_string(mismatch_string)
-        return DeletionPlusMismatchOutcome(deletion_outcome, mismatch_outcome)
-
-    def __str__(self):
-        return f'{self.deletion_outcome};{self.mismatch_outcome}'
-
-    def perform_anchor_shift(self, anchor):
-        shifted_deletion = self.deletion_outcome.perform_anchor_shift(anchor)
-        shifted_mismatch = self.mismatch_outcome.perform_anchor_shift(anchor)
-        return type(self)(shifted_deletion, shifted_mismatch)
-
-NAN_INT = np.iinfo(np.int64).min
-
-def int_or_nan_from_string(s):
-    if s == 'None':
-        return NAN_INT
-    else:
-        return int(s)
-
-class LongTemplatedInsertionOutcome(Outcome):
-    field_names = [
-        'source',
-        'ref_name',
-        'strand',
-        'left_insertion_ref_bound',
-        'right_insertion_ref_bound',
-        'left_insertion_query_bound',
-        'right_insertion_query_bound',
-        'left_target_ref_bound',
-        'right_target_ref_bound',
-        'left_target_query_bound',
-        'right_target_query_bound',
-        'left_MH_length',
-        'right_MH_length',
-        'donor_SNV_summary_string',
-    ]
-
-    int_fields = {
-        'left_insertion_ref_bound',
-        'right_insertion_ref_bound',
-        'left_insertion_query_bound',
-        'right_insertion_query_bound',
-        'left_target_ref_bound',
-        'right_target_ref_bound',
-        'left_target_query_bound',
-        'right_target_query_bound',
-        'left_MH_length',
-        'right_MH_length',
-    }
-
-    field_index_to_converter = {}
-    for i, c in enumerate(field_names):
-        if c in int_fields:
-            field_index_to_converter[i] = int_or_nan_from_string
-
-    def __init__(self, *args):
-        for name, arg in zip(self.__class__.field_names, args):
-            setattr(self, name, arg)
-
-    @classmethod
-    def from_string(cls, details_string):
-        fields = details_string.split(',')
-
-        for i, converter in cls.field_index_to_converter.items():
-            fields[i] = converter(fields[i])
-
-        return cls(*fields)
-
-    def __str__(self):
-        row = [str(getattr(self, k)) for k in self.__class__.field_names]
-        return ','.join(row)
-
-Outcome_classes = {
-    ('mismatches', 'mismatches'): MismatchOutcome,
-}
-
-full_index = []
-for cat, subcats in category_order:
-    for subcat in subcats:
-        full_index.append((cat, subcat))
-        
-full_index = pd.MultiIndex.from_tuples(full_index) 
-
-categories = [c for c, scs in category_order]
-subcategories = dict(category_order)
-
-def order(outcome):
-    if isinstance(outcome, tuple):
-        category, subcategory = outcome
-
-        try:
-            return (categories.index(category),
-                    subcategories[category].index(subcategory),
-                )
-        except:
-            print(category, subcategory)
-            raise
-    else:
-        category = outcome
-        try:
-            return categories.index(category)
-        except:
-            print(category)
-            raise
-
-def outcome_to_sanitized_string(outcome):
-    if isinstance(outcome, tuple):
-        c, s = order(outcome)
-        return f'category{c:03d}_subcategory{s:03d}'
-    else:
-        c = order(outcome)
-        return f'category{c:03d}'
-
-def sanitized_string_to_outcome(sanitized_string):
-    match = re.match('category(\d+)_subcategory(\d+)', sanitized_string)
-    if match:
-        c, s = map(int, match.groups())
-        category, subcats = category_order[c]
-        subcategory = subcats[s]
-        return category, subcategory
-    else:
-        match = re.match('category(\d+)', sanitized_string)
-        if not match:
-            raise ValueError(sanitized_string)
-        c = int(match.group(1))
-        category, subcats = category_order[c]
-        return category

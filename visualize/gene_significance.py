@@ -48,7 +48,10 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
     else:
         UMI_counts = pool.outcome_counts('perfect')[fixed_guide].loc[denominator_outcomes].sum()
 
-    numerator_counts = pool.outcome_counts('perfect')[fixed_guide].loc[outcomes].sum()
+    if isinstance(outcomes, pd.Series):
+        numerator_counts = outcomes.loc[fixed_guide]
+    else:
+        numerator_counts = pool.outcome_counts('perfect')[fixed_guide].loc[outcomes].sum()
 
     frequencies = numerator_counts / UMI_counts
     
@@ -63,13 +66,13 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
     capped_fc = np.minimum(2**5, np.maximum(2**-5, frequencies / nt_fraction))
 
     guides_df = pd.DataFrame({'total_UMIs': UMI_counts,
-                       'outcome_count': numerator_counts,
-                       'frequency': frequencies,
-                       'log2_fold_change': np.log2(capped_fc),
-                       'p_down': ps_down,
-                       'p_up': ps_up,
-                       'gene': genes,
-                      })
+                              'outcome_count': numerator_counts,
+                              'frequency': frequencies,
+                              'log2_fold_change': np.log2(capped_fc),
+                              'p_down': ps_down,
+                              'p_up': ps_up,
+                              'gene': genes,
+                             })
     guides_df = guides_df.drop(guides_to_omit, errors='ignore')
     
     ps = defaultdict(list)
@@ -811,6 +814,7 @@ def genetics_of_stat(stat_series,
                      genes_to_label=3,
                      title=None,
                      y_label=None,
+                     y_lims=None,
                     ):
     stat_series = pd.Series(stat_series)
     stat_series.name = 'stat'
@@ -966,6 +970,7 @@ def genetics_of_stat(stat_series,
 
     #ax.set_xlabel('guides (alphabetical order)', labelpad=20, size=12)
 
-    #ax.set_ylim(0)
+    if y_lims is not None:
+        ax.set_ylim(*y_lims)
     
     return fig, df

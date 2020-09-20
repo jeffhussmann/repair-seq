@@ -1,3 +1,5 @@
+import itertools
+
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib
@@ -1490,3 +1492,115 @@ def sorted_by_significance(pool, outcomes,
     )
     
     return fig
+
+def volcano_guides(guides_df, guide_to_color, gene_to_color, gene_sets):
+    data = guides_df.copy()
+    data['color'] = guide_to_color
+
+    guides_to_label = data.query('color != "silver"').index
+
+    x_column = 'log2_fold_change'
+    y_column = '-log10_p_relevant'
+
+    common_kwargs = dict(x=x_column, y=y_column, c='color', linewidths=(0,), s=20, clip_on=False)
+
+    fig, ax = plt.subplots()
+
+    ax.scatter(data=data.loc[data.index.difference(guides_to_label)], alpha=0.5, **common_kwargs)
+    ax.scatter(data=data.loc[guides_to_label], alpha=0.95, zorder=10, **common_kwargs)
+
+    hits.visualize.label_scatter_plot(ax, x_column, y_column, 'guide',
+                                      data=data.loc[guides_to_label],
+                                      text_kwargs={'size': 8},
+                                      initial_distance=5,
+                                      color='color',
+                                      avoid=False,
+                                      vector='above',
+                                    )
+
+    ax.axvline(0, color='black', alpha=0.5)
+
+    ax.set_xlabel('average log2 fold-change from non-targeting')
+    ax.set_ylabel('-log10 guide p-value')
+
+    for i, (name, gene_set) in enumerate(gene_sets.items()):
+        ax.annotate(name,
+                    xy=(1, 0.75),
+                    xycoords='axes fraction',
+                    xytext=(10, -20 * i),
+                    textcoords='offset points',
+                    color=gene_to_color[sorted(gene_set)[0]],
+                    size=12,
+                   )
+        
+    ax.set_ylim(0)
+        
+    return fig
+
+def volcano_genes(genes_df, gene_to_color, gene_sets):
+    data = genes_df.xs('relevant', axis=1, level=1).copy()
+
+    data['color'] = gene_to_color
+
+    genes_to_label = data.query('color != "silver"').index
+
+    x_column = 'log2 fold change'
+    y_column = '-log10 p'
+
+    common_kwargs = dict(x=x_column, y=y_column, c='color', linewidths=(0,), s=30, clip_on=False)
+
+    fig, ax = plt.subplots()
+
+    ax.scatter(data=data.loc[data.index.difference(genes_to_label)], alpha=0.5, **common_kwargs)
+    ax.scatter(data=data.loc[genes_to_label], alpha=0.95, zorder=10, **common_kwargs)
+
+    hits.visualize.label_scatter_plot(ax, x_column, y_column, 'gene',
+                                      data=data.loc[genes_to_label],
+                                      text_kwargs={'size': 8},
+                                      initial_distance=5,
+                                      color='color',
+                                      avoid=True,
+                                      vector='above',
+                                    )
+
+    ax.axvline(0, color='black', alpha=0.5)
+    ax.set_ylim(0)
+
+    ax.set_xlabel('average log2 fold-change from non-targeting of 2 strongest gene guides')
+    ax.set_ylabel('-log10 gene p-value')
+
+    for i, (name, gene_set) in enumerate(gene_sets.items()):
+        ax.annotate(name,
+                    xy=(1, 0.75),
+                    xycoords='axes fraction',
+                    xytext=(10, -20 * i),
+                    textcoords='offset points',
+                    color=gene_to_color[sorted(gene_set)[0]],
+                    size=12,
+                   )
+        
+    return fig
+
+def make_guide_to_color(guide_to_gene, genes_to_be_colored, gene_sets):
+    guide_to_color = {}
+    gene_to_color = {}
+    
+    gene_set_colors = {name: f'C{i}' for i, name in enumerate(gene_sets)}
+    
+    for name, genes in gene_sets.items():
+        for gene in genes:
+            gene_to_color[gene] = gene_set_colors[name]
+            
+    other_colors = (f'C{i}' for i in itertools.cycle(np.arange(len(gene_set_colors), 10)))
+    
+    for guide, gene in guide_to_gene.items():
+        if gene in genes_to_be_colored or gene in gene_to_color:
+            if gene not in gene_to_color:
+                gene_to_color[gene] = next(other_colors)
+            
+        else:
+            gene_to_color[gene] = 'silver'
+            
+        guide_to_color[guide] = gene_to_color[gene]
+        
+    return pd.Series(gene_to_color), pd.Series(guide_to_color)

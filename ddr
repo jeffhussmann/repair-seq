@@ -37,10 +37,11 @@ def parallel(args):
         ]
 
         arg_tuples = []
-        for fixed_guide, variable_guide in pool.guide_combinations:
-            arg_tuples.append((args.pool, fixed_guide, variable_guide, str(stage)))
+        for fixed_guide, variable_guide in pool.guide_combinations_by_read_count:
+        #for fixed_guide, variable_guide in pool.guide_combinations_for_gene('LIG1'):
+            arg_tuples.append((args.pool, fixed_guide, variable_guide, stage))
 
-        for t in sorted(arg_tuples):
+        for t in arg_tuples:
             parallel_command.extend(t)
         
         completed_process = subprocess.run(parallel_command)
@@ -48,22 +49,22 @@ def parallel(args):
             print('error in parallel')
             sys.exit(1)
 
-    process_stage(0)
-    pool.make_common_sequences()
+    #process_stage('preprocess')
+    #pool.make_common_sequences()
     parallel_common_sequences(pool, args.max_procs)
     pool.write_common_outcome_files()
 
-    if not gDNA:
-        pool.merge_common_sequence_special_alignments()
+    pool.merge_common_sequence_special_alignments()
 
-    process_stage(1)
+    process_stage('align')
+    process_stage('categorize')
 
     pool.make_outcome_counts()
     pool.merge_templated_insertion_details()
     pool.merge_templated_insertion_details(fn_key='filtered_duplication_details')
     pool.make_high_frequency_outcome_counts()
     pool.compute_fraction_removed()
-    #pool.merge_special_alignments()
+    pool.merge_special_alignments()
 
 def parallel_common_sequences(pool, max_procs):
     parallel_command = [
@@ -114,7 +115,7 @@ parser_process = subparsers.add_parser('process')
 parser_process.add_argument('pool')
 parser_process.add_argument('fixed_guide')
 parser_process.add_argument('variable_guide')
-parser_process.add_argument('stage', type=int, choices=[0, 1])
+parser_process.add_argument('stage', type=str, choices=['preprocess', 'align', 'categorize'])
 parser_process.add_argument('--progress', const=tqdm.tqdm, action='store_const')
 parser_process.set_defaults(func=process)
 

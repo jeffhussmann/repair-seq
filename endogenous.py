@@ -18,7 +18,7 @@ memoized_property = utilities.memoized_property
 
 class Experiment(knock_knock.experiment.Experiment):
     def __init__(self, base_dir, group, name, **kwargs):
-        super().__init__(base_dir, group, name, **kwargs)
+        knock_knock.experiment.Experiment.__init__(self, base_dir, group, name, **kwargs)
 
         self.read_types = [
             'trimmed',
@@ -27,14 +27,20 @@ class Experiment(knock_knock.experiment.Experiment):
         self.layout_mode = 'amplicon'
         self.max_qual = 41
 
-        self.fns['fastq'] = self.data_dir / self.description['fastq_fn']
-        self.fns['templated_insertion_details'] = self.fns['dir'] / 'templated_insertion_details.hdf5'
+        if 'fastq_fn' in self.description:
+            self.fns['fastq'] = self.data_dir / self.description['fastq_fn']
+
+        self.fns['templated_insertion_details'] = self.fns['results_dir'] / 'templated_insertion_details.hdf5'
 
         self.outcome_fn_keys = ['outcome_list']
 
         self.length_to_store_unknown = None
         self.length_plot_smooth_window = 0
         self.x_tick_multiple = 50
+
+        self.read_types = ['trimmed', 'nonredundant']
+        self.default_read_type = 'trimmed'
+        self.preprocessed_read_type = 'trimmed'
 
         self.target_info.features_to_show.update(set(self.target_info.PAM_features))
 
@@ -52,8 +58,8 @@ class Experiment(knock_knock.experiment.Experiment):
         self.layout_mode = 'no_UMI'
 
     @memoized_property
-    def layout_module(self):
-        return ddr.pooled_layout
+    def categorizer(self):
+        return ddr.pooled_layout.Layout
 
     @memoized_property
     def max_relevant_length(self):
@@ -72,13 +78,14 @@ class Experiment(knock_knock.experiment.Experiment):
 
     def process(self, stage):
         try:
-            if stage == 'align':
+            if stage == 'preprocess':
                 self.preprocess()
-                self.generate_alignments(read_type='trimmed')
-                self.generate_supplemental_alignments(read_type='trimmed', min_length=20)
-                self.combine_alignments(read_type='trimmed')
+            elif stage == 'align':
+                self.generate_alignments(read_type='nonredundant')
+                self.generate_supplemental_alignments_with_STAR(read_type='nonredundant', min_length=20)
+                self.combine_alignments(read_type='nonredundant')
             elif stage == 'categorize':
-                self.categorize_outcomes(read_type='trimmed')
+                self.categorize_outcomes()
                 self.count_read_lengths()
                 self.make_outcome_counts()
             elif stage == 'visualize':
@@ -106,7 +113,6 @@ class Experiment(knock_knock.experiment.Experiment):
 
         with self.fns['outcome_list'].open('w') as fh:
             alignment_groups = self.alignment_groups(fn_key, read_type=read_type)
-            #alignment_groups = itertools.islice(alignment_groups, 1000)
 
             if read_type is None:
                 description = 'Categorizing reads'
@@ -115,7 +121,7 @@ class Experiment(knock_knock.experiment.Experiment):
 
             for name, als in self.progress(alignment_groups, desc=description):
                 try:
-                    layout = self.layout_module.Layout(als, self.target_info, mode=self.layout_mode)
+                    layout = self.categorizer(als, self.target_info, mode=self.layout_mode)
                     category, subcategory, details, outcome = layout.categorize()
                     if outcome is not None:
                         details = str(outcome.perform_anchor_shift(self.target_info.anchor))
@@ -170,19 +176,6 @@ class Experiment(knock_knock.experiment.Experiment):
         for outcome, fh in bam_fhs.items():
             fh.close()
 
-    def get_read_alignments(self, read_id, fn_key=None, outcome=None, read_type='trimmed'):
-        return super().get_read_alignments(read_id, fn_key='bam_by_name', outcome=outcome, read_type=read_type)
-
-    def get_read_layout(self, read_id, fn_key=None, outcome=None, read_type='trimmed'):
-        return super().get_read_layout(read_id, fn_key='bam_by_name', outcome=outcome, read_type=read_type)
-
-    def get_read_diagram(self, read_id, **kwargs):
-        return super().get_read_diagram(read_id, read_type='trimmed', **kwargs)
-
-    def alignment_groups(self, fn_key='bam_by_name', outcome=None, read_type='trimmed'):
-        groups = super().alignment_groups(fn_key=fn_key, outcome=outcome, read_type=read_type)
-        return groups
-
     @memoized_property
     def qname_to_inferred_length(self):
         qname_to_inferred_length = {}
@@ -190,8 +183,6 @@ class Experiment(knock_knock.experiment.Experiment):
             qname_to_inferred_length[outcome.query_name] = outcome.length
 
         return qname_to_inferred_length
-
-    generate_supplemental_alignments = knock_knock.experiment.IlluminaExperiment.generate_supplemental_alignments
 
     def generate_length_range_figures(self, outcome=None, num_examples=1):
         by_length = defaultdict(lambda: utilities.ReservoirSampler(num_examples))
@@ -270,9 +261,10 @@ class Experiment(knock_knock.experiment.Experiment):
             outcome_counts = outcome_counts.drop(('genomic insertion', 'hg19'))
         else:
             total_genomic = 0
+
         outcome_counts.loc['genomic insertion', 'hg19', 'collapsed'] = total_genomic
 
-        outcome_counts = outcome_counts.drop('nonspecific amplification', errors='ignore')
+        #outcome_counts = outcome_counts.drop('nonspecific amplification', errors='ignore')
 
         outcome_counts = outcome_counts.sort_values(ascending=False)
 
