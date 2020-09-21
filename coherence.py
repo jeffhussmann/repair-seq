@@ -193,7 +193,7 @@ def collapse_cell_outcomes(UMI_fn):
     return cell_outcomes
 
 def filter_coherent_cells(cell_fn):
-    cell_table = pd.read_table(cell_fn, header=None, names=cell_Outcome.columns)
+    cell_table = pd.read_csv(cell_fn, header=None, names=cell_Outcome.columns, sep='\t')
     cell_table['reads_per_UMI'] = cell_table['num_reads'] / cell_table['num_UMIs']
     filtered = cell_table.query('reads_per_UMI >= 5 and num_UMIs >= 5')
     # Only retain cells that only have 1 outcome that passes filtering.
@@ -207,7 +207,7 @@ def load_cell_tables(base_dir, group):
     fns = [exp.fns['cell_outcomes'] for exp in exps]
     tables = []
     for exp in sorted(exps, key=lambda e: e.name):
-        table = pd.read_table(exp.fns['cell_outcomes'], header=None, names=cell_Outcome.columns)
+        table = pd.read_csv(exp.fns['cell_outcomes'], header=None, names=cell_Outcome.columns, sep='\t')
         table['guide'] = exp.name
         tables.append(table)
 

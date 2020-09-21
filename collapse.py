@@ -377,7 +377,7 @@ def index_sorted_fastq(sorted_fastq_fn, show_progress=False):
     
     if show_progress:
         yaml_fn = sorted_fastq_fn.with_suffix('.yaml')
-        stats = yaml.load(yaml_fn.read_text())
+        stats = yaml.safe_load(yaml_fn.read_text())
         total_reads = stats['total_reads']
         reads = progress(reads, total=total_reads, desc='Indexing')
     
@@ -398,7 +398,7 @@ def index_sorted_fastq(sorted_fastq_fn, show_progress=False):
     
 def load_index(sorted_fastq_fn):
     index_fn = sorted_fastq_fn.with_suffix('.index')
-    index_df = pd.read_table(index_fn, header=None)
+    index_df = pd.read_csv(index_fn, header=None, sep='\t')
     landmarks = index_df.to_records(index=False)
     return landmarks
     
@@ -465,7 +465,7 @@ def form_collapsed_clusters(sorted_fn,
                             show_progress=True):
 
     yaml_fn = sorted_fn.with_suffix('.yaml')
-    stats = yaml.load(yaml_fn.read_text())
+    stats = yaml.safe_load(yaml_fn.read_text())
     max_read_length = stats['max_read_length']
     total_reads = stats['total_reads']
 
@@ -580,7 +580,7 @@ def make_sample_sheet(group_dir, target, guides):
 
 def load_sample_sheet(base_dir):
     sample_sheet_fn = Path(base_dir) / 'data' / 'sample_sheet.yaml'
-    sample_sheet = yaml.load(sample_sheet_fn.read_text())
+    sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
     return sample_sheet
 
 if __name__ == '__main__':

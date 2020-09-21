@@ -452,12 +452,13 @@ class SingleGuideExperiment(experiment.Experiment):
 
     @memoized_property
     def outcome_counts(self):
-        counts = pd.read_table(self.fns['outcome_counts'],
-                               header=None,
-                               index_col=[0, 1, 2, 3],
-                               squeeze=True,
-                               na_filter=False,
-                              )
+        counts = pd.read_csv(self.fns['outcome_counts'],
+                             header=None,
+                             index_col=[0, 1, 2, 3],
+                             squeeze=True,
+                             na_filter=False,
+                             sep='\t',
+                            )
         counts.index.names = ['perfect_guide', 'category', 'subcategory', 'details']
         return counts
 
@@ -559,12 +560,12 @@ class SingleGuideExperiment(experiment.Experiment):
 
     @memoized_property
     def cell_outcomes(self):
-        df = pd.read_table(self.fns['cell_outcomes'], header=None, na_filter=False, names=coherence.Pooled_UMI_Outcome.columns)
+        df = pd.read_csv(self.fns['cell_outcomes'], header=None, na_filter=False, names=coherence.Pooled_UMI_Outcome.columns, sep='\t')
         return df
 
     @memoized_property
     def filtered_cell_outcomes(self):
-        df = pd.read_table(self.fns['filtered_cell_outcomes'], header=None, na_filter=False, names=coherence.Pooled_UMI_Outcome.columns)
+        df = pd.read_csv(self.fns['filtered_cell_outcomes'], header=None, na_filter=False, names=coherence.Pooled_UMI_Outcome.columns, sep='\t')
         return df
 
     def example_diagrams(self, outcome, num_examples, **kwargs):
@@ -796,7 +797,7 @@ class SingleGuideExperiment(experiment.Experiment):
             else:
                 raise ValueError(stage)
         except:
-            print(self.group, self.name)
+            print(self.group, self.sample_name)
             raise
 
 class SingleGuideNoUMIExperiment(SingleGuideExperiment):
@@ -817,7 +818,7 @@ class SingleGuideNoUMIExperiment(SingleGuideExperiment):
 
     @memoized_property
     def filtered_cell_outcomes(self):
-        df = pd.read_table(self.fns['outcome_list'], header=None, na_filter=False, names=coherence.gDNA_Outcome.columns)
+        df = pd.read_csv(self.fns['outcome_list'], header=None, na_filter=False, names=coherence.gDNA_Outcome.columns, sep='\t')
         return df
 
     def collapse_UMI_outcomes(self):
@@ -919,7 +920,7 @@ class PooledScreen:
         self.progress = pass_along_kwargs
 
         sample_sheet_fn = self.base_dir / 'results' / group / 'sample_sheet.yaml'
-        self.sample_sheet = yaml.load(sample_sheet_fn.read_text())
+        self.sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
 
         categorizer_name = self.sample_sheet.get('categorizer', 'pooled_layout')
         if categorizer_name == 'pooled_layout':
@@ -2297,7 +2298,7 @@ def get_pool(base_dir, group, progress=None):
     group_dir = Path(base_dir) / 'results' / group
     sample_sheet_fn = group_dir / 'sample_sheet.yaml'
     if sample_sheet_fn.exists():
-        sample_sheet = yaml.load(sample_sheet_fn.read_text())
+        sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
         pooled = sample_sheet.get('pooled', False)
         if pooled:
             if sample_sheet.get('gDNA', False):
