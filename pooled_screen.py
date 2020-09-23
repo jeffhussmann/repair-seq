@@ -1480,6 +1480,13 @@ class PooledScreen:
             SNV_name_to_position[SNV_name] = position
             
         return pd.Series(SNV_name_to_position).sort_index()
+
+    def sort_outcomes_by_gene_phenotype(self, outcomes, gene):
+        guides = self.variable_guide_library.gene_guides(gene)
+        fcs = self.log2_fold_changes('perfect', 'none')['none'].loc[outcomes, guides]
+        average_fcs = fcs.mean(axis=1)
+        sorted_outcomes = average_fcs.sort_values().index.values
+        return sorted_outcomes
         
     def rational_outcome_order(self, fixed_guide, num_outcomes=50, include_uncommon=False, by_frequency=False):
         def get_deletion_info(details):
