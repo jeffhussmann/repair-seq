@@ -497,9 +497,23 @@ class Layout(layout.Categorizer):
         else:
             return False
 
+    def overlaps_primer(self, al, side):
+        primer = self.target_info.primers_by_side_of_read[side]
+        num_overlapping_bases = al.get_overlap(primer.start, primer.end + 1)
+        overlaps = num_overlapping_bases > 0
+        correct_strand = sam.get_strand(al) == self.target_info.sequencing_direction 
+
+        return correct_strand and overlaps
+
     @memoized_property
     def whole_read(self):
         return interval.Interval(0, len(self.seq) - 1)
+
+    def whole_read_minus_edges(self, edge_length):
+        if self.seq is None:
+            return interval.Interval.empty()
+        else:
+            return interval.Interval(edge_length, len(self.seq) - 1 - edge_length)
     
     @memoized_property
     def single_target_alignment(self):
@@ -1859,6 +1873,87 @@ class Layout(layout.Categorizer):
         right_als = self.seed_and_extend('target', len(self.seq) - 1 - seed_length, len(self.seq) - 1)
         return left_als + right_als
 
+    @memoized_property
+    def duplication(self):
+        ''' (duplication, simple)   - a single junction
+            (duplication, iterated) - multiple uses of the same junction
+            (duplication, complex)  - multiple junctions that are not exactly the same
+        '''
+        ti = self.target_info
+        # Order target als by position on the query from left to right.
+        target_als = [al for al in self.split_target_alignments + self.gap_sw_realignments
+                      if al.reference_name == ti.target
+                      and sam.get_strand(al) == ti.sequencing_direction
+                      ]
+        target_als = sorted(target_als, key=interval.get_covered)
+
+        merged_als = sam.merge_any_adjacent_pairs(target_als, ti.reference_sequences)
+
+        covereds = []
+        for al in merged_als:
+            covered = interval.get_covered(al)
+            if covered.total_length >= 20:
+                if self.overlaps_primer(al, 'right'):
+                    covered.end = self.whole_read.end
+                if self.overlaps_primer(al, 'left'):
+                    covered.start = 0
+            covereds.append(covered)
+    
+        covered = interval.DisjointIntervals(interval.make_disjoint(covereds))
+
+        uncovered = self.whole_read_minus_edges(2) - covered
+        
+        if len(merged_als) == 1 or uncovered.total_length > 0:
+            return None
+        
+        ref_junctions = []
+
+        if ti.sequencing_direction == '+':
+            get_left_end = lambda al: al.reference_end - 1 
+            get_right_end = lambda al: al.reference_start
+        else:
+            get_left_end = lambda al: al.reference_start
+            get_right_end = lambda al: al.reference_end - 1 
+
+        indels = []
+
+        als_with_donor_SNVs = sum(self.specific_to_donor(al) for al in merged_als)
+
+        indels = [indel for indel, _ in self.extract_indels_from_alignments(merged_als)]
+
+        for junction_i, (left_al, right_al) in enumerate(zip(merged_als, merged_als[1:])):
+            switch_results = sam.find_best_query_switch_after(left_al, right_al, ti.target_sequence, ti.target_sequence, max)
+
+            left_switch_after = max(switch_results['best_switch_points'])
+            right_switch_after = min(switch_results['best_switch_points'])
+
+            left_al_cropped = sam.crop_al_to_query_int(left_al, 0, left_switch_after)
+            right_al_cropped = sam.crop_al_to_query_int(right_al, right_switch_after + 1, len(self.seq))
+
+            # TODO: look into when None happens here
+            if left_al_cropped is None:
+                left = -1
+            else:
+                left = get_left_end(left_al_cropped)
+
+            if right_al_cropped is None:
+                right = -1
+            else:
+                right = get_right_end(right_al_cropped)
+
+            ref_junction = (left, right)
+            ref_junctions.append(ref_junction)
+
+        if len(ref_junctions) == 1:
+            subcategory = 'simple'
+        elif len(set(ref_junctions)) == 1:
+            # There are multiple junctions but they are all identical.
+            subcategory = 'iterated'
+        else:
+            subcategory = 'complex'
+
+        return subcategory, ref_junctions, indels, als_with_donor_SNVs, merged_als
+
     def categorize(self):
         self.outcome = None
 
@@ -2166,6 +2261,20 @@ class Layout(layout.Categorizer):
         
         elif self.genomic_insertion is not None:
             self.register_genomic_insertion()
+
+        elif self.duplication is not None:
+            subcategory, ref_junctions, indels, als_with_donor_SNVs, merged_als = self.duplication
+            if len(indels) == 0:
+                self.category = 'duplication'
+                self.subcategory = subcategory
+                self.outcome = DuplicationOutcome(ref_junctions)
+                self.details = str(self.outcome)
+                self.relevant_alignments = merged_als
+            else:
+                self.category = 'uncategorized'
+                self.subcategory = 'uncategorized'
+                self.details = 'n/a'
+                self.relevant_alignments = self.uncategorized_relevant_alignments
 
         #elif self.multipart_templated_insertion:
         #    self.category = 'complex templated insertion'
