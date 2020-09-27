@@ -11,16 +11,11 @@ import scipy.cluster.hierarchy
 
 from . import outcome_diagrams
 from ddr import pooled_screen
+import ddr.visualize
 
 idx = pd.IndexSlice
 
 bokeh.io.output_notebook()
-
-category10 = bokeh.palettes.Category10[10]
-accent = bokeh.palettes.Accent[8]
-good_colors = (category10[2:7] + category10[8:] + accent[:3] + accent[4:])*100
-
-colors_list = [[c]*10 for c in good_colors]
 
 def add_fold_change_colorbar(fig, im, x0, y0, width, height):
     cbar_ax = fig.add_axes((x0, y0, width, height)) 
@@ -124,7 +119,7 @@ def genes(pool,
         real_genes = [g for g in genes if g != 'negative_control']
 
         if len(real_genes) > 1 or not different_colors_if_one_gene:
-            gene_to_colors.update(dict(zip(real_genes, colors_list)))
+            gene_to_colors.update(dict(zip(real_genes, ddr.visualize.colors_list)))
 
         elif len(real_genes) == 1:
             gene = real_genes[0]
@@ -132,7 +127,7 @@ def genes(pool,
             if len(guides) > 6:
                 gene_to_colors.update({gene: ['C0']*1000})
             else:
-                gene_to_colors.update({gene: good_colors})
+                gene_to_colors.update({gene: ddr.visualize.good_colors})
         
     if ax_order is None:
         if just_percentages:
@@ -178,11 +173,7 @@ def genes(pool,
             return p.outcome_fractions(guide_status)[f]
 
     if gene_to_sort_by is not None:
-        guides = pool.variable_guide_library.gene_guides(gene_to_sort_by)
-        guides = [g for g in guides if g not in bad_guides]
-        fcs = get_log2_fold_changes(pool).loc[outcome_order, guides]
-        average_fcs = fcs.mean(axis=1)
-        outcome_order = average_fcs.sort_values().index.values
+        outcome_order = pool.sort_outcomes_by_gene_phenotype(outcome_order, gene_to_sort_by)
 
     num_outcomes = len(outcome_order)
 
@@ -444,7 +435,7 @@ def genes(pool,
                 heatmap_width = ax_p.height * num_cols / num_rows * height / width
                 heatmap_ax = fig.add_axes((start_x, ax_p.y0, heatmap_width, ax_p.height), sharey=axs[ax_order[0]])
                         
-                im = heatmap_ax.imshow(vals, cmap=plt.get_cmap('RdBu_r'), vmin=v_min, vmax=v_max, origin='lower')
+                im = heatmap_ax.imshow(vals, cmap=plt.get_cmap('RdBu_r'), vmin=v_min, vmax=v_max)
 
                 heatmap_ax.xaxis.tick_top()
                 heatmap_ax.set_xticks(np.arange(len(gene_guides)))

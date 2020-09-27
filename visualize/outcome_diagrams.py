@@ -26,6 +26,8 @@ def plot(outcome_order,
          features_to_draw=None,
          replacement_text_for_complex=None,
          protospacer_color='blue',
+         preserve_x_lims=False,
+         shift_x=0,
         ):
     if isinstance(window, int):
         window_left, window_right = -window, window
@@ -68,13 +70,10 @@ def plot(outcome_order,
             offset = max(target_info.cut_afters.values())
         else:
             offset = max(target_info.cut_afters.values())
-    
-    guide_start = guide.start - 0.5 - offset
-    guide_end = guide.end + 0.5 - offset
 
     if draw_cut_afters:
         for cut_after in target_info.cut_afters.values():
-            x = (cut_after + 0.5 * cut_offset_sign) - offset
+            x = (cut_after + 0.5 * cut_offset_sign) - offset + shift_x
 
             if draw_wild_type_on_top:
                 ys = [-0.5, num_outcomes + 0.5]
@@ -92,8 +91,8 @@ def plot(outcome_order,
         if x0 > window_right or x1 < window_left:
             return
 
-        x0 = max(x0, window_left - 0.5)
-        x1 = min(x1, window_right + 0.5)
+        x0 = max(x0, window_left - 0.5) + shift_x
+        x1 = min(x1, window_right + 0.5) + shift_x
 
         path = [
             [x0, y0],
@@ -233,7 +232,7 @@ def plot(outcome_order,
                     observed_SNP_idxs.add(p_to_i(position))
 
                     ax.annotate(transform_seq(read_base),
-                                xy=(x, y),
+                                xy=(x + shift_x, y),
                                 xycoords='data', 
                                 ha='center',
                                 va='center',
@@ -445,11 +444,16 @@ def plot(outcome_order,
         draw_wild_type(num_outcomes, on_top=True, guides_to_draw=target_info.sgRNAs)
         ax.set_xticks([])
                 
-    x_lims = [window_left - 0.5, window_right + 0.5]
-    if flip:
-        ax.set_xlim(*x_lims[::-1])
-    else:
-        ax.set_xlim(*x_lims)
+    if not preserve_x_lims:
+        # Some uses don't want x lims to be changed.
+        x_lims = [window_left - 0.5, window_right + 0.5]
+        if flip:
+            ax.set_xlim(*x_lims[::-1])
+        else:
+            ax.set_xlim(*x_lims)
+
+        ax.xaxis.tick_top()
+        ax.axhline(num_outcomes + 0.5 - 1, color='black', alpha=0.75, clip_on=False)
 
     ax.set_ylim(-0.5, num_outcomes - 0.5)
     ax.set_frame_on(False)
@@ -465,9 +469,7 @@ def plot(outcome_order,
                     size=14,
                    )
         
-    ax.xaxis.tick_top()
     ax.set_yticks([])
-    ax.axhline(num_outcomes + 0.5 - 1, color='black', alpha=0.75, clip_on=False)
     
     return fig, ax
 
@@ -572,7 +574,7 @@ def plot_with_frequencies(pool, outcomes, fixed_guide='none', text_only=False, c
     return fig
 
 class DiagramGrid:
-    def __init__(self, outcomes, target_info):
+    def __init__(self, outcomes, target_info, diagram_ax=None, **diagram_kwargs):
 
         self.outcomes = outcomes
         self.target_info = target_info
@@ -581,12 +583,17 @@ class DiagramGrid:
 
         self.ordered_axs = []
 
-        self.axs_by_name = {}
+        self.axs_by_name = {
+            'diagram': diagram_ax,
+        }
 
         self.widths = {}
 
+        self.diagram_kwargs = diagram_kwargs
+
     def plot_diagrams(self, **diagram_kwargs):
-        self.fig, ax = plot(self.outcomes, self.target_info, **diagram_kwargs)
+        self.fig, ax = plot(self.outcomes, self.target_info, ax=self.axs_by_name['diagram'], **self.diagram_kwargs)
+
         self.axs_by_name['diagram'] = ax
         self.ordered_axs.append(ax)
 
@@ -654,3 +661,31 @@ class DiagramGrid:
 
         for side in ['left', 'right', 'bottom']:
             ax.spines[side].set_visible(False)
+
+    def add_heatmap(self, vals, gap_multiple=1, color='black'):
+        ax_to_left = self.ordered_axs[-1]
+        ax_to_left_p = ax_to_left.get_position()
+
+        fig_width_inches, fig_height_inches = self.fig.get_size_inches()
+
+        num_rows, num_cols = vals.shape
+
+        heatmap_height = ax_to_left_p.height
+        heatmap_width = heatmap_height * num_cols / num_rows * fig_height_inches / fig_width_inches
+
+        gap = heatmap_width * gap_multiple / num_cols
+        heatmap_left = ax_to_left_p.x1 + gap
+
+        rect = [heatmap_left, ax_to_left_p.y0, heatmap_width, heatmap_height]
+        heatmap_ax = self.fig.add_axes(rect, sharey=ax_to_left)
+
+        im = heatmap_ax.imshow(vals, cmap=plt.get_cmap('RdBu_r'), vmin=-2, vmax=2)
+        plt.setp(heatmap_ax.spines.values(), visible=False)
+
+        heatmap_ax.xaxis.tick_top()
+        heatmap_ax.set_xticks(np.arange(num_cols))
+        heatmap_ax.set_xticklabels(vals.columns, rotation=90, color=color)
+
+        self.ordered_axs.append(heatmap_ax)
+
+        return heatmap_ax

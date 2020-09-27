@@ -342,12 +342,13 @@ class ArrayedExperiment:
 
     @memoized_property
     def outcome_counts(self):
-        counts = pd.read_table(self.fns['outcome_counts'],
-                               header=None,
-                               index_col=[0, 1, 2],
-                               squeeze=True,
-                               na_filter=False,
-                              )
+        counts = pd.read_csv(self.fns['outcome_counts'],
+                             header=None,
+                             index_col=[0, 1, 2],
+                             squeeze=True,
+                             na_filter=False,
+                             sep='\t',
+                            )
         counts.index.names = ['category', 'subcategory', 'details']
         return counts
 
