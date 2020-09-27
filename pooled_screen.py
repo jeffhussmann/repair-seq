@@ -1024,6 +1024,9 @@ class PooledScreen:
                                    label_offsets=label_offsets,
                                   )
 
+    def __repr__(self):
+        return f'PooledScreen: group={self.group}, short_name={self.short_name}, sgRNA={self.sgRNA}, donor={self.donor}, base_dir={self.base_dir}'
+
     @memoized_property
     def guide_combinations(self):
         combinations = []
