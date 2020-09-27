@@ -1035,8 +1035,11 @@ class PooledScreen:
 
     @memoized_property
     def guide_combinations_by_read_count(self):
-        read_counts = pd.read_csv(self.fns['read_counts'], sep='\t', index_col=[0, 1], squeeze=True)
-        return [(fg, vg) for fg, vg in read_counts.index.values if fg != 'unknown' and vg != 'unknown']
+        if self.fns['read_counts'].exists():
+            read_counts = pd.read_csv(self.fns['read_counts'], sep='\t', index_col=[0, 1], squeeze=True)
+            return [(fg, vg) for fg, vg in read_counts.index.values if fg != 'unknown' and vg != 'unknown']
+        else:
+            return self.guide_combinations
 
     def guide_combinations_for_gene(self, gene):
         if isinstance(gene, (list, tuple)):
