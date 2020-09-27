@@ -1490,6 +1490,17 @@ class PooledScreen:
         average_fcs = fcs.mean(axis=1)
         sorted_outcomes = average_fcs.sort_values().index.values
         return sorted_outcomes
+
+    def gene_guides_by_activity(self):
+        guide_activity_order = self.chi_squared_per_guide().index
+        
+        gene_guides = defaultdict(list)
+        
+        for guide in guide_activity_order:
+            gene = self.variable_guide_library.guide_to_gene[guide]
+            gene_guides[gene].append(guide)
+            
+        return gene_guides
         
     def rational_outcome_order(self, fixed_guide, num_outcomes=50, include_uncommon=False, by_frequency=False):
         def get_deletion_info(details):
