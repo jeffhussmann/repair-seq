@@ -46,7 +46,7 @@ def build_guide_specific_target(original_target,
         new_fn = new_dir / fn
         old_fn = relative_original_dir / fn
 
-        if new_fn.exists():
+        if new_fn.exists() or new_fn.is_symlink():
             new_fn.unlink()
 
         new_fn.symlink_to(old_fn)
