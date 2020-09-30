@@ -61,6 +61,8 @@ class HDROutcome(Outcome):
         donor_deletions_string = ';'.join(str(d) for d in self.donor_deletions)
         return f'{self.donor_SNV_read_bases};{donor_deletions_string}'
 
+    #TODO: there is no anchor shifting of donor deletions.
+
 class HDRPlusDeletionOutcome(Outcome):
     def __init__(self, HDR_outcome, deletion_outcome):
         self.HDR_outcome = HDR_outcome
@@ -92,7 +94,7 @@ class DeletionPlusDuplicationOutcome(Outcome):
         duplication_outcome = DuplicationOutcome.from_string(duplication_string)
         deletion_outcome = DeletionOutcome.from_string(deletion_string)
 
-        return DeletionPlusDDuplicationOutcome(deletion_outcome, duplication_outcome)
+        return DeletionPlusDuplicationOutcome(deletion_outcome, duplication_outcome)
 
     def __str__(self):
         return f'{self.deletion_outcome};{self.duplication_outcome}'
@@ -109,7 +111,7 @@ class MultipleDeletionOutcome(Outcome):
     @classmethod
     def from_string(cls, details_string):
         deletion_strings = details_string.split(';', 1)
-        deletion_outcomes = [DeletionOutcome.from_string(s) for s in deletion_string]
+        deletion_outcomes = [DeletionOutcome.from_string(s) for s in deletion_strings]
 
         return MultipleDeletionOutcome(deletion_outcomes)
 
@@ -131,7 +133,7 @@ class HDRPlusInsertionOutcome(Outcome):
         insertion_outcome = InsertionOutcome.from_string(insertion_string)
         HDR_outcome = HDROutcome.from_string(HDR_string)
 
-        return HDRPlusDeletionOutcome(HDR_outcome, insertion_outcome)
+        return HDRPlusInsertionOutcome(HDR_outcome, insertion_outcome)
 
     def __str__(self):
         return f'{self.insertion_outcome};{self.HDR_outcome}'
