@@ -71,13 +71,14 @@ def chunk_number_to_string(chunk_number):
     return f'{chunk_number:06d}'
 
 class FastqChunker:
-    def __init__(self, base_dir, batch, quartet_name, which, reads_per_chunk=None, queue=None):
+    def __init__(self, base_dir, batch, quartet_name, which, reads_per_chunk=None, queue=None, debug=False):
         self.base_dir = Path(base_dir)
         self.batch = batch
         self.quartet_name = quartet_name
         self.which = which
         self.reads_per_chunk = reads_per_chunk
         self.queue = queue
+        self.debug = debug
         
         sample_sheet = load_sample_sheet(self.base_dir, self.batch)
         quartet = sample_sheet['quartets'][quartet_name]
@@ -115,7 +116,8 @@ class FastqChunker:
         
     def split_into_chunks(self):
         line_groups = fastq.get_line_groups(self.input_fn)
-        #line_groups = itertools.islice(line_groups, int(5e6))
+        if self.debug:
+            line_groups = itertools.islice(line_groups, int(5e5))
         
         for read_number, line_group in enumerate(line_groups):
             if read_number % self.reads_per_chunk == 0:
@@ -148,7 +150,7 @@ class Writers:
         for sample, fixed_guide, variable_guide in sorted(self.writers):
             if sample not in pools:
                 pool_name = f'{self.batch}_{sample}'
-                pool = ddr.pooledScreen.PooledScreenNoUMI(self.base_dir, pool_name)
+                pool = ddr.pooled_screen.PooledScreenNoUMI(self.base_dir, pool_name)
                 pools[sample] = pool
 
             pool = pools[sample]
@@ -169,8 +171,8 @@ class Writers:
             del self.writers[sample, fixed_guide, variable_guide]
             del sorted_reads
                 
-def split_into_chunks(base_dir, group, quartet_name, which, reads_per_chunk, queue):
-    chunker = FastqChunker(base_dir, group, quartet_name, which, reads_per_chunk, queue)
+def split_into_chunks(base_dir, group, quartet_name, which, reads_per_chunk, queue, debug):
+    chunker = FastqChunker(base_dir, group, quartet_name, which, reads_per_chunk, queue, debug)
     return chunker.split_into_chunks()
 
 def get_resolvers(base_dir, group):
@@ -358,10 +360,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('base_dir', type=Path, default=Path.home() / 'projects' / 'ddr')
     parser.add_argument('batch')
+    parser.add_argument('--debug', action='store_true')
 
     args = parser.parse_args()
     base_dir = args.base_dir
     batch = args.batch
+    debug = args.debug
     
     pool_details = make_pool_sample_sheets(base_dir, batch)
 
@@ -384,8 +388,6 @@ if __name__ == '__main__':
     chunk_pool = multiprocessing.Pool(processes=4 * len(quartet_names))
     demux_pool = multiprocessing.Pool(processes=4 * len(quartet_names))
 
-    debug = False
-
     with chunk_pool, demux_pool:
         chunk_results = []
         demux_results = []
@@ -394,7 +396,7 @@ if __name__ == '__main__':
         
         for quartet_name in quartet_names:
             for which in fastq.quartet_order:
-                args = (base_dir, batch, quartet_name, which, reads_per_chunk, tasks_done_queue)
+                args = (base_dir, batch, quartet_name, which, reads_per_chunk, tasks_done_queue, debug)
                 chunk_result = chunk_pool.apply_async(split_into_chunks, args)
                 if debug:
                     print(chunk_result.get())
@@ -473,8 +475,9 @@ if __name__ == '__main__':
     merged_fn = Path(base_dir) / 'data' / batch / 'id_stats.txt'
     id_counts = pd.read_csv(merged_fn, sep='\t', header=None, names=['pool', 'fixed_guide', 'variable_guide', 'num_reads'], index_col=[0, 1, 2], squeeze=True)
 
-    for pool_name in sample_sheet:
-        full_pool_name = f'{batch}_{pool_name}'
-        pool = ddr.pooled_screen.PooledScreen(base_dir, full_pool_name)
-        counts = id_counts.loc[pool_name].sort_values(ascending=False)
-        counts.to_csv(pool.fns['read_counts'], sep='\t', header=True)
+    for pool_name in pool_details:
+        if pool_name in id_counts:
+            full_pool_name = f'{batch}_{pool_name}'
+            pool = ddr.pooled_screen.PooledScreen(base_dir, full_pool_name)
+            counts = id_counts.loc[pool_name].sort_values(ascending=False)
+            counts.to_csv(pool.fns['read_counts'], sep='\t', header=True)
