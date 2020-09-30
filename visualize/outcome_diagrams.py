@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import hits.utilities
 import hits.visualize
 from knock_knock.target_info import degenerate_indel_from_string, SNV, SNVs, effectors
-from ddr.pooled_layout import HDROutcome, DeletionOutcome, InsertionOutcome, HDRPlusDeletionOutcome, DeletionPlusMismatchOutcome
+from ddr.outcome import *
 
 def plot(outcome_order,
          target_info,
@@ -192,6 +192,29 @@ def plot(outcome_order,
 
         return xs_to_skip
 
+    def draw_insertion(y, insertion):
+        starts = np.array(insertion.starts_afters) - offset
+        for i, (start, bs) in enumerate(zip(starts, insertion.seqs)):
+            ys = [y - 0.3, y + 0.3]
+            xs = [start + 0.5, start + 0.5]
+
+            ax.plot(xs, ys, color='purple', linewidth=1.5, alpha=0.6)
+            
+            if i == 0:
+                width = 0.9
+                center = start + 0.5
+                left_edge = center - (len(bs) * 0.5 * width)
+                for x_offset, b in enumerate(bs):
+                    ax.annotate(transform_seq(b),
+                                xy=(left_edge + (x_offset * width) + width / 2, y + (wt_height / 2)),
+                                xycoords='data',
+                                ha='center',
+                                va='center',
+                                size=text_size * 1,
+                                color=hits.visualize.igv_colors[transform_seq(b)],
+                                weight='bold',
+                            )
+            
     def draw_wild_type(y, on_top=False, guides_to_draw=None):
         if guides_to_draw is None:
             guides_to_draw = [target_info.primary_sgRNA]
@@ -214,7 +237,7 @@ def plot(outcome_order,
 
         draw_sequence(y, alpha=1)
 
-    def draw_donor(y, HDR_outcome, deletion_outcome, on_top=False):
+    def draw_donor(y, HDR_outcome, deletion_outcome, insertion_outcome, on_top=False):
         SNP_ps = sorted(p for (s, p), b in target_info.fingerprints[target_info.target])
 
         p_to_i = SNP_ps.index
@@ -288,6 +311,9 @@ def plot(outcome_order,
         elif len(all_deletions) > 1:
             raise NotImplementedError
 
+        if insertion_outcome is not None:
+            draw_insertion(y, insertion_outcome.insertion)
+
         if draw_all_sequence:
             draw_sequence(y, xs_to_skip=SNP_xs)
 
@@ -326,29 +352,10 @@ def plot(outcome_order,
         
         elif category == 'insertion':
             insertion = InsertionOutcome.from_string(details).undo_anchor_shift(target_info.anchor).insertion
-            starts = np.array(insertion.starts_afters) - offset
-            draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
-            for i, (start, bs) in enumerate(zip(starts, insertion.seqs)):
-                ys = [y - 0.3, y + 0.3]
-                xs = [start + 0.5, start + 0.5]
 
-                ax.plot(xs, ys, color='purple', linewidth=1.5, alpha=0.6)
-                
-                if i == 0:
-                    width = 0.9
-                    center = start + 0.5
-                    left_edge = center - (len(bs) * 0.5 * width)
-                    for x_offset, b in enumerate(bs):
-                        ax.annotate(transform_seq(b),
-                                    xy=(left_edge + (x_offset * width) + width / 2, y + (wt_height / 2)),
-                                    xycoords='data',
-                                    ha='center',
-                                    va='center',
-                                    size=text_size * 1,
-                                    color=hits.visualize.igv_colors[transform_seq(b)],
-                                    weight='bold',
-                                )
-            
+            draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+            draw_insertion(y, insertion)
+
             if draw_all_sequence:
                 draw_sequence(y)
                 
@@ -412,16 +419,25 @@ def plot(outcome_order,
             if draw_all_sequence:
                 draw_sequence(y, xs_to_skip)
 
-        elif category == 'donor' or category == 'donor + deletion':
+        elif category == 'donor' or category == 'donor + deletion' or category == 'donor + insertion':
             if category == 'donor':
                 HDR_outcome = HDROutcome.from_string(details)
                 deletion_outcome = None
+                insertion_outcome = None
+
             elif category == 'donor + deletion':
-                HDR_plus_deletion_outcome = HDRPlusDeletionOutcome.from_string(details)
+                HDR_plus_deletion_outcome = HDRPlusDeletionOutcome.from_string(details).undo_anchor_shift(target_info.anchor)
                 HDR_outcome = HDR_plus_deletion_outcome.HDR_outcome
                 deletion_outcome = HDR_plus_deletion_outcome.deletion_outcome
+                insertion_outcome = None
+
+            elif category == 'donor + insertion':
+                HDR_plus_insertion_outcome = HDRPlusInsertionOutcome.from_string(details).undo_anchor_shift(target_info.anchor)
+                HDR_outcome = HDR_plus_insertion_outcome.HDR_outcome
+                deletion_outcome = None
+                insertion_outcome = HDR_plus_insertion_outcome.insertion_outcome
     
-            draw_donor(y, HDR_outcome, deletion_outcome, False)
+            draw_donor(y, HDR_outcome, deletion_outcome, insertion_outcome, False)
             
         else:
             label = '{}, {}, {}'.format(category, subcategory, details)
@@ -438,7 +454,7 @@ def plot(outcome_order,
     if draw_donor_on_top and len(target_info.donor_SNVs['target']) > 0:
         donor_SNV_read_bases = ''.join(d['base'] for name, d in sorted(target_info.donor_SNVs['donor'].items()))
         HDR_outcome = HDROutcome(donor_SNV_read_bases, [])
-        draw_donor(num_outcomes + 0.75, HDR_outcome, None, on_top=True)
+        draw_donor(num_outcomes + 0.75, HDR_outcome, None, None, on_top=True)
 
     if draw_wild_type_on_top:
         draw_wild_type(num_outcomes, on_top=True, guides_to_draw=target_info.sgRNAs)
