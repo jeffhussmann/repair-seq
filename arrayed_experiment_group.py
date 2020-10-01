@@ -8,12 +8,13 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 import pysam
+import yaml
 
 import knock_knock.experiment
 import knock_knock.visualize
 import ddr.experiment_group
 
-from ddr.prime_editing_experiment import PrimeEditingExperiment
+import ddr.prime_editing_experiment
 import ddr.endogenous
 import ddr.paired_end_experiment
 
@@ -21,27 +22,41 @@ from hits import utilities, fastq, sam
 
 memoized_property = utilities.memoized_property
 
-class ArrayedExperiments(ddr.experiment_group.ExperimentGroup):
-    def __init__(self, base_dir, batch, group, experiment_type, progress=None):
+class Batch:
+    def __init__(self, base_dir, batch):
+        pass        
+
+class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
+    def __init__(self, base_dir, batch, group, progress=None):
         self.base_dir = Path(base_dir)
         self.batch = batch
         self.group = group
 
-        self.group_args = (base_dir, batch, group, experiment_type)
+        self.group_args = (base_dir, batch, group)
 
         super().__init__()
 
-        self.ExperimentType = arrayed_classes[experiment_type]
-        self.CommonSequencesExperimentType = arrayed_classes[experiment_type, 'common_sequences']
-
         self.progress = progress
 
-        batch_sample_sheet_fn = self.data_dir / 'sample_sheet.csv'
-        self.batch_sample_sheet = pd.read_csv(batch_sample_sheet_fn, index_col='sample_name')
+        self.batch_sample_sheet_fn = self.data_dir / 'sample_sheet.csv'
+        self.batch_group_descriptions_fn = self.data_dir / 'group_descriptions.csv'
+
+        self.batch_sample_sheet = pd.read_csv(self.batch_sample_sheet_fn, index_col='sample_name')
         self.sample_sheet = self.batch_sample_sheet.query('group == @self.group')
 
+        self.batch_group_descriptions = pd.read_csv(self.batch_group_descriptions_fn, index_col='group')
+        self.description = self.batch_group_descriptions.loc[self.group]
+
+        self.experiment_type = self.description['experiment_type']
+
+        self.ExperimentType = arrayed_classes[self.experiment_type]
+        self.CommonSequencesExperimentType = arrayed_classes[self.experiment_type, 'common_sequences']
+
         self.outcome_index_levels = ('category', 'subcategory', 'details')
-        self.outcome_column_levels = ('perturbation', 'replicate')
+        self.outcome_column_levels = ('condition', 'replicate')
+
+    def __repr__(self):
+        return f'ArrayedExperimentGroup: batch={self.batch}, group={self.group}, base_dir={self.base_dir}'
 
     @memoized_property
     def data_dir(self):
@@ -55,41 +70,29 @@ class ArrayedExperiments(ddr.experiment_group.ExperimentGroup):
         for sample_name, row in self.sample_sheet.iterrows():
             yield self.sample_name_to_experiment(sample_name, no_progress=no_progress)
 
-    @memoized_property
-    def description(self):
-        description = {}
-
-        columns = [
-            'target_info',
-            'supplemental_indices',
-        ]
-
-        for column in columns:
-            values = self.sample_sheet[column].unique()
-            if len(values) != 1:
-                raise ValueError(column, values)
-
-            description[column] = values[0]
-
-        description['infer_homology_arms'] = True
-
-        return description
+    @property
+    def first_experiment(self):
+        return next(self.experiments())
 
     @property
     def preprocessed_read_type(self):
-        return next(self.experiments()).preprocessed_read_type
+        return self.first_experiment.preprocessed_read_type
 
     @property
     def categorizer(self):
-        return next(self.experiments()).categorizer
+        return self.first_experiment.categorizer
 
     @property
     def layout_mode(self):
-        return next(self.experiments()).layout_mode
+        return self.first_experiment.layout_mode
 
     @property
     def target_info(self):
-        return next(self.experiments()).target_info
+        return self.first_experiment.target_info
+
+    @property
+    def diagram_kwargs(self):
+        return self.first_experiment.diagram_kwargs
 
     def common_sequence_chunk_exp_from_name(self, chunk_name):
         chunk_exp = self.CommonSequencesExperimentType(self.base_dir, self.batch, self.group, chunk_name,
@@ -104,14 +107,18 @@ class ArrayedExperiments(ddr.experiment_group.ExperimentGroup):
 
     @memoized_property
     def conditions(self):
-        return sorted(self.condition_to_experiment)
+        return sorted(self.sample_sheet['condition'].unique())
 
     @memoized_property
-    def perturbations(self):
-        return sorted(self.sample_sheet['perturbation'].unique())
+    def full_conditions(self):
+        return list(zip(self.sample_sheet['condition'], self.sample_sheet['replicate']))
 
-    def perturbation_replicates(self, perturbation):
-        rows = self.sample_sheet.query('perturbation == @perturbation')
+    @memoized_property
+    def sample_names(self):
+        return sorted(self.sample_sheet.index)
+
+    def condition_replicates(self, condition):
+        rows = self.sample_sheet.query('condition == @condition')
         return [self.sample_name_to_experiment(sample_name) for sample_name in rows.index]
 
     def sample_name_to_experiment(self, sample_name, no_progress=False):
@@ -124,19 +131,19 @@ class ArrayedExperiments(ddr.experiment_group.ExperimentGroup):
         return exp
 
     @memoized_property
-    def condition_to_experiment(self):
-        condition_to_experiment = {}
+    def full_condition_to_experiment(self):
+        full_condition_to_experiment = {}
 
         for exp in self.experiments():
-            condition = exp.description['perturbation'], exp.description['replicate']
-            condition_to_experiment[condition] = exp
+            full_condition = exp.description['condition'], exp.description['replicate']
+            full_condition_to_experiment[full_condition] = exp
 
-        return condition_to_experiment
+        return full_condition_to_experiment
 
     def extract_genomic_insertion_length_distributions(self):
         length_distributions = {}
         
-        for condition, exp in self.progress(self.condition_to_experiment.items()):
+        for condition, exp in self.progress(self.full_condition_to_experiment.items()):
             for organism in ['hg19', 'bosTau7']:
                 key = (*condition, organism)
                 length_distributions[key] = np.zeros(1600)
@@ -168,17 +175,22 @@ class ArrayedExperiments(ddr.experiment_group.ExperimentGroup):
         return df
 
     @memoized_property
-    def total_valid_reads(self):
+    def outcome_counts(self):
         # Ignore nonspecific amplification products in denominator of any outcome fraction calculations.
-        read_counts = self.outcome_counts_df(False)
-        valid_read_counts = read_counts.drop('nonspecific amplification', errors='ignore')
-        total_valid_reads = valid_read_counts.sum()
-        return total_valid_reads
+        return self.outcome_counts_df(False).drop('nonspecific amplification', errors='ignore')
+
+    @memoized_property
+    def total_valid_reads(self):
+        return self.outcome_counts.sum()
+
+    @memoized_property
+    def outcome_fractions(self):
+        return self.outcome_counts / self.total_valid_reads
 
 class ArrayedExperiment:
     def __init__(self, base_dir, batch, group, sample_name, experiment_group=None):
         if experiment_group is None:
-            experiment_group = ArrayedExperiments(base_dir, batch, group, type(self))
+            experiment_group = ArrayedExperimentGroup(base_dir, batch, group, type(self))
 
         self.base_dir = Path(base_dir)
         self.batch = batch
@@ -193,7 +205,8 @@ class ArrayedExperiment:
 
     def load_description(self):
         description = self.experiment_group.sample_sheet.loc[self.sample_name].to_dict()
-        description['infer_homology_arms'] = True
+        for key, value in self.experiment_group.description.items():
+            description[key] = value
         return description
 
     @memoized_property
@@ -359,6 +372,7 @@ arrayed_classes = {}
 
 for name, SpecializeExperiment in [('endogenous', ddr.endogenous.Experiment),
                                    ('paired_end', ddr.paired_end_experiment.PairedEndExperiment),
+                                   ('prime_editing', ddr.prime_editing_experiment.PrimeEditingExperiment),
                                   ]:
 
         class ArrayedSpecializedExperiment(ArrayedExperiment, SpecializeExperiment):

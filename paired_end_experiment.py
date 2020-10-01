@@ -67,15 +67,6 @@ class PairedEndExperiment(knock_knock.illumina_experiment.IlluminaExperiment):
         self.stitch_read_pairs()
         self.sort_stitched_read_pairs()
 
-    def count_outcomes(self):
-        counts = Counter()
-        for outcome in self.outcome_iter():
-            counts[outcome.category, outcome.subcategory, outcome.details] += 1
-
-        counts = pd.Series(counts).sort_values(ascending=False)
-        counts.to_csv(self.fns['outcome_counts'], sep='\t', header=False)
-
-
     def process(self, stage):
         try:
             if stage == 'preprocess':

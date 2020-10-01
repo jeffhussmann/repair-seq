@@ -13,14 +13,16 @@ import knock_knock.outcome_record
 
 from ddr.common_sequences import CommonSequenceSplitter
 
-def run_stage(GroupClass, group_args, sample_id, stage):
+def run_stage(GroupClass, group_args, sample_name, stage):
     group = GroupClass(*group_args)
-    if sample_id in group.common_sequence_chunk_exp_names:
-        exp = group.common_sequence_chunk_exp_from_name(sample_id)
-    elif sample_id in group.conditions:
-        exp = group.condition_to_experiment[sample_id]
+
+    if sample_name in group.sample_names:
+        # Important to do this branch first, since preprocssing happens before common sequence collection.
+        exp = group.sample_name_to_experiment(sample_name)
+    elif sample_name in group.common_sequence_chunk_exp_names:
+        exp = group.common_sequence_chunk_exp_from_name(sample_name)
     else:
-        raise ValueError(sample_id)
+        raise ValueError(sample_name)
 
     exp.process(stage=stage)
 
@@ -39,24 +41,27 @@ class ExperimentGroup:
 
     def process(self, num_processes):
         with multiprocessing.Pool(num_processes) as pool:
-            #args = [(type(self), self.group_args, condition, 'preprocess') for condition in self.conditions]
-            #pool.starmap(run_stage, args)
+            print('preprocessing')
+            args = [(type(self), self.group_args, sample_name, 'preprocess') for sample_name in self.sample_names]
+            pool.starmap(run_stage, args)
 
-            #self.make_common_sequences()
+            self.make_common_sequences()
 
-            #for stage in ['align', 'categorize']:
-            #    args = [(type(self), self.group_args, chunk_exp_name, stage) for chunk_exp_name in self.common_sequence_chunk_exp_names]
-            #    pool.starmap(run_stage, args)
-
-            #self.merge_common_sequence_outcomes()
-
-            for stage in [#'align',
-                          'categorize',
-                         ]:
-                args = [(type(self), self.group_args, condition, stage) for condition in self.conditions]
+            for stage in ['align', 'categorize']:
+                print('common sequences', stage)
+                args = [(type(self), self.group_args, chunk_exp_name, stage) for chunk_exp_name in self.common_sequence_chunk_exp_names]
                 pool.starmap(run_stage, args)
 
-            self.make_outcome_counts()
+            self.merge_common_sequence_outcomes()
+
+            for stage in ['align',
+                          'categorize',
+                         ]:
+                print(stage)
+                args = [(type(self), self.group_args, sample_name, stage) for sample_name in self.sample_names]
+                pool.starmap(run_stage, args)
+
+        self.make_outcome_counts()
 
     def make_common_sequences(self):
         ''' Identify all sequences that occur more than once across preprocessed
@@ -183,8 +188,8 @@ class ExperimentGroup:
         else:
             to_plot = layout.alignments
             
-        #for k, v in self.diagram_kwargs.items():
-        #    diagram_kwargs.setdefault(k, v)
+        for k, v in self.diagram_kwargs.items():
+            diagram_kwargs.setdefault(k, v)
 
         diagram = knock_knock.visualize.ReadDiagram(to_plot, self.target_info, **diagram_kwargs)
 
@@ -194,7 +199,7 @@ class ExperimentGroup:
         all_counts = {}
 
         description = 'Loading outcome counts'
-        items = self.progress(self.condition_to_experiment.items(), desc=description)
+        items = self.progress(self.full_condition_to_experiment.items(), desc=description)
         for condition, exp in items:
             try:
                 all_counts[condition] = exp.outcome_counts
@@ -209,12 +214,12 @@ class ExperimentGroup:
         outcome_order = sorted(all_outcomes)
         outcome_to_index = {outcome: i for i, outcome in enumerate(outcome_order)}
 
-        counts = scipy.sparse.dok_matrix((len(outcome_order), len(self.conditions)), dtype=int)
+        counts = scipy.sparse.dok_matrix((len(outcome_order), len(self.full_conditions)), dtype=int)
 
         description = 'Combining outcome counts'
-        conditions = self.progress(self.conditions, desc=description)
+        full_conditions = self.progress(self.full_conditions, desc=description)
 
-        for c_i, condition in enumerate(conditions):
+        for c_i, condition in enumerate(full_conditions):
             if condition in all_counts:
                 for outcome, count in all_counts[condition].items():
                     o_i = outcome_to_index[outcome]
@@ -223,7 +228,7 @@ class ExperimentGroup:
         scipy.sparse.save_npz(self.fns['outcome_counts'], counts.tocoo())
 
         df = pd.DataFrame(counts.todense(),
-                          columns=self.conditions,
+                          columns=self.full_conditions,
                           index=pd.MultiIndex.from_tuples(outcome_order),
                          )
 
@@ -249,7 +254,7 @@ class ExperimentGroup:
         sparse_counts = scipy.sparse.load_npz(self.fns[key])
         df = pd.DataFrame(sparse_counts.todense(),
                           index=self.total_outcome_counts(collapsed).index,
-                          columns=pd.MultiIndex.from_tuples(self.conditions),
+                          columns=pd.MultiIndex.from_tuples(self.full_conditions),
                          )
 
         df.index.names = self.outcome_index_levels
