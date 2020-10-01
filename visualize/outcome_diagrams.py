@@ -607,6 +607,8 @@ class DiagramGrid:
 
         self.diagram_kwargs = diagram_kwargs
 
+        self.plot_diagrams()
+
     def plot_diagrams(self, **diagram_kwargs):
         self.fig, ax = plot(self.outcomes, self.target_info, ax=self.axs_by_name['diagram'], **self.diagram_kwargs)
 
@@ -615,16 +617,15 @@ class DiagramGrid:
 
         ax_p = ax.get_position()
         self.widths['diagram'] = ax_p.width
-        self.offset = ax_p.width * 0.07
 
         return self.fig
 
-    def add_ax(self, name, width_multiple=0.3, title=''):
+    def add_ax(self, name, width_multiple=10, gap_multiple=1, title=''):
         ax_p = self.ordered_axs[-1].get_position()
 
-        x0 = ax_p.x1 + self.offset
+        x0 = ax_p.x1 + self.width_per_heatmap_cell * gap_multiple
         y0 = ax_p.y0
-        width = self.widths['diagram'] * width_multiple
+        width = self.width_per_heatmap_cell * width_multiple
         height = ax_p.height
 
         ax = self.fig.add_axes((x0, y0, width, height), sharey=self.axs_by_name['diagram'])
@@ -675,33 +676,48 @@ class DiagramGrid:
         ax.set_xticks(np.log10(x_ticks))
         ax.set_xticklabels([f'{100 * x:g}' for x in x_ticks])
 
-        for side in ['left', 'right', 'bottom']:
+        for side in ['left', 'right']:
             ax.spines[side].set_visible(False)
 
-    def add_heatmap(self, vals, gap_multiple=1, color='black'):
+    def style_fold_change_ax(self, name):
+        ax = self.axs_by_name[name]
+
+        for side in ['left', 'right']:
+            ax.spines[side].set_visible(False)
+
+        ax.axvline(0, color='black', alpha=0.5, clip_on=False)
+
+    @property
+    def width_per_heatmap_cell(self):
+        fig_width_inches, fig_height_inches = self.fig.get_size_inches()
+        diagram_position = self.axs_by_name['diagram'].get_position()
+        width_per_cell = diagram_position.height * 1 / len(self.outcomes) * fig_height_inches / fig_width_inches
+        return width_per_cell
+
+    def add_heatmap(self, vals, name, gap_multiple=1, color='black'):
         ax_to_left = self.ordered_axs[-1]
         ax_to_left_p = ax_to_left.get_position()
-
-        fig_width_inches, fig_height_inches = self.fig.get_size_inches()
 
         num_rows, num_cols = vals.shape
 
         heatmap_height = ax_to_left_p.height
-        heatmap_width = heatmap_height * num_cols / num_rows * fig_height_inches / fig_width_inches
+        #heatmap_width = heatmap_height * num_cols / num_rows * fig_height_inches / fig_width_inches
+        heatmap_width = self.width_per_heatmap_cell * num_cols
 
-        gap = heatmap_width * gap_multiple / num_cols
+        gap = self.width_per_heatmap_cell * gap_multiple
         heatmap_left = ax_to_left_p.x1 + gap
 
         rect = [heatmap_left, ax_to_left_p.y0, heatmap_width, heatmap_height]
-        heatmap_ax = self.fig.add_axes(rect, sharey=ax_to_left)
+        ax = self.fig.add_axes(rect, sharey=ax_to_left)
 
-        im = heatmap_ax.imshow(vals, cmap=plt.get_cmap('RdBu_r'), vmin=-2, vmax=2)
-        plt.setp(heatmap_ax.spines.values(), visible=False)
+        im = ax.imshow(vals, cmap=plt.get_cmap('RdBu_r'), vmin=-2, vmax=2)
+        plt.setp(ax.spines.values(), visible=False)
 
-        heatmap_ax.xaxis.tick_top()
-        heatmap_ax.set_xticks(np.arange(num_cols))
-        heatmap_ax.set_xticklabels(vals.columns, rotation=90, color=color)
+        ax.xaxis.tick_top()
+        ax.set_xticks(np.arange(num_cols))
+        ax.set_xticklabels(vals.columns, rotation=90, color=color)
 
-        self.ordered_axs.append(heatmap_ax)
+        self.axs_by_name[name] = ax
+        self.ordered_axs.append(ax)
 
-        return heatmap_ax
+        return ax
