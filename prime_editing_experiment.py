@@ -23,12 +23,9 @@ class PrimeEditingExperiment(experiment.Experiment):
             'trimmed',
         ]
 
-        self.default_read_type = 'trimmed'
-
         self.layout_mode = 'amplicon'
         self.max_qual = 41
 
-        self.fns['fastq'] = self.data_dir / self.description['fastq_fn']
         self.fns['templated_insertion_details'] = self.results_dir / 'templated_insertion_details.hdf5'
 
         self.outcome_fn_keys = ['outcome_list']
@@ -62,6 +59,24 @@ class PrimeEditingExperiment(experiment.Experiment):
                                    label_offsets=label_offsets,
                                   )
 
+        self.read_types = [
+            'trimmed',
+            'trimmed_by_name',
+            'nonredundant',
+        ]
+
+    @property
+    def default_read_type(self):
+        return 'trimmed_by_name'
+
+    @property
+    def preprocessed_read_type(self):
+        return 'trimmed_by_name'
+
+    @property
+    def read_types_to_align(self):
+        return ['trimmed_by_name']
+
     @memoized_property
     def categorizer(self):
         return prime_editing_layout.Layout
@@ -69,10 +84,19 @@ class PrimeEditingExperiment(experiment.Experiment):
     @memoized_property
     def max_relevant_length(self):
         outcomes = self.outcome_iter()
-        return max(outcome.length for outcome in outcomes)
+        return max(outcome.inferred_amplicon_length for outcome in outcomes)
+    
+    def make_nonredundant_sequence_fastq(self):
+        pass
                
     def trim_reads(self):
         # Trim a random length barcode from the beginning by searching for the expected starting sequence.
+
+        fastq_fn = self.data_dir / self.description['fastq_fn']
+
+        # Standardizing names is important for sorting.
+        reads = fastq.reads(fastq_fn, up_to_space=True, standardize_names=True)
+
         ti = self.target_info
 
         if ti.sequencing_direction == '+':
@@ -86,8 +110,6 @@ class PrimeEditingExperiment(experiment.Experiment):
 
         trimmed_fn = self.fns_by_read_type['fastq']['trimmed']
         with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
-            reads = fastq.reads(self.fns['fastq'])
-            #reads = itertools.islice(reads, 1000)
             for read in self.progress(reads, desc='Trimming reads'):
                 try:
                     start = read.seq.index(prefix, 0, 20)
@@ -97,18 +119,39 @@ class PrimeEditingExperiment(experiment.Experiment):
                 end = adapters.trim_by_local_alignment(adapters.truseq_R2_rc, read.seq)
                 trimmed_fh.write(str(read[start:end]))
 
+    def sort_trimmed_reads(self):
+        reads = sorted(self.reads_by_type('trimmed'), key=lambda read: read.name)
+        fn = self.fns_by_read_type['fastq']['trimmed_by_name']
+        with gzip.open(fn, 'wt', compresslevel=1) as sorted_fh:
+            for read in reads:
+                sorted_fh.write(str(read))
+
+    def preprocess(self):
+        self.trim_reads()
+        self.sort_trimmed_reads()
+
     def process(self, stage):
         try:
             if stage == 'preprocess':
-                self.trim_reads()
+                self.preprocess()
             elif stage == 'align':
-                self.generate_alignments(read_type='trimmed')
-                self.generate_supplemental_alignments_with_STAR(read_type='trimmed', min_length=20)
-                self.combine_alignments(read_type='trimmed')
+                self.make_nonredundant_sequence_fastq()
+
+                for read_type in self.read_types_to_align:
+                    self.generate_alignments(read_type)
+                    self.generate_supplemental_alignments_with_STAR(read_type, min_length=20)
+                    self.combine_alignments(read_type)
+
             elif stage == 'categorize':
-                self.categorize_outcomes(read_type='trimmed')
+                self.categorize_outcomes()
+
+                self.count_outcomes()
                 self.count_read_lengths()
+
                 self.extract_templated_insertion_info()
+
+                self.record_sanitized_category_names()
+
             elif stage == 'visualize':
                 lengths_fig = self.length_distribution_figure()
                 lengths_fig.savefig(self.fns['lengths_figure'], bbox_inches='tight')
@@ -116,85 +159,8 @@ class PrimeEditingExperiment(experiment.Experiment):
                 svg.decorate_outcome_browser(self)
                 self.generate_all_outcome_example_figures(num_examples=5)
         except:
-            print(self.group, self.name)
+            print(self.group, self.sample_name)
             raise
-
-    def categorize_outcomes(self, fn_key='bam_by_name', read_type=None):
-        if self.fns['outcomes_dir'].is_dir():
-            shutil.rmtree(str(self.fns['outcomes_dir']))
-            
-        self.fns['outcomes_dir'].mkdir()
-
-        outcomes = defaultdict(list)
-
-        with self.fns['outcome_list'].open('w') as fh:
-            alignment_groups = self.alignment_groups(fn_key, read_type=read_type)
-            #alignment_groups = itertools.islice(alignment_groups, 1000)
-
-            if read_type is None:
-                description = 'Categorizing reads'
-            else:
-                description = f'Categorizing {read_type} reads'
-
-            for name, als in self.progress(alignment_groups, desc=description):
-                try:
-                    layout = self.categorizer(als, self.target_info, mode=self.layout_mode)
-                    category, subcategory, details, outcome = layout.categorize()
-                    if outcome is not None:
-                        details = str(outcome.perform_anchor_shift(self.target_info.anchor))
-                except:
-                    print(self.name, name)
-                    raise
-                
-                outcomes[category, subcategory].append(name)
-
-                if layout.seq is None:
-                    length = 0
-                else:
-                    length = layout.inferred_amplicon_length
-
-                outcome = self.final_Outcome(name, length, category, subcategory, details)
-                fh.write(f'{outcome}\n')
-
-        counts = {description: len(names) for description, names in outcomes.items()}
-        pd.Series(counts).to_csv(self.fns['outcome_counts'], sep='\t', header=False)
-
-        # To make plotting easier, for each outcome, make a file listing all of
-        # qnames for the outcome and a bam file (sorted by name) with all of the
-        # alignments for these qnames.
-
-        qname_to_outcome = {}
-        bam_fhs = {}
-
-        full_bam_fn = self.fns_by_read_type[fn_key][read_type]
-
-        with pysam.AlignmentFile(full_bam_fn) as full_bam_fh:
-        
-            for outcome, qnames in outcomes.items():
-                outcome_fns = self.outcome_fns(outcome)
-
-                # This shouldn't be necessary due to rmtree of parent directory above
-                # but empirically sometimes is.
-                if outcome_fns['dir'].is_dir():
-                    shutil.rmtree(str(outcome_fns['dir']))
-
-                outcome_fns['dir'].mkdir()
-
-                bam_fn = outcome_fns['bam_by_name'][read_type]
-                bam_fhs[outcome] = pysam.AlignmentFile(bam_fn, 'wb', template=full_bam_fh)
-                
-                with outcome_fns['query_names'].open('w') as fh:
-                    for qname in qnames:
-                        qname_to_outcome[qname] = outcome
-                        fh.write(qname + '\n')
-            
-            for al in full_bam_fh:
-                if al.query_name in qname_to_outcome:
-                    outcome = qname_to_outcome[al.query_name]
-                    bam_fhs[outcome].write(al)
-
-        for outcome, fh in bam_fhs.items():
-            fh.close()
 
     @memoized_property
     def qname_to_inferred_length(self):
