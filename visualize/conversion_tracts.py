@@ -237,7 +237,17 @@ def draw_ssODN_configurations(pools=None, tis=None):
             
     return fig, ax
 
-def conversion_tracts(pool, genes=None, guides=None, fc_ylims=None, outcomes=None):
+def conversion_tracts(pool,
+                      heatmap_genes=None,
+                      plot_genes=None,
+                      guides=None,
+                      fc_ylims=None,
+                      frequency_threshold=0.002,
+                      gene_to_sort_by='MLH1',
+                     ):
+    fracs = pool.non_targeting_fractions('perfect', 'none')
+    outcomes = [(c, s, d) for (c, s, d), f in fracs.items() if c == 'donor' and f > frequency_threshold]
+
     fig, configuration_ax = draw_ssODN_configurations([pool])
 
     xs = pool.SNV_name_to_position - pool.target_info.cut_after - 0.5
@@ -279,12 +289,14 @@ def conversion_tracts(pool, genes=None, guides=None, fc_ylims=None, outcomes=Non
 
     gene_to_color = {}
 
-    if genes is not None:
-        for gene_i, gene in enumerate(genes):
+    gene_guides_by_activity = pool.gene_guides_by_activity()
+
+    if heatmap_genes is not None:
+        for gene_i, gene in enumerate(heatmap_genes):
             gene_to_color[gene] = ddr.visualize.good_colors[gene_i]
 
             guide_sets.append((gene,
-                               pool.variable_guide_library.gene_guides(gene),
+                               gene_guides_by_activity[gene][:1],
                                None,
                                dict(color=gene_to_color[gene], alpha=0.8, linewidth=1.5),
                               )
@@ -351,36 +363,48 @@ def conversion_tracts(pool, genes=None, guides=None, fc_ylims=None, outcomes=Non
 
     diagram_ax = fig.add_axes(diagram_rect, sharex=frequency_ax)
 
-    sorted_outcomes = pool.sort_outcomes_by_gene_phenotype(outcomes, 'MLH1')[::-1]
+    sorted_outcomes = pool.sort_outcomes_by_gene_phenotype(outcomes, gene_to_sort_by)[::-1]
 
-    diagram_kwargs = dict(window=(x_min, x_max), preserve_x_lims=True, shift_x=-0.5)
+    diagram_kwargs = dict(window=(x_min, x_max), preserve_x_lims=True, shift_x=-0.5, flip_if_reverse=False)
     # Note: plot does a weird flip of outcomes
     diagram_grid = ddr.visualize.outcome_diagrams.DiagramGrid(sorted_outcomes[::-1], pool.target_info, diagram_ax=diagram_ax, **diagram_kwargs)
 
-    diagram_grid.plot_diagrams()
-
-    diagram_grid.add_ax('log10 frequency')
+    diagram_grid.add_ax('log10 frequency', width_multiple=8, gap_multiple=1.5, title='percentage of outcomes\nin non-targeting')
 
     log10_frequencies = np.log10(pool.non_targeting_fractions('perfect', 'none').loc[sorted_outcomes])
-    diagram_grid.plot_on_ax('log10 frequency', log10_frequencies, marker='o')
+    diagram_grid.plot_on_ax('log10 frequency', log10_frequencies, marker='o', markersize=3, color='black')
+
+    diagram_grid.axs_by_name['log10 frequency'].set_xlim(np.log10(0.002), np.log10(0.15))
     diagram_grid.style_log10_frequency_ax('log10 frequency')
 
-    diagram_grid.add_ax('log2 fold change')
+    diagram_grid.add_ax('log2 fold change', width_multiple=8, gap_multiple=1.5, title='log2 fold change\nfrom non-targeting')
 
     fcs = pool.log2_fold_changes('perfect', 'none')['none'].loc[sorted_outcomes]
 
-    for gene in genes:
-        diagram_grid.plot_on_ax('log2 fold change', fcs[f'{gene}_1'], marker='o', markersize=2, color=gene_to_color[gene])
+    for gene in plot_genes:
+        if gene == 'DNA2':
+            # override since growth phenotype leads to low UMI counts for strong guides
+            guide = 'DNA2_1'
+        else:
+            guide = gene_guides_by_activity[gene][0]
+        diagram_grid.plot_on_ax('log2 fold change', fcs[guide], marker='o', markersize=3, linewidth=1.5, color=gene_to_color[gene], clip_on=False)
 
-    for gene_i, gene in enumerate(genes):
-        guides = pool.variable_guide_library.gene_guides(gene)
+    diagram_grid.style_fold_change_ax('log2 fold change')
+    diagram_grid.axs_by_name['log2 fold change'].set_xlim(-4, 2)
+
+    for gene_i, gene in enumerate(heatmap_genes):
+        if gene == 'DNA2':
+            # override since growth phenotype leads to low UMI counts for strong guides
+            guides = ['DNA2_1', 'DNA2_3']
+        else:
+            guides = gene_guides_by_activity[gene][:2]
         vals = fcs[guides]
 
         if gene_i == 0:
             gap_multiple = 1
         else:
-            gap_multiple = 0.5
+            gap_multiple = 0.25
 
-        diagram_grid.add_heatmap(vals, gap_multiple, color=gene_to_color[gene])
+        diagram_grid.add_heatmap(vals, f'heatmap {gene}', gap_multiple=gap_multiple, color=gene_to_color[gene])
 
     return fig
