@@ -130,7 +130,7 @@ class Layout(layout.Categorizer):
         self.target_info = target_info
         
         alignment = alignments[0]
-        self.name = alignment.query_name
+        self.query_name = alignment.query_name
         self.seq = sam.get_original_seq(alignment)
         if self.seq is not None:
             self.seq_bytes = self.seq.encode()
@@ -421,10 +421,10 @@ class Layout(layout.Categorizer):
 
             covered = interval.get_covered(al)
 
-            if covered.start <= 5 or self.overlaps_left_primer(al):
+            if covered.start <= 5 or self.overlaps_primer(al, 'left'):
                 edge_alignments['left'].append(al)
             
-            if covered.end >= len(self.seq) - 1 - 5 or self.overlaps_right_primer(al):
+            if covered.end >= len(self.seq) - 1 - 5 or self.overlaps_primer(al, 'right'):
                 edge_alignments['right'].append(al)
 
         for edge in ['left', 'right']:
@@ -434,22 +434,6 @@ class Layout(layout.Categorizer):
                 edge_alignments[edge] = max(edge_alignments[edge], key=lambda al: al.query_alignment_length)
 
         return edge_alignments
-
-    def overlaps_right_primer(self, al):
-        primer = self.target_info.primers_by_side_of_read['right']
-        num_overlapping_bases = al.get_overlap(primer.start, primer.end + 1)
-        overlaps = num_overlapping_bases > 0
-        correct_strand = sam.get_strand(al) == self.target_info.sequencing_direction 
-
-        return correct_strand and overlaps
-
-    def overlaps_left_primer(self, al):
-        primer = self.target_info.primers_by_side_of_read['left']
-        num_overlapping_bases = al.get_overlap(primer.start, primer.end + 1)
-        overlaps = num_overlapping_bases > 0
-        correct_strand = sam.get_strand(al) == self.target_info.sequencing_direction 
-
-        return correct_strand and overlaps
 
     def overlaps_primer(self, al, side):
         primer = self.target_info.primers_by_side_of_read[side]
@@ -513,8 +497,8 @@ class Layout(layout.Categorizer):
             return False
         else:
             not_too_much = {
-                'start': missing_from['start'] <= 5 or self.overlaps_left_primer(self.single_target_alignment),
-                'end': (missing_from['end'] <= 5) or self.overlaps_right_primer(self.single_target_alignment),
+                'start': missing_from['start'] <= 5 or self.overlaps_primer(self.single_target_alignment, 'left'),
+                'end': (missing_from['end'] <= 5) or self.overlaps_primer(self.single_target_alignment, 'right'),
                 'middle': missing_from['middle'] <= 5,
             }
 
@@ -534,7 +518,7 @@ class Layout(layout.Categorizer):
     @memoized_property
     def starts_at_expected_location(self):
         edge_al = self.target_edge_alignments['left']
-        return edge_al is not None and self.overlaps_left_primer(edge_al)
+        return edge_al is not None and self.overlaps_primer(edge_al, 'left')
 
     @memoized_property
     def Q30_fractions(self):
@@ -709,17 +693,25 @@ class Layout(layout.Categorizer):
             if edits / scaffold_overlap > 0.2:
                 scaffold_overlap = 0
 
+            # Insist on overlapping HA_RT to prevent false positive from protospacer alignment.            
+            if not sam.overlaps_feature(al, self.HA_RT, require_same_strand=False):
+                scaffold_overlap = 0
+
         return scaffold_overlap
 
     @memoized_property
     def max_scaffold_overlap(self):
         return max([self.alignment_scaffold_overlap(al) for al in self.donor_alignments], default=0)
 
-    def deletion_overlaps_HA_RT(self, deletion):
+    @memoized_property
+    def HA_RT(self):
         ti = self.target_info
         HA_RT_name = [feature_name for seq_name, feature_name in ti.features if seq_name == ti.donor and feature_name.startswith('HA_RT')][0]
         HA_RT = ti.homology_arms[HA_RT_name]['target']
-        HA_RT_interval = interval.Interval.from_feature(HA_RT)
+        return HA_RT
+
+    def deletion_overlaps_HA_RT(self, deletion):
+        HA_RT_interval = interval.Interval.from_feature(self.HA_RT)
 
         deletion_interval = interval.Interval(min(deletion.starts_ats), max(deletion.ends_ats))
 
@@ -856,7 +848,7 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def read(self):
-        return fastq.Read(self.name, self.seq, fastq.encode_sanger(self.qual))
+        return fastq.Read(self.query_name, self.seq, fastq.encode_sanger(self.qual))
 
     @memoized_property
     def sw_alignments(self):
@@ -921,7 +913,7 @@ class Layout(layout.Categorizer):
 
     def seed_and_extend(self, on, query_start, query_end):
         extender = self.target_info.seed_and_extender[on]
-        return extender(self.seq_bytes, query_start, query_end, self.name)
+        return extender(self.seq_bytes, query_start, query_end, self.query_name)
     
     @memoized_property
     def valid_intervals_for_edge_alignments(self):
@@ -1840,6 +1832,12 @@ class Layout(layout.Categorizer):
             self.outcome = None
             self.trust_inferred_length = False
 
+        elif len(self.seq) <= self.target_info.combined_primer_length + 10:
+            self.category = 'nonspecific amplification'
+            self.subcategory = 'unknown'
+            self.details = 'n/a'
+            self.relevant_alignments = self.uncategorized_relevant_alignments
+
         elif self.single_alignment_covers_read:
             interesting_indels, uninteresting_indels = self.interesting_and_uninteresting_indels([self.single_target_alignment])
 
@@ -1901,16 +1899,15 @@ class Layout(layout.Categorizer):
                     if self.has_donor_SNV:
                         if indel.kind == 'D':
                             # If the deletion overlaps with HA_RT on the target, consider this an unintended donor integration.                            
-                            if self.deletion_overlaps_HA_RT(indel) and self.donor_insertion is not None:
-                                self.register_donor_insertion()
-                            else:
-                                self.category = 'edit + indel'
-                                self.subcategory = 'edit + deletion'
-                                HDR_outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
-                                deletion_outcome = DeletionOutcome(indel)
-                                self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
-                                self.details = str(self.outcome)
-                                self.relevant_alignments = self.parsimonious_target_alignments + self.donor_alignments
+                            #if self.deletion_overlaps_HA_RT(indel) and self.donor_insertion is not None:
+                            #    self.register_donor_insertion()
+                            self.category = 'edit + indel'
+                            self.subcategory = 'edit + deletion'
+                            HDR_outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
+                            deletion_outcome = DeletionOutcome(indel)
+                            self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
+                            self.details = str(self.outcome)
+                            self.relevant_alignments = self.parsimonious_target_alignments + self.donor_alignments
                         elif indel.kind == 'I' and indel.length == 1:
                             self.category = 'edit + indel'
                             self.subcategory = 'edit + insertion'
@@ -1940,13 +1937,13 @@ class Layout(layout.Categorizer):
                             else:
                                 self.category = 'deletion'
                                 self.outcome = DeletionOutcome(indel)
-                                self.details = self.indels_string
+                                self.details = str(self.outcome)
                                 self.relevant_alignments = [self.single_target_alignment]
 
                         elif indel.kind == 'I':
                             self.category = 'insertion'
                             self.outcome = InsertionOutcome(indel)
-                            self.details = self.indels_string
+                            self.details = str(self.outcome)
                             self.relevant_alignments = [self.single_target_alignment]
 
             else: # more than one indel
@@ -2059,6 +2056,11 @@ class Layout(layout.Categorizer):
             self.relevant_alignments = self.uncategorized_relevant_alignments
 
         self.relevant_alignments = sam.make_nonredundant(self.relevant_alignments)
+
+        if self.outcome is not None:
+            # Translate positions to be relative to a registered anchor
+            # on the target sequence.
+            self.details = str(self.outcome.perform_anchor_shift(self.target_info.anchor))
 
         return self.category, self.subcategory, self.details, self.outcome
 
@@ -2195,12 +2197,13 @@ class Layout(layout.Categorizer):
             (duplication, iterated) - multiple uses of the same junction
             (duplication, complex)  - multiple junctions that are not exactly the same
         '''
+        ti = self.target_info
         # Order target als by position on the query from left to right.
-        target_als = sorted(self.target_gap_covering_alignments, key=interval.get_covered)
+        target_als = sorted([al for al in self.target_gap_covering_alignments if al.reference_name == ti.target], key=interval.get_covered)
 
-        correct_strand_als = [al for al in target_als if sam.get_strand(al) == self.target_info.sequencing_direction]
+        correct_strand_als = [al for al in target_als if sam.get_strand(al) == ti.sequencing_direction]
 
-        merged_als = sam.merge_any_adjacent_pairs(correct_strand_als, self.target_info.reference_sequences)
+        merged_als = sam.merge_any_adjacent_pairs(correct_strand_als, ti.reference_sequences)
 
         covereds = []
         for al in merged_als:
@@ -2221,7 +2224,7 @@ class Layout(layout.Categorizer):
         
         ref_junctions = []
 
-        if self.target_info.sequencing_direction == '+':
+        if ti.sequencing_direction == '+':
             get_left_end = lambda al: al.reference_end - 1 
             get_right_end = lambda al: al.reference_start
         else:
@@ -2235,7 +2238,7 @@ class Layout(layout.Categorizer):
         indels = [indel for indel, _ in self.extract_indels_from_alignments(merged_als)]
 
         for junction_i, (left_al, right_al) in enumerate(zip(merged_als, merged_als[1:])):
-            switch_results = sam.find_best_query_switch_after(left_al, right_al, self.target_info.target_sequence, self.target_info.target_sequence, max)
+            switch_results = sam.find_best_query_switch_after(left_al, right_al, ti.target_sequence, ti.target_sequence, max)
 
             left_switch_after = max(switch_results['best_switch_points'])
             right_switch_after = min(switch_results['best_switch_points'])
@@ -2285,7 +2288,7 @@ class Layout(layout.Categorizer):
     @memoized_property
     def inferred_amplicon_length(self):
         if self.seq is None:
-            return None
+            return -1
 
         right_al = self.get_target_edge_alignments(self.target_gap_covering_alignments)['right']
 

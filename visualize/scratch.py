@@ -409,6 +409,8 @@ def make_color_column(guide_to_gene, genes, full_gene_list=None, default_color='
 
     guide_to_color = pd.Series(default_color, index=guide_to_gene.index)
 
+    gene_to_color = {}
+
     for i, gene in enumerate(full_gene_list):
         if gene in genes:
             if i + 1 < 10:
@@ -416,13 +418,15 @@ def make_color_column(guide_to_gene, genes, full_gene_list=None, default_color='
             else:
                 color = bokeh.palettes.Category20b[20][::4][(i + 1) % 10]
 
+            gene_to_color[gene] = color
+
             guide_to_color[guide_to_gene == gene] = color
 
     guide_to_color[guide_to_gene == 'negative_control'] = 'C0'
         
     guide_to_color = guide_to_color.apply(matplotlib.colors.to_hex)
         
-    return guide_to_color
+    return guide_to_color, gene_to_color
 
 def scatter_and_pc(pool,
                    results,
@@ -444,7 +448,7 @@ def scatter_and_pc(pool,
     guides_to_label = guide_to_gene[guide_to_gene.isin(genes_to_label) & best_promoter].index
     #guides_to_label = guide_to_gene[guide_to_gene.isin(genes_to_label)].index
 
-    guide_to_color = make_color_column(guide_to_gene, genes_to_label, full_gene_list=full_gene_list)
+    guide_to_color, gene_to_color = make_color_column(guide_to_gene, genes_to_label, full_gene_list=full_gene_list)
 
     fig, pc_ax = plt.subplots(figsize=(0.75 * len(data.columns), 6))
     
@@ -456,6 +460,13 @@ def scatter_and_pc(pool,
                          text_labels=['right'],
                          pn_to_name=pn_to_name,
                         )
+
+    #parallel_coordinates_genes(results['genes_df'], pc_ax,
+    #                     gene_to_color,
+    #                     lims=lims,
+    #                     text_labels=['right'],
+    #                     pn_to_name=pn_to_name,
+    #                    )
 
     pc_ax_p = pc_ax.get_position()
     fig_width, fig_height = fig.get_size_inches()
@@ -571,7 +582,7 @@ def scatter(data, ax, x_column, y_column,
                                       avoid=avoid_overlapping_labels,
                                       avoid_existing=avoid_overlapping_labels,
                                      )
-        
+
 def parallel_coordinates(data, ax,
                          guides_to_label,
                          guide_to_gene,
@@ -611,7 +622,6 @@ def parallel_coordinates(data, ax,
     for guide, row in data.iterrows():
         kwargs = guide_to_kwargs.get(guide)
         if kwargs is None:
-            kwargs = dict(color='black', alpha=0.04)
             continue
         
         ax.plot(row.values, **kwargs)
@@ -635,6 +645,83 @@ def parallel_coordinates(data, ax,
              )
         
     ax.set_ylabel('log2 fold-change from all non-targeting', size=12)
+
+    ax.set_xticks(np.arange(len(data.columns)))
+    labels = []
+    for n in data.columns:
+        pn, outcome = n.rsplit('_', 1)
+        label = f'{pn_to_name[pn]} {outcome}'
+        labels.append(label)
+    ax.set_xticklabels(labels, rotation=45, ha='left')
+    ax.tick_params(labelbottom=False, labeltop=True)
+
+    ax.set_ylim(*lims)
+
+    all_axs = [ax]
+    for x in range(1, len(data.columns)):
+        other_ax = ax.twinx()
+
+        other_ax.spines['left'].set_position(('data', x))
+        other_ax.yaxis.tick_left()
+        other_ax.set_ylim(ax.get_ylim())
+        other_ax.set_yticklabels([])
+        
+        all_axs.append(other_ax)
+
+    for ax in all_axs:
+        for side in ['right', 'top', 'bottom']:
+            ax.spines[side].set_visible(False)
+        ax.tick_params(axis='x', length=0)
+        
+def parallel_coordinates_genes(data, ax,
+                         gene_to_color,
+                         lims=(-4, 2),
+                         text_labels=None,
+                         pn_to_name=None,
+                        ):
+    gene_to_kwargs = {}
+
+    if pn_to_name is None:
+        pn_to_name = {n.rsplit('_', 1)[0]: n.rsplit('_', 1)[0] for n in data.columns}
+
+    if text_labels is None:
+        text_labels = []
+
+    for gene, color in gene_to_color.items():
+        gene_to_kwargs[gene] = dict(color=color,
+                                    marker='.',
+                                    markersize=8,
+                                    alpha=0.8,
+                                    linewidth=2.5,
+                                    label=gene,
+                                    clip_on=False,
+                                   )
+
+    for gene, row in data.iterrows():
+        kwargs = gene_to_kwargs.get(gene)
+        if kwargs is None:
+            continue
+        
+        ax.plot(row.values, **kwargs)
+
+        if 'right' in text_labels:
+            ax.annotate(gene,
+                        xy=(1, row.values[-1]),
+                        xycoords=('axes fraction', 'data'),
+                        xytext=(5, 0),
+                        textcoords='offset points',
+                        color=kwargs['color'],
+                        ha='left',
+                        va='center',
+                        size=6,
+            )
+
+        
+    ax.legend(bbox_to_anchor=(-0.35, 1),
+              loc='upper right',
+             )
+        
+    ax.set_ylabel('log2 fold-change from non-targeting\n(average of top 2 guides)', size=12)
 
     ax.set_xticks(np.arange(len(data.columns)))
     labels = []

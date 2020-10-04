@@ -146,7 +146,9 @@ def compute_table(base_dir, pool_names, outcome_groups,
     all_columns = {}
     nt_fractions = {}
 
-    column_names = ['log2_fold_change', 'frequency', 'ys', 'total_UMIs', 'gene_p_up', 'gene_p_down']
+    all_gene_columns = {}
+
+    guide_column_names = ['log2_fold_change', 'frequency', 'ys', 'total_UMIs', 'gene_p_up', 'gene_p_down']
     outcome_names = []
 
     guide_to_gene = {}
@@ -178,7 +180,11 @@ def compute_table(base_dir, pool_names, outcome_groups,
             
             outcome_names.append(outcome_name)
 
-            df, nt_fraction, p_df = get_outcome_statistics(pool, outcomes)
+            full_name = f'{name_to_use}_{outcome_name}'
+
+            df, nt_fraction, genes_df = get_outcome_statistics(pool, outcomes)
+
+            all_gene_columns[full_name] = genes_df['log2 fold change', 'relevant']
 
             guide_to_gene.update(df['gene'].items())
 
@@ -186,13 +192,14 @@ def compute_table(base_dir, pool_names, outcome_groups,
             df['xs'] = [[x, x] for x in df['x']]
             df['ys'] = [[row['interval_bottom'], row['interval_top']] for _, row in df.iterrows()]
 
-            for col_name in column_names:
-                #all_columns[f'{pool_name}_{outcome_name}_{col_name}'] = df[col_name]
-                all_columns[f'{name_to_use}_{outcome_name}', col_name] = df[col_name]
+            for col_name in guide_column_names:
+                all_columns[full_name, col_name] = df[col_name]
                 
-            nt_fractions[f'{name_to_use}_{outcome_name}'] = nt_fraction
+            nt_fractions[full_name] = nt_fraction
             
     full_df = pd.DataFrame(all_columns)
+
+    genes_df = pd.DataFrame(all_gene_columns)
 
     if initial_dataset is None:
         initial_dataset = pool_names[0]
@@ -222,6 +229,7 @@ def compute_table(base_dir, pool_names, outcome_groups,
         'nt_fractions': nt_fractions,
         'initial_dataset': initial_dataset,
         'initial_outcome': initial_outcome,
+        'genes_df': genes_df,
     }
 
     if pickle_fn is not None:
@@ -815,6 +823,7 @@ def genetics_of_stat(stat_series,
                      title=None,
                      y_label=None,
                      y_lims=None,
+                     figsize=(27, 6),
                     ):
     stat_series = pd.Series(stat_series)
     stat_series.name = 'stat'
@@ -829,23 +838,23 @@ def genetics_of_stat(stat_series,
 
     gene_to_color['negative_control'] = 'grey'
 
-    fig, ax = plt.subplots(figsize=(27, 6))
+    fig, ax = plt.subplots(figsize=figsize)
 
     global_max_y = 0
 
     low_genes = set()
 
     for gene in df.sort_values('stat')['gene']:
-        low_genes.add(gene)
-        if len(low_genes) > genes_to_label:
+        if len(low_genes) >= genes_to_label:
             break
+        low_genes.add(gene)
             
     high_genes = set()
             
     for gene in df.sort_values('stat', ascending=False)['gene']:
-        high_genes.add(gene)
-        if len(high_genes) > genes_to_label:
+        if len(high_genes) >= genes_to_label:
             break
+        high_genes.add(gene)
 
     genes_to_label = high_genes | low_genes
 
@@ -877,7 +886,7 @@ def genetics_of_stat(stat_series,
     colors = df['gene'].map(gene_to_color)
 
     point_colors = matplotlib.colors.to_rgba_array(colors)
-    point_alphas = [0.95 if guide in guides_to_label else 0.5 for guide in df.index]
+    point_alphas = [0.95 if guide in guides_to_label else (0.5 if len(genes_to_label) > 0 else 0.95) for guide in df.index]
     point_colors[:, 3] = point_alphas
     
     #line_colors = matplotlib.colors.to_rgba_array(colors)
@@ -968,7 +977,7 @@ def genetics_of_stat(stat_series,
 
     ax.set_ylabel(y_label, size=12)
 
-    #ax.set_xlabel('guides (alphabetical order)', labelpad=20, size=12)
+    ax.set_xlabel('guides (alphabetical order)', labelpad=20, size=12)
 
     if y_lims is not None:
         ax.set_ylim(*y_lims)
