@@ -114,10 +114,10 @@ def build_all_singles(base_dir, original_target_name, original_genbank_name, gui
     original_target.make_references()
     original_target.identify_degenerate_indels()
 
-    args_list = []
-
     manager = multiprocessing.Manager()
     tasks_done_queue = manager.Queue()
+
+    args_list = []
 
     for guide_library_name in guide_library_names:
         guide_library = GuideLibrary(base_dir, guide_library_name)
@@ -126,16 +126,16 @@ def build_all_singles(base_dir, original_target_name, original_genbank_name, gui
 
     progress = tqdm.tqdm(desc='Making targets', total=len(args_list))
 
-    #args_list = args_list[:10]
-    #for args in args_list:
-    #    build_guide_specific_target(*args)
-
     with multiprocessing.Pool(processes=18) as pool:
         pool.starmap_async(build_guide_specific_target, args_list)
 
         while progress.n != len(args_list):
             tasks_done_queue.get()
             progress.update()
+
+    #args_list = args_list[:10]
+    #for args in args_list:
+    #    build_guide_specific_target(*args)
 
 def build_all_doubles(base_dir):
     warnings.simplefilter('ignore')
@@ -177,16 +177,21 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    #if args.vector == 'singles':
-    #    base_dir = '/home/jah/projects/prime_editing_screens'
-    #    original_target = 'pPC1000_G6C_15'
-    #    original_genbank_name = 'ppc1000'
-    #    guide_library_names = ['DDR_library']
-    #    build_all_singles(base_dir, original_target, original_genbank_name, guide_library_names)
-    if args.vector == 'singles':
+    if args.vector == 'PE_singles':
+        original_target = 'pPC1000_G6C_15'
+        original_genbank_name = 'ppc1000'
+        guide_library_names = ['DDR_library']
+        build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)
+
+    elif args.vector == 'singles':
         original_target = 'pooled_vector'
         original_genbank_name = 'pooled_vector'
-        guide_library_names = ['DDR_library', 'DDR_sublibrary']
+        guide_library_names = [
+            'DDR_library',
+            'DDR_sublibrary',
+            'DDR_microlibrary',
+        ]
         build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)
+
     elif args.vector == 'doubles':
         build_all_doubles(args.base_dir)
