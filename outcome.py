@@ -192,6 +192,26 @@ class DeletionPlusMismatchOutcome(Outcome):
         shifted_mismatch = self.mismatch_outcome.perform_anchor_shift(anchor)
         return type(self)(shifted_deletion, shifted_mismatch)
 
+class InsertionPlusMismatchOutcome(Outcome):
+    def __init__(self, insertion_outcome, mismatch_outcome):
+        self.insertion_outcome = insertion_outcome
+        self.mismatch_outcome = mismatch_outcome
+
+    @classmethod
+    def from_string(cls, details_string):
+        insertion_string, mismatch_string = details_string.split(';', 1)
+        insertion_outcome = InsertionOutcome.from_string(insertion_string)
+        mismatch_outcome = MismatchOutcome.from_string(mismatch_string)
+        return DeletionPlusMismatchOutcome(insertion_outcome, mismatch_outcome)
+
+    def __str__(self):
+        return f'{self.insertion_outcome};{self.mismatch_outcome}'
+
+    def perform_anchor_shift(self, anchor):
+        shifted_insertion = self.insertion_outcome.perform_anchor_shift(anchor)
+        shifted_mismatch = self.mismatch_outcome.perform_anchor_shift(anchor)
+        return type(self)(shifted_insertion, shifted_mismatch)
+
 NAN_INT = np.iinfo(np.int64).min
 
 def int_or_nan_from_string(s):
