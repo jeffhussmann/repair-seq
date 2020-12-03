@@ -304,7 +304,9 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
 
 def merge_seq_counts(base_dir, group, k):
     chunk_dir = Path(base_dir) / 'data' / group / 'gDNA_chunks'
-    count_fns = chunk_dir.glob(f'{k}*.txt')
+    # Note: glob returns generator, need to make into list
+    # so it can be re-used for cleanup.
+    count_fns = sorted(chunk_dir.glob(f'{k}*.txt'))
 
     counts = Counter()
     for fn in count_fns:
@@ -340,7 +342,9 @@ def merge_seq_counts(base_dir, group, k):
     
 def merge_ids(base_dir, group):
     chunk_dir = Path(base_dir) / 'data' / group / 'gDNA_chunks'
-    count_fns = chunk_dir.glob('id*.txt')
+    # Note: glob returns generator, need to make into list
+    # so it can be re-used for cleanup.
+    count_fns = sorted(chunk_dir.glob('id*.txt'))
 
     counts = Counter()
     for fn in count_fns:
@@ -469,8 +473,8 @@ if __name__ == '__main__':
         if not merge_result.successful():
             print(merge_result.get())
 
-    #chunk_dir = base_dir / 'data' / batch / 'gDNA_chunks'
-    #chunk_dir.rmdir()
+    chunk_dir = base_dir / 'data' / batch / 'gDNA_chunks'
+    shutil.rmtree(str(chunk_dir))
 
     merged_fn = Path(base_dir) / 'data' / batch / 'id_stats.txt'
     id_counts = pd.read_csv(merged_fn, sep='\t', header=None, names=['pool', 'fixed_guide', 'variable_guide', 'num_reads'], index_col=[0, 1, 2], squeeze=True)

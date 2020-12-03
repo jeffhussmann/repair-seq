@@ -261,7 +261,7 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
 
 def merge_seq_counts(base_dir, group, k):
     chunk_dir = Path(base_dir) / 'data' / group / 'chunks'
-    count_fns = chunk_dir.glob(f'{k}*.txt')
+    count_fns = sorted(chunk_dir.glob(f'{k}*.txt'))
 
     counts = Counter()
     for fn in count_fns:
@@ -297,7 +297,7 @@ def merge_seq_counts(base_dir, group, k):
     
 def merge_ids(base_dir, group):
     chunk_dir = Path(base_dir) / 'data' / group / 'chunks'
-    count_fns = chunk_dir.glob('id*.txt')
+    count_fns = sorted(chunk_dir.glob('id*.txt'))
 
     counts = Counter()
     for fn in count_fns:
