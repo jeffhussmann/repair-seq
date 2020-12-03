@@ -1,115 +1,18 @@
 #!/usr/bin/env python3.6
 
 import argparse
-import subprocess
-import sys
 from pathlib import Path
 
 import yaml
 import tqdm
 
-def parallel(args):
-    from ddr import pooled_screen
-
-    sample_sheet_fn = args.base_dir / 'results' / args.pool / 'sample_sheet.yaml'
-    description = yaml.safe_load(sample_sheet_fn.read_text())
-
-    gDNA = description.get('gDNA', False)
-
-    if gDNA:
-        pool = pooled_screen.PooledScreenNoUMI(args.base_dir, args.pool, progress=tqdm.tqdm)
-    else:
-        pool = pooled_screen.PooledScreen(args.base_dir, args.pool, progress=tqdm.tqdm)
-
-    # Create parent results dir to avoid race condition
-    results_dir = args.base_dir / 'results' / args.pool
-    results_dir.mkdir(exist_ok=True)
-
-    def process_stage(stage):
-        parallel_command = [
-            'parallel',
-            '-n', '4', 
-            '--bar',
-            '--max-procs', str(args.max_procs),
-            'ddr',
-            '--base_dir', str(args.base_dir),
-            'process', ':::',
-        ]
-
-        arg_tuples = []
-        for fixed_guide, variable_guide in pool.guide_combinations_by_read_count:
-        #for fixed_guide, variable_guide in pool.guide_combinations_for_gene('LIG1'):
-            arg_tuples.append((args.pool, fixed_guide, variable_guide, stage))
-
-        for t in arg_tuples:
-            parallel_command.extend(t)
-        
-        completed_process = subprocess.run(parallel_command)
-        if completed_process.returncode != 0:
-            print('error in parallel')
-            sys.exit(1)
-
-    #process_stage('preprocess')
-    #pool.make_common_sequences()
-    parallel_common_sequences(pool, args.max_procs)
-    pool.write_common_outcome_files()
-
-    pool.merge_common_sequence_special_alignments()
-
-    process_stage('align')
-    process_stage('categorize')
-
-    pool.make_outcome_counts()
-    pool.merge_templated_insertion_details()
-    pool.merge_templated_insertion_details(fn_key='filtered_duplication_details')
-    pool.make_high_frequency_outcome_counts()
-    pool.compute_fraction_removed()
-    pool.merge_special_alignments()
-
-def parallel_common_sequences(pool, max_procs):
-    parallel_command = [
-        'parallel',
-        '-n', '2', 
-        '--bar',
-        '--max-procs', str(max_procs),
-        'ddr',
-        '--base_dir', str(pool.base_dir),
-        'process_common_sequences', ':::',
-    ]
-
-    arg_pairs = [(pool.group, chunk_name) for chunk_name in pool.common_sequence_chunk_names]
-    for pair in sorted(arg_pairs):
-        parallel_command.extend(pair)
-    
-    completed_process = subprocess.run(parallel_command)
-    if completed_process.returncode != 0:
-        print('error in parallel')
-        sys.exit(1)
-
-def process(args):
-    from ddr import pooled_screen
-
-    sample_sheet_fn = args.base_dir / 'results' / args.pool / 'sample_sheet.yaml'
-    description = yaml.safe_load(sample_sheet_fn.read_text())
-
-    if description.get('gDNA', False):
-        ExperimentType = pooled_screen.SingleGuideNoUMIExperiment
-    else:
-        ExperimentType = pooled_screen.SingleGuideExperiment
-
-    exp = ExperimentType(args.base_dir, args.pool, args.fixed_guide, args.variable_guide, description=description, progress=args.progress)
-
-    exp.process(args.stage)
-
-def process_common_sequences(args):
-    from ddr import pooled_screen
-
-    exp = pooled_screen.CommonSequenceExperiment(args.base_dir, args.pool, 'common_sequences', args.chunk, progress=args.progress)
-    exp.process()
-
 parser = argparse.ArgumentParser()
 subparsers = parser.add_subparsers(dest='subcommand', title='subcommands')
 subparsers.required = True
+
+def process(args):
+    from ddr import pooled_screen
+    pooled_screen.process(args.base_dir, args.pool, args.fixed_guide, args.variable_guide, args.stage, args.progress)
 
 parser_process = subparsers.add_parser('process')
 parser_process.add_argument('pool')
@@ -119,10 +22,18 @@ parser_process.add_argument('stage', type=str, choices=['preprocess', 'align', '
 parser_process.add_argument('--progress', const=tqdm.tqdm, action='store_const')
 parser_process.set_defaults(func=process)
 
+def parallel(args):
+    from ddr import pooled_screen
+    pooled_screen.parallel(args.base_dir, args.pool, args.max_procs)
+
 parser_parallel = subparsers.add_parser('parallel')
 parser_parallel.add_argument('max_procs', type=int)
 parser_parallel.add_argument('pool')
 parser_parallel.set_defaults(func=parallel)
+
+def process_common_sequences(args):
+    from ddr import pooled_screen
+    pooled_screen.process_common_sequences(args.base_dir, args.pool, args.chunk, args.progress)
 
 parser_process_cs = subparsers.add_parser('process_common_sequences')
 parser_process_cs.add_argument('pool')
