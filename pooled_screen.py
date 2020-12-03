@@ -1150,7 +1150,7 @@ class PooledScreen:
                 
         scipy.sparse.save_npz(self.fns['outcome_counts'], counts.tocoo())
 
-        df = pd.DataFrame(counts.todense(),
+        df = pd.DataFrame(counts.toarray(),
                           columns=self.guide_combinations,
                           index=pd.MultiIndex.from_tuples(outcome_order),
                          )
@@ -1188,7 +1188,7 @@ class PooledScreen:
         key = prefix + 'outcome_counts'
 
         sparse_counts = scipy.sparse.load_npz(self.fns[key])
-        df = pd.DataFrame(sparse_counts.todense(),
+        df = pd.DataFrame(sparse_counts.toarray(),
                           index=self.total_outcome_counts(collapsed).index,
                           columns=pd.MultiIndex.from_tuples(guides),
                          )
