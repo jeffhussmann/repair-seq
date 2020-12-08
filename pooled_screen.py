@@ -1271,6 +1271,31 @@ class PooledScreen:
             
         return outcome_counts
 
+    @memoized_with_key
+    def outcomes_above_simple_threshold(self, frequency_threshold):
+        nt_fs = self.non_targeting_fractions
+        above_threshold = nt_fs[nt_fs >= frequency_threshold].index.values
+        return [(c, s, d) for c, s, d in above_threshold if c != 'uncategorized']
+
+    @memoized_with_key
+    def outcomes_with_N_expected_in_quantile(self, n, q):
+        frequency_threshold = n / self.UMI_counts.quantile(q)
+        return self.outcomes_above_simple_threshold(frequency_threshold)
+
+    @memoized_property
+    def canonical_outcomes(self):
+        return self.outcomes_with_N_expected_in_quantile(15, 0.25)
+
+    @memoized_with_key
+    def active_guides_above_multiple_of_max_nt(self, multiple):
+        chi_squared = self.chi_squared_per_guide(relevant_outcomes=self.canonical_outcomes, exclude_unedited=True)
+        max_nt = chi_squared.loc[self.variable_guide_library.non_targeting_guides].max()
+        return chi_squared[chi_squared > multiple * max_nt].index.values
+
+    @memoized_property
+    def canonical_active_guides(self):
+        return self.active_guides_above_multiple_of_max_nt(2)
+
     @memoized_property
     def high_frequency_outcome_counts(self):
         return self.load_high_frequency_outcome_counts('counts')
