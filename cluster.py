@@ -1,11 +1,17 @@
 from collections import defaultdict, Counter
 
-import numpy as np
 import hdbscan
+import matplotlib
+import matplotlib.pyplot as plt
 import sklearn.metrics.pairwise
 import scipy.cluster.hierarchy as sch
 import scipy.spatial.distance as ssd
 import seaborn as sns
+import pandas as pd
+import umap
+
+import hits.utilities
+memoized_property = hits.utilities.memoized_property
 
 def get_outcomes_and_guides(pool, outcomes, guides, fixed_guide='none', min_UMIs=None, only_best_promoter=True):
     if isinstance(outcomes, int):
@@ -21,6 +27,155 @@ def get_outcomes_and_guides(pool, outcomes, guides, fixed_guide='none', min_UMIs
         guides = phenotype_strengths.index[:guides]
 
     return outcomes, guides
+
+class Clusterer:
+    def __init__(self,
+                 pool,
+                 **options,
+                ):
+
+        self.pool = pool
+
+        options.setdefault('outcomes_selection_method', 'above_frequency_threshold')
+        options.setdefault('outcomes_selection_kwargs', {})
+        options['outcomes_selection_kwargs'].setdefault('threshold', 2e-3)
+
+        options.setdefault('guides_selection_method', 'chi_squared_multiple')
+        options.setdefault('guides_selection_kwargs', {})
+        options['guides_selection_kwargs'].setdefault('multiple', 2)
+        options['guides_selection_kwargs'].setdefault('n', 100)
+
+        options.setdefault('guides_method', 'HDBSCAN')
+        options.setdefault('guides_kwargs', {})
+
+        options.setdefault('outcomes_method', 'hierarchical')
+        options.setdefault('outcomes_kwargs', {})
+
+        options['guides_kwargs'].setdefault('metric', 'cosine')
+        options['outcomes_kwargs'].setdefault('metric', 'correlation')
+
+        self.options = options
+
+    @memoized_property
+    def outcomes(self):
+        if self.options['outcomes_selection_method'] == 'above_frequency_threshold':
+            threshold = self.options['outcomes_selection_kwargs']['threshold']
+            outcomes = self.pool.outcomes_above_simple_threshold(threshold)
+        elif pd.api.types.is_list_like(self.options['outcomes_selection_method']):
+            outcomes = self.options['outcomes_selection_method']
+        else:
+            outcomes = self.pool.canonical_outcomes
+
+        return outcomes
+
+    @memoized_property
+    def guides(self):
+        if pd.api.types.is_list_like(self.options['guides_selection_method']):
+            guides = self.options['guides_selection_method']
+        elif self.options['guides_selection_method'] == 'chi_squared_multiple':
+            multiple = self.options['guides_selection_kwargs']['multiple']
+            guides = self.pool.active_guides_above_multiple_of_max_nt(self.outcomes, multiple)
+        elif self.options['guides_selection_method'] == 'chi_squared_top_n':
+            n = self.options['guides_selection_kwargs']['n']
+            guides = self.pool.top_n_active_guides(self.outcomes, n)
+        else:
+            guides = self.pool.canonical_active_guides
+
+        return guides
+
+    @memoized_property
+    def log2_fold_changes(self):
+        return self.pool.log2_fold_changes.loc[self.outcomes, self.guides]
+
+    def perform_clustering(self, axis):
+        method = self.options[f'{axis}_method']
+        if method == 'hierarchical':
+            func = hierarchcical
+        elif method == 'HDBSCAN':
+            func = HDBSCAN
+        else:
+            raise ValueError(method)
+        
+        results = func(self.log2_fold_changes, axis, **self.options[f'{axis}_kwargs'])
+        assign_palette(results, axis)
+
+        return results
+
+    @memoized_property
+    def outcome_clustering(self): 
+        return self.perform_clustering('outcomes')
+
+    @memoized_property
+    def guide_clustering(self): 
+        return self.perform_clustering('guides')
+
+    @memoized_property
+    def clustered_log2_fold_changes(self):
+        return self.log2_fold_changes.loc[self.clustered_outcomes, self.clustered_guides]
+
+    @memoized_property
+    def clustered_guides(self):
+        return self.guide_clustering['clustered_order']
+
+    @memoized_property
+    def clustered_outcomes(self):
+        return self.outcome_clustering['clustered_order']
+
+    @memoized_property
+    def guide_embedding(self):
+        reducer = umap.UMAP(random_state=1, metric=self.options['guides_kwargs']['metric'], n_neighbors=10, min_dist=0.2)
+        embedding = reducer.fit_transform(self.log2_fold_changes.T)
+        embedding = pd.DataFrame(embedding,
+                                 columns=['x', 'y'],
+                                 index=self.log2_fold_changes.columns,
+                                )
+        embedding['color'] = pd.Series(self.guide_clustering['colors'])
+        embedding['gene'] = [self.pool.variable_guide_library.guide_to_gene[guide] for guide in embedding.index]
+        return embedding
+
+    @memoized_property
+    def outcome_embedding(self):
+        reducer = umap.UMAP(random_state=1, metric=self.options['outcomes_kwargs']['metric'], n_neighbors=10, min_dist=0.2)
+        embedding = reducer.fit_transform(self.log2_fold_changes)
+        embedding = pd.DataFrame(embedding,
+                                 columns=['x', 'y'],
+                                 index=self.log2_fold_changes.index,
+                                )
+        embedding['color'] = pd.Series(self.outcome_clustering['colors'])
+        return embedding
+
+    def plot_guide_embedding(self):
+        fig, ax = plt.subplots(figsize=(12, 12))
+
+        ax.scatter(x='x', y='y', color='color', data=self.guide_embedding, s=100, alpha=0.8, linewidths=(0,))
+
+        for gene, rows in self.guide_embedding.groupby('gene', sort=False):
+            n_rows, _ = rows.shape
+            for first_index in range(n_rows):
+                first_row = rows.iloc[first_index]
+                for second_index in range(first_index + 1, n_rows):
+                    second_row = rows.iloc[second_index]
+                    ax.plot([first_row['x'], second_row['x']], [first_row['y'], second_row['y']], color='black', alpha=0.1)
+
+            centroid = (rows['x'].mean(), rows['y'].mean())
+
+            if n_rows == 1:
+                num_guides_string = ''
+            else:
+                num_guides_string = f' ({len(rows)})'
+                
+            ax.annotate(f'{gene}{num_guides_string}',
+                        xy=centroid,
+                        xytext=(0, 0),
+                        textcoords='offset points',
+                        ha='center',
+                        va='center',
+                        size=8,
+                    )
+
+        ax.axis('off')
+
+        return fig
 
 def hierarchcical(l2fcs,
                   axis,
@@ -71,6 +226,10 @@ def hierarchcical(l2fcs,
         similarities = l2fcs_reordered.corr()
     elif metric == 'cosine':
         similarities = sklearn.metrics.pairwise.cosine_similarity(l2fcs_reordered.T)
+    elif metric == 'euclidean':
+        similarities = 1 / (1 + ssd.squareform(ssd.pdist(l2fcs_reordered.T)))
+    else:
+        similarities = None
 
     results = {
         'linkage': linkage,
@@ -88,6 +247,7 @@ def HDBSCAN(l2fcs,
             min_samples=1,
             cluster_selection_epsilon=0.2,
             metric='cosine',
+            cluster_selection_method='eom',
            ):
 
     # cosine_distances wants samples to be rows and features to be columns
@@ -95,18 +255,27 @@ def HDBSCAN(l2fcs,
         to_cluster = l2fcs.T
     elif axis == 'outcomes':
         to_cluster = l2fcs
+    else:
+        raise ValueError(axis)
 
     if metric == 'cosine':
         distances = sklearn.metrics.pairwise.cosine_distances(to_cluster)
     elif metric == 'correlation':
         distances = 1 - to_cluster.T.corr()
+    elif metric == 'euclidean':
+        distances = ssd.squareform(ssd.pdist(to_cluster))
+    else:
+        distances = None
 
     labels = list(to_cluster.index.values)
+
+    distances = pd.DataFrame(distances, index=labels, columns=labels)
 
     clusterer = hdbscan.HDBSCAN(metric='precomputed',
                                 min_cluster_size=min_cluster_size,
                                 min_samples=min_samples,
                                 cluster_selection_epsilon=cluster_selection_epsilon,
+                                cluster_selection_method=cluster_selection_method,
                                )
     clusterer.fit(distances)
 
@@ -134,187 +303,21 @@ def HDBSCAN(l2fcs,
         similarities = l2fcs_reordered.corr()
     elif metric == 'cosine':
         similarities = sklearn.metrics.pairwise.cosine_similarity(l2fcs_reordered.T)
+    elif metric == 'euclidean':
+        similarities = 1 / (1 + ssd.squareform(ssd.pdist(l2fcs_reordered.T)))
+    else:
+        similarities = None
 
     results = {
         'clustered_order': clustered_order,
         'cluster_assignments': cluster_assignments,
 
+        'distances': distances.loc[clustered_order, clustered_order],
         'similarities': similarities,
         'linkage': linkage,
         'original_order': labels,
 
         'clusterer': clusterer,
-    }
-
-    return results
-
-def hierarchcical_old(
-    pool, outcomes, guides,
-    metric='correlation',
-    method='single',
-    fixed_guide='none',
-    min_UMIs=None,
-    num_outcome_clusters=5,
-    num_guide_clusters=5,
-    only_best_promoter=True,
-):
-
-    outcomes, guides = get_outcomes_and_guides(pool, outcomes, guides, fixed_guide=fixed_guide, min_UMIs=min_UMIs, only_best_promoter=only_best_promoter)
-
-    l2_fcs = pool.log2_fold_changes_full_arguments('perfect', fixed_guide)[fixed_guide].loc[outcomes, guides]
-    #jitter = np.random.normal(0, 1e-6, l2_fcs.shape)
-    #l2_fcs = l2_fcs + jitter
-
-    guide_linkage = sch.linkage(l2_fcs.T,
-                                optimal_ordering=True,
-                                metric=metric,
-                                method=method,
-                               )
-    guide_dendro = sch.dendrogram(guide_linkage,
-                                  no_plot=True,
-                                  labels=guides,
-                                 )
-
-    clustered_guide_order = guide_dendro['ivl']
-    
-    outcome_linkage = sch.linkage(l2_fcs,
-                                  optimal_ordering=True,
-                                  metric=metric,
-                                  method=method,
-                                 )
-    outcome_dendro = sch.dendrogram(outcome_linkage,
-                                    no_plot=True,
-                                    labels=outcomes,
-                                   )
-
-    clustered_outcome_order = outcome_dendro['ivl']
-
-    l2_fcs = l2_fcs.loc[clustered_outcome_order, clustered_guide_order]
-
-    guide_cluster_ids = sch.fcluster(guide_linkage,
-                                     criterion='maxclust',
-                                     t=num_guide_clusters,
-                                    )
-    # Transform from original order into the order produced by dendrogram.
-    # Convert from 1-based indexing to 0-based indexing for consistency with other methods.
-    guides_list = list(guides)
-    guide_cluster_assignments = [guide_cluster_ids[guides_list.index(g)] - 1 for g in clustered_guide_order]
-
-    outcome_cluster_ids = sch.fcluster(outcome_linkage,
-                                       criterion='maxclust',
-                                       t=num_outcome_clusters,
-                                      )
-
-    # Same transformation of indices as for guides.
-    outcomes_list = list(outcomes)
-    outcome_cluster_assignments = [outcome_cluster_ids[outcomes_list.index(o)] - 1 for o in clustered_outcome_order]
-
-    results = {
-        'clustered_guide_order': clustered_guide_order,
-        'guide_cluster_assignments': guide_cluster_assignments,
-
-        'guide_correlations': l2_fcs.corr(),
-        'guide_linkage': guide_linkage,
-        'original_guide_order': guides,
-
-        'clustered_outcome_order': clustered_outcome_order,
-        'outcome_cluster_assignments': outcome_cluster_assignments,
-
-        'outcome_correlations': l2_fcs.T.corr(),
-        'outcome_linkage': outcome_linkage,
-
-        'cluster_guides': cluster_guides,
-        'cluster_genes': cluster_genes,
-    }
-
-    return results
-
-def hdbscan_old(
-    pool, outcomes, guides,
-    min_cluster_size=2,
-    min_samples=1,
-    cluster_selection_epsilon=0.2,
-):
-    outcomes, guides = get_outcomes_and_guides(pool, outcomes, guides)
-    l2_fcs = pool.log2_fold_changes_full_arguments('perfect', 'none')['none'].loc[outcomes, guides]
-
-    # cosine_distances wants samples to be rows and features to be columns, hence transpose
-    guide_distances = sklearn.metrics.pairwise.cosine_distances(l2_fcs.T)
-
-    guide_clusterer = hdbscan_module.HDBSCAN(metric='precomputed',
-                                       min_cluster_size=min_cluster_size,
-                                       min_samples=min_samples,
-                                       cluster_selection_epsilon=cluster_selection_epsilon,
-                                      )
-    guide_clusterer.fit(guide_distances)
-
-    guide_linkage = guide_clusterer.single_linkage_tree_.to_numpy()
-    guide_linkage = scipy.cluster.hierarchy.optimal_leaf_ordering(guide_linkage, guide_distances)
-    guide_dendro = scipy.cluster.hierarchy.dendrogram(guide_linkage,
-                                                      no_plot=True,
-                                                      labels=guides,
-                                                     )
-
-    clustered_guide_order = guide_dendro['ivl']
-    guide_cluster_ids = guide_clusterer.labels_
-
-    # Transform from original order into the order produced by dendrogram.
-    guides_list = list(guides)
-    guide_cluster_assignments = [guide_cluster_ids[guides_list.index(g)] for g in clustered_guide_order]
-
-    cluster_guides = defaultdict(list)
-    cluster_genes = defaultdict(Counter)
-
-    for cluster_id, guide in zip(guide_cluster_assignments, clustered_guide_order):
-        cluster_guides[cluster_id].append(guide)
-        gene = pool.variable_guide_library.guide_to_gene[guide]
-        cluster_genes[cluster_id][gene] += 1
-
-    outcome_distances = sklearn.metrics.pairwise.cosine_distances(l2_fcs)
-    outcome_clusterer = hdbscan_module.HDBSCAN(metric='precomputed',
-                                       min_cluster_size=min_cluster_size,
-                                       min_samples=min_samples,
-                                       cluster_selection_epsilon=cluster_selection_epsilon,
-                                      )
-    outcome_clusterer.fit(outcome_distances)
-
-    outcome_linkage = outcome_clusterer.single_linkage_tree_.to_numpy()
-    outcome_linkage = scipy.cluster.hierarchy.optimal_leaf_ordering(outcome_linkage, outcome_distances)
-    outcome_dendro = scipy.cluster.hierarchy.dendrogram(outcome_linkage,
-                                                      no_plot=True,
-                                                      labels=outcomes,
-                                                     )
-
-    clustered_outcome_order = outcome_dendro['ivl']
-    outcome_cluster_ids = outcome_clusterer.labels_
-
-    # Transform from original order into the order produced by dendrogram.
-    outcomes_list = list(outcomes)
-    outcome_cluster_assignments = [outcome_cluster_ids[outcomes_list.index(g)] for g in clustered_outcome_order]
-
-    l2_fcs = l2_fcs.loc[clustered_outcome_order, clustered_guide_order]
-
-    results = {
-        'clustered_guide_order': clustered_guide_order,
-        'guide_cluster_assignments': guide_cluster_assignments,
-
-        'guide_correlations': l2_fcs.corr(),
-        'guide_linkage': guide_linkage,
-        'original_guide_order': guides,
-
-        'guide_clusterer': guide_clusterer,
-
-        'clustered_outcome_order': clustered_outcome_order,
-        'outcome_cluster_assignments': outcome_cluster_assignments,
-
-        'outcome_correlations': l2_fcs.T.corr(),
-        'outcome_linkage': outcome_linkage,
-        'original_outcome_order': guides,
-
-        'outcome_clusterer': outcome_clusterer,
-
-        'cluster_guides': cluster_guides,
-        'cluster_genes': cluster_genes,
     }
 
     return results
@@ -364,10 +367,15 @@ def get_cluster_genes(results, guide_library):
 
 def assign_palette(results, axis):
     num_clusters = len(set(results['cluster_assignments']))
+
     if axis == 'guides':
         palette = sns.husl_palette(num_clusters)
     elif axis == 'outcomes':
         palette = sns.color_palette('colorblind', n_colors=num_clusters)
 
     results['palette'] = palette
-    results['cluster_colors'] = {i: palette[i] for i in range(num_clusters)}
+    grey = matplotlib.colors.to_rgb('grey')
+    cluster_colors = {i: palette[i] for i in range(num_clusters)}
+    results['cluster_colors'] = cluster_colors
+
+    results['colors'] = {key: cluster_colors.get(i, grey) for key, i in zip(results['clustered_order'], results['cluster_assignments'])}
