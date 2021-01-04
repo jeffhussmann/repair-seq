@@ -18,7 +18,7 @@ def run_stage(GroupClass, group_args, sample_name, stage):
 
     if sample_name in group.sample_names:
         # Important to do this branch first, since preprocssing happens before common sequence collection.
-        exp = group.sample_name_to_experiment(sample_name)
+        exp = group.sample_name_to_experiment(sample_name, no_progress=True)
     elif sample_name in group.common_sequence_chunk_exp_names:
         exp = group.common_sequence_chunk_exp_from_name(sample_name)
     else:
@@ -47,16 +47,22 @@ class ExperimentGroup:
 
             self.make_common_sequences()
 
-            for stage in ['align', 'categorize']:
+            for stage in [
+                'align',
+                'categorize',
+                ]:
+
                 print('common sequences', stage)
                 args = [(type(self), self.group_args, chunk_exp_name, stage) for chunk_exp_name in self.common_sequence_chunk_exp_names]
                 pool.starmap(run_stage, args)
 
             self.merge_common_sequence_outcomes()
 
-            for stage in ['align',
-                          'categorize',
-                         ]:
+            for stage in [
+                'align',
+                'categorize',
+               ]:
+
                 print(stage)
                 args = [(type(self), self.group_args, sample_name, stage) for sample_name in self.sample_names]
                 pool.starmap(run_stage, args)
@@ -176,7 +182,7 @@ class ExperimentGroup:
 
     def get_read_layout(self, name, **kwargs):
         als = self.get_read_alignments(name)
-        l = self.categorizer(als, self.target_info, mode=self.layout_mode, **kwargs)
+        l = self.categorizer(als, self.target_info, mode=self.layout_mode, error_corrected=False, **kwargs)
         return l
 
     def get_read_diagram(self, read_id, only_relevant=True, **diagram_kwargs):
@@ -278,7 +284,6 @@ class ExperimentGroup:
         df = pd.read_csv(self.fns['genomic_insertion_length_distributions'], index_col=[0, 1, 2])
         df.columns = [int(c) for c in df.columns]
         return df
-
 
 class CommonSequencesExperiment:
     @property

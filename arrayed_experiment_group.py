@@ -2,29 +2,82 @@ import gzip
 import itertools
 import time
 import shutil
+import warnings
 from pathlib import Path
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 import numpy as np
 import pandas as pd
 import pysam
-import yaml
 
-import knock_knock.experiment
-import knock_knock.visualize
 import ddr.experiment_group
 
 import ddr.prime_editing_experiment
 import ddr.endogenous
 import ddr.paired_end_experiment
+import ddr.single_end_experiment
 
-from hits import utilities, fastq, sam
+from hits import utilities, sam
 
 memoized_property = utilities.memoized_property
 
 class Batch:
-    def __init__(self, base_dir, batch):
-        pass        
+    def __init__(self, base_dir, batch, progress=None):
+        self.base_dir = Path(base_dir)
+        self.batch = batch
+        self.data_dir = self.base_dir / 'data' / batch
+
+        if progress is None or getattr(progress, '_silent', False):
+            def ignore_kwargs(x, **kwargs):
+                return x
+            progress = ignore_kwargs
+
+        self.progress = progress
+
+        self.sample_sheet_fn = self.data_dir / 'sample_sheet.csv'
+        self.sample_sheet = pd.read_csv(self.sample_sheet_fn, index_col='sample_name')
+
+        self.group_descriptions_fn = self.data_dir / 'group_descriptions.csv'
+        self.group_descriptions = pd.read_csv(self.group_descriptions_fn, index_col='group')
+
+        self.condition_colors_fn = self.data_dir / 'condition_colors.csv'
+        if self.condition_colors_fn.exists():
+            self.condition_colors = pd.read_csv(self.condition_colors_fn, index_col='perturbation', squeeze=True)
+        else:
+            self.condition_colors = None
+
+    def __repr__(self):
+        return f'Batch: {self.batch}, base_dir={self.base_dir}'
+
+    @property
+    def group_names(self):
+        return self.sample_sheet['group'].unique()
+
+    def group(self, group_name):
+        return ArrayedExperimentGroup(self.base_dir, self.batch, group_name, progress=self.progress)
+
+    @memoized_property
+    def groups(self):
+        groups = {group_name: self.group(group_name) for group_name in self.group_names}
+        return groups
+
+    def group_query(self, query_string):
+        groups = []
+
+        for group_name, row in self.group_descriptions.query(query_string).iterrows():
+            groups.append(self.groups[group_name])
+
+        return groups
+
+    def experiment_query(self, query_string):
+        exps = []
+
+        for sample_name, row in self.sample_sheet.query(query_string).iterrows():
+            group = self.groups[row['group']]
+            exp = group.sample_name_to_experiment(sample_name)
+            exps.append(exp)
+
+        return exps
 
 class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
     def __init__(self, base_dir, batch, group, progress=None):
@@ -36,24 +89,64 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
 
         super().__init__()
 
+        if progress is None or getattr(progress, '_silent', False):
+            def ignore_kwargs(x, **kwargs):
+                return x
+            progress = ignore_kwargs
+
+        self.silent = True
+
         self.progress = progress
 
-        self.batch_sample_sheet_fn = self.data_dir / 'sample_sheet.csv'
-        self.batch_group_descriptions_fn = self.data_dir / 'group_descriptions.csv'
+        self.Batch = Batch(self.base_dir, self.batch)
 
-        self.batch_sample_sheet = pd.read_csv(self.batch_sample_sheet_fn, index_col='sample_name')
-        self.sample_sheet = self.batch_sample_sheet.query('group == @self.group')
+        self.batch_sample_sheet = self.Batch.sample_sheet
+        self.sample_sheet = self.batch_sample_sheet.query('group == @self.group').copy()
 
-        self.batch_group_descriptions = pd.read_csv(self.batch_group_descriptions_fn, index_col='group')
-        self.description = self.batch_group_descriptions.loc[self.group]
+        self.description = self.Batch.group_descriptions.loc[self.group].copy()
+
+        self.condition_keys = self.description['condition_keys'].split(';')
+        self.full_condition_keys = tuple(self.condition_keys + ['replicate'])
+
+        self.baseline_condition = tuple(self.description['baseline_condition'].split(';'))
 
         self.experiment_type = self.description['experiment_type']
 
-        self.ExperimentType = arrayed_classes[self.experiment_type]
-        self.CommonSequencesExperimentType = arrayed_classes[self.experiment_type, 'common_sequences']
+        self.ExperimentType, self.CommonSequencesExperimentType = arrayed_specialized_experiment_factory(self.experiment_type)
 
         self.outcome_index_levels = ('category', 'subcategory', 'details')
-        self.outcome_column_levels = ('condition', 'replicate')
+        self.outcome_column_levels = self.full_condition_keys
+
+        def condition_from_row(row):
+            condition = tuple(row[key] for key in self.condition_keys)
+            if len(condition) == 1:
+                condition = condition[0]
+            return condition
+
+        def full_condition_from_row(row):
+            return tuple(row[key] for key in self.full_condition_keys)
+
+        self.full_conditions = [full_condition_from_row(row) for _, row in self.sample_sheet.iterrows()]
+
+        conditions_are_unique = len(set(self.full_conditions)) == len(self.full_conditions)
+        if not conditions_are_unique:
+            raise ValueError(Counter(self.full_conditions))
+
+        self.full_condition_to_sample_name = {full_condition_from_row(row): sample_name for sample_name, row in self.sample_sheet.iterrows()}
+
+        self.conditions = sorted(set(c[:-1] for c in self.full_conditions))
+
+        # Indexing breaks if it is a length 1 tuple.
+        if len(self.condition_keys) == 1:
+            self.baseline_condition = self.baseline_condition[0]
+            self.conditions = [c[0] for c in self.conditions]
+
+        self.sample_names = sorted(self.sample_sheet.index)
+
+        self.condition_to_sample_names = defaultdict(list)
+        for sample_name, row in self.sample_sheet.iterrows():
+            condition = condition_from_row(row)
+            self.condition_to_sample_names[condition].append(sample_name)
 
     def __repr__(self):
         return f'ArrayedExperimentGroup: batch={self.batch}, group={self.group}, base_dir={self.base_dir}'
@@ -67,7 +160,7 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
         return self.base_dir / 'results' / self.batch / self.group
 
     def experiments(self, no_progress=False):
-        for sample_name, row in self.sample_sheet.iterrows():
+        for sample_name in self.sample_names:
             yield self.sample_name_to_experiment(sample_name, no_progress=no_progress)
 
     @property
@@ -105,21 +198,9 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
     def num_experiments(self):
         return len(self.sample_sheet)
 
-    @memoized_property
-    def conditions(self):
-        return sorted(self.sample_sheet['condition'].unique())
-
-    @memoized_property
-    def full_conditions(self):
-        return list(zip(self.sample_sheet['condition'], self.sample_sheet['replicate']))
-
-    @memoized_property
-    def sample_names(self):
-        return sorted(self.sample_sheet.index)
-
     def condition_replicates(self, condition):
-        rows = self.sample_sheet.query('condition == @condition')
-        return [self.sample_name_to_experiment(sample_name) for sample_name in rows.index]
+        sample_names = self.condition_to_sample_names[condition]
+        return [self.sample_name_to_experiment(sample_name) for sample_name in sample_names]
 
     def sample_name_to_experiment(self, sample_name, no_progress=False):
         if no_progress:
@@ -132,13 +213,7 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
 
     @memoized_property
     def full_condition_to_experiment(self):
-        full_condition_to_experiment = {}
-
-        for exp in self.experiments():
-            full_condition = exp.description['condition'], exp.description['replicate']
-            full_condition_to_experiment[full_condition] = exp
-
-        return full_condition_to_experiment
+        return {full_condition: self.sample_name_to_experiment(sample_name) for full_condition, sample_name in self.full_condition_to_sample_name.items()}
 
     def extract_genomic_insertion_length_distributions(self):
         length_distributions = {}
@@ -177,7 +252,22 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
     @memoized_property
     def outcome_counts(self):
         # Ignore nonspecific amplification products in denominator of any outcome fraction calculations.
-        return self.outcome_counts_df(False).drop('nonspecific amplification', errors='ignore')
+        to_drop = ['nonspecific amplification', 'bad sequence']
+        outcome_counts = self.outcome_counts_df(False).drop(to_drop, errors='ignore')
+        
+        # Sort columns to avoid annoying pandas PerformanceWarnings.
+        outcome_counts = outcome_counts.sort_index(axis='columns')
+
+        return outcome_counts
+
+    @memoized_property
+    def outcome_counts_with_bad(self):
+        outcome_counts = self.outcome_counts_df(False)
+        
+        # Sort columns to avoid annoying pandas PerformanceWarnings.
+        outcome_counts = outcome_counts.sort_index(axis='columns')
+
+        return outcome_counts
 
     @memoized_property
     def total_valid_reads(self):
@@ -185,7 +275,149 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
 
     @memoized_property
     def outcome_fractions(self):
-        return self.outcome_counts / self.total_valid_reads
+        fractions = self.outcome_counts / self.total_valid_reads
+        order = fractions[self.baseline_condition].mean(axis='columns').sort_values(ascending=False).index
+        fractions = fractions.loc[order]
+        return fractions.iloc[:1000]
+
+    @memoized_property
+    def outcome_fractions_with_bad(self):
+        return self.outcome_counts / self.outcome_counts.sum()
+
+    @memoized_property
+    def outcome_fraction_condition_means(self):
+        return self.outcome_fractions.mean(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def outcome_fraction_baseline_means(self):
+        return self.outcome_fraction_condition_means[self.baseline_condition]
+
+    @memoized_property
+    def outcome_fraction_condition_stds(self):
+        return self.outcome_fractions.std(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def outcomes_by_baseline_frequency(self):
+        return self.outcome_fraction_baseline_means.sort_values(ascending=False).index.values
+
+    @memoized_property
+    def outcome_fraction_differences(self):
+        return self.outcome_fractions.sub(self.outcome_fraction_baseline_means, axis=0)
+
+    @memoized_property
+    def outcome_fraction_difference_condition_means(self):
+        return self.outcome_fraction_differences.mean(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def outcome_fraction_difference_condition_stds(self):
+        return self.outcome_fraction_differences.std(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def log2_fold_changes(self):
+        # Using the warnings context manager doesn't work here, maybe because of pandas multithreading?
+        warnings.filterwarnings('ignore')
+
+        fold_changes = self.outcome_fractions.div(self.outcome_fraction_baseline_means, axis=0)
+        log2_fold_changes = np.log2(fold_changes)
+
+        warnings.resetwarnings()
+
+        return log2_fold_changes
+
+    @memoized_property
+    def log2_fold_change_condition_means(self):
+        return self.log2_fold_changes.mean(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def log2_fold_change_condition_stds(self):
+        return self.log2_fold_changes.std(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def category_fractions(self):
+        return self.outcome_fractions.sum(level='category')
+
+    @memoized_property
+    def category_fraction_condition_means(self):
+        return self.category_fractions.mean(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def category_fraction_baseline_means(self):
+        return self.category_fraction_condition_means[self.baseline_condition]
+
+    @memoized_property
+    def category_fraction_condition_stds(self):
+        return self.category_fractions.std(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def categories_by_baseline_frequency(self):
+        return self.category_fraction_baseline_means.sort_values(ascending=False).index.values
+
+    @memoized_property
+    def category_fraction_differences(self):
+        return self.category_fractions.sub(self.category_fraction_baseline_means, axis=0)
+
+    @memoized_property
+    def category_fraction_difference_condition_means(self):
+        return self.category_fraction_differences.mean(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def category_fraction_difference_condition_stds(self):
+        return self.category_fraction_differences.std(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def category_log2_fold_changes(self):
+        # Using the warnings context manager doesn't work here, maybe because of pandas multithreading?
+        warnings.filterwarnings('ignore')
+
+        fold_changes = self.category_fractions.div(self.category_fraction_baseline_means, axis=0)
+        log2_fold_changes = np.log2(fold_changes)
+
+        warnings.resetwarnings()
+
+        return log2_fold_changes
+
+    @memoized_property
+    def category_log2_fold_change_condition_means(self):
+        # calculate mean in linear space, not log space
+        fold_changes = self.category_fraction_condition_means.div(self.category_fraction_baseline_means, axis=0)
+        return np.log2(fold_changes)
+
+    @memoized_property
+    def category_log2_fold_change_condition_stds(self):
+        # calculate effective log2 fold change of mean +/- std in linear space
+        means = self.category_fraction_condition_means
+        stds = self.category_fraction_condition_stds
+        baseline_means = self.category_fraction_baseline_means
+        return {
+            'lower': np.log2((means - stds).div(baseline_means, axis=0)),
+            'upper': np.log2((means + stds).div(baseline_means, axis=0)),
+        }
+
+    # Duplication of code in pooled_screen
+    def donor_outcomes_containing_SNV(self, SNV_name):
+        ti = self.target_info
+        SNV_index = sorted(ti.donor_SNVs['target']).index(SNV_name)
+        donor_base = ti.donor_SNVs['donor'][SNV_name]['base']
+        nt_fracs = self.outcome_fraction_baseline_means
+        outcomes = [(c, s, d) for c, s, d in nt_fracs.index.values if c == 'donor' and d[SNV_index] == donor_base]
+        return outcomes
+
+    @memoized_property
+    def conversion_fractions(self):
+        conversion_fractions = {}
+
+        SNVs = self.target_info.donor_SNVs['target']
+
+        outcome_fractions = self.outcome_fractions
+
+        for SNV_name in SNVs:
+            outcomes = self.donor_outcomes_containing_SNV(SNV_name)
+            fractions = outcome_fractions.loc[outcomes].sum()
+            conversion_fractions[SNV_name] = fractions
+
+        conversion_fractions = pd.DataFrame.from_dict(conversion_fractions, orient='index').sort_index()
+        
+        return conversion_fractions
 
 class ArrayedExperiment:
     def __init__(self, base_dir, batch, group, sample_name, experiment_group=None):
@@ -197,6 +429,8 @@ class ArrayedExperiment:
         self.group = group
         self.sample_name = sample_name
         self.experiment_group = experiment_group
+
+        self.error_corrected = False
 
     @property
     def default_read_type(self):
@@ -293,7 +527,7 @@ class ArrayedExperiment:
                     layout.query_name = name
 
                 else:
-                    layout = self.categorizer(als, self.target_info, mode=self.layout_mode)
+                    layout = self.categorizer(als, self.target_info, error_corrected=self.error_corrected, mode=self.layout_mode)
 
                     try:
                         layout.categorize()
@@ -368,24 +602,27 @@ class ArrayedExperiment:
     def load_outcome_counts(self):
         return self.outcome_counts.sum(level=[0, 1])
 
-arrayed_classes = {}
+def arrayed_specialized_experiment_factory(experiment_kind):
+    experiment_kind_to_class = {
+        'paired_end': ddr.paired_end_experiment.PairedEndExperiment,
+        'prime_editing': ddr.prime_editing_experiment.PrimeEditingExperiment,
+        'single_end': ddr.single_end_experiment.SingleEndExperiment,
+    }
 
-for name, SpecializeExperiment in [('endogenous', ddr.endogenous.Experiment),
-                                   ('paired_end', ddr.paired_end_experiment.PairedEndExperiment),
-                                   ('prime_editing', ddr.prime_editing_experiment.PrimeEditingExperiment),
-                                  ]:
+    SpecializedExperiment = experiment_kind_to_class[experiment_kind]
 
-        class ArrayedSpecializedExperiment(ArrayedExperiment, SpecializeExperiment):
-            def __init__(self, base_dir, batch, group, sample_name, experiment_group=None, **kwargs):
-                ArrayedExperiment.__init__(self, base_dir, batch, group, sample_name, experiment_group=experiment_group)
-                SpecializeExperiment.__init__(self, base_dir, (batch, group), sample_name, **kwargs)
-        
-        arrayed_classes[name] = ArrayedSpecializedExperiment
+    class ArrayedSpecializedExperiment(ArrayedExperiment, SpecializedExperiment):
+        def __init__(self, base_dir, batch, group, sample_name, experiment_group=None, **kwargs):
+            ArrayedExperiment.__init__(self, base_dir, batch, group, sample_name, experiment_group=experiment_group)
+            SpecializedExperiment.__init__(self, base_dir, (batch, group), sample_name, **kwargs)
 
-        class ArrayedSpecializedCommonSequencesExperiment(ddr.experiment_group.CommonSequencesExperiment, ArrayedExperiment, SpecializeExperiment):
-            def __init__(self, base_dir, batch, group, sample_name, experiment_group=None, **kwargs):
-                ddr.experiment_group.CommonSequencesExperiment.__init__(self)
-                ArrayedExperiment.__init__(self, base_dir, batch, group, sample_name, experiment_group=experiment_group)
-                SpecializeExperiment.__init__(self, base_dir, (batch, group), sample_name, **kwargs)
-        
-        arrayed_classes[name, 'common_sequences'] = ArrayedSpecializedCommonSequencesExperiment
+        def __repr__(self):
+            return f'Arrayed{SpecializedExperiment.__repr__(self)}'
+    
+    class ArrayedSpecializedCommonSequencesExperiment(ddr.experiment_group.CommonSequencesExperiment, ArrayedExperiment, SpecializedExperiment):
+        def __init__(self, base_dir, batch, group, sample_name, experiment_group=None, **kwargs):
+            ddr.experiment_group.CommonSequencesExperiment.__init__(self)
+            ArrayedExperiment.__init__(self, base_dir, batch, group, sample_name, experiment_group=experiment_group)
+            SpecializedExperiment.__init__(self, base_dir, (batch, group), sample_name, **kwargs)
+    
+    return ArrayedSpecializedExperiment, ArrayedSpecializedCommonSequencesExperiment
