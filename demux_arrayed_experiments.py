@@ -1,4 +1,5 @@
 import gzip
+import itertools
 from pathlib import Path
 from collections import Counter
 
@@ -10,45 +11,102 @@ import hits.utilities
 
 progress = tqdm.tqdm
 
-base_dir = Path('/lab/solexa_weissman/jah/projects/ddr' )
-batch = '2020_10_13_miseq'
+def demux_SE(base_dir, batch, payload_read_type='R1'):
+    base_dir = Path(base_dir)
+    data_dir = base_dir  / 'data' / batch
 
-data_dir = base_dir  / 'data' / batch
+    sample_sheet_fn = data_dir / 'sample_sheet.csv'
+    sample_sheet = pd.read_csv(sample_sheet_fn, index_col='sample_name')
 
-sample_sheet_fn = data_dir / 'sample_sheet.csv'
-sample_sheet = pd.read_csv(sample_sheet_fn, index_col='sample_name')
+    fns = {which: data_dir / f'{which}.fastq.gz' for which in [payload_read_type, 'i7', 'i5']}
+    reads = {k: hits.fastq.reads(v) for k, v in fns.items()} 
 
-fns = {which: data_dir / f'{which}.fastq.gz' for which in ['R1', 'i7', 'i5']}
-reads = {k: hits.fastq.reads(v) for k, v in fns.items()} 
+    counts = Counter()
 
-counts = Counter()
+    resolvers = {k: hits.utilities.get_one_mismatch_resolver(sample_sheet[k]).get for k in ['i7', 'i5']}
 
-resolvers = {k: hits.utilities.get_one_mismatch_resolver(sample_sheet[k]).get for k in ['i7', 'i5']}
+    sample_to_fh = {s: gzip.open(data_dir / fn, 'wt', compresslevel=1) for s, fn in sample_sheet['fastq_fn'].items()}
 
-sample_to_fh = {s: gzip.open(data_dir / fn, 'wt', compresslevel=1) for s, fn in sample_sheet['fastq_fn'].items()}
+    zipped_reads = zip(reads[payload_read_type], reads['i7'], reads['i5'])
 
-for R1, i7, i5 in progress(zip(reads['R1'], reads['i7'], reads['i5'])):
-    i7_samples = resolvers['i7'](i7.seq, {'unknown'})
-    i5_samples = resolvers['i5'](i5.seq, {'unknown'})
-    
-    consistent_with_both = i7_samples & i5_samples
-
-    if len(consistent_with_both) == 1:
-        sample = next(iter(consistent_with_both))
-        if sample == 'unknown':
-            sample = (i7.seq, i5.seq)
-
-    elif len(consistent_with_both) > 1:
-        print(i7.seq, i5.seq, consistent_with_both)
-        raise ValueError
+    for payload_read, i7, i5 in progress(zipped_reads):
+        i7_samples = resolvers['i7'](i7.seq, {'unknown'})
+        i5_samples = resolvers['i5'](i5.seq, {'unknown'})
         
-    counts[sample] += 1
-                
-    if sample in sample_to_fh:
-        sample_to_fh[sample].write(str(R1))
-        
-for fh in sample_to_fh.values():
-    fh.close()      
+        consistent_with_both = i7_samples & i5_samples
 
-index_counts_fn = data_dir / 'index_counts.txt'
-pd.Series(counts).sort_values(ascending=False).to_csv(index_counts_fn, header=None)
+        if len(consistent_with_both) == 0:
+            sample = f'{i7.seq}+{i5.seq}'
+
+        elif len(consistent_with_both) == 1:
+            sample = next(iter(consistent_with_both))
+            if sample == 'unknown':
+                sample = f'{i7.seq}+{i5.seq}'
+
+        else:
+            print(i7.seq, i5.seq, consistent_with_both)
+            raise ValueError
+            
+        counts[sample] += 1
+                    
+        if sample in sample_to_fh:
+            sample_to_fh[sample].write(str(payload_read))
+            
+    for fh in sample_to_fh.values():
+        fh.close()      
+
+    index_counts_fn = data_dir / 'index_counts.txt'
+    pd.Series(counts).sort_values(ascending=False).to_csv(index_counts_fn, header=None)
+
+def demux_PE(base_dir, batch):
+    data_dir = base_dir  / 'data' / batch
+
+    sample_sheet_fn = data_dir / 'sample_sheet.csv'
+    sample_sheet = pd.read_csv(sample_sheet_fn, index_col='sample_name')
+
+    fns = {which: data_dir / f'{which}.fastq.gz' for which in ['R1', 'R2', 'i7', 'i5']}
+    reads = {k: hits.fastq.reads(v) for k, v in fns.items()} 
+
+    counts = Counter()
+
+    resolvers = {k: hits.utilities.get_one_mismatch_resolver(sample_sheet[k]).get for k in ['i7', 'i5']}
+
+    sample_to_fhs = {
+        sample_name: {
+            which: gzip.open(data_dir / sample_sheet.loc[sample_name, f'{which}_fn'], 'wt', compresslevel=1)
+            for which in ['R1', 'R2']
+        } for sample_name in sample_sheet.index
+    }
+
+    quartets = zip(reads['R1'], reads['R2'], reads['i7'], reads['i5'])
+    quartets = itertools.islice(quartets, int(1e6))
+    for R1, R2, i7, i5 in progress(quartets):
+        i7_samples = resolvers['i7'](i7.seq, {'unknown'})
+        i5_samples = resolvers['i5'](i5.seq, {'unknown'})
+        
+        consistent_with_both = i7_samples & i5_samples
+
+        if len(consistent_with_both) == 0:
+            sample = f'{i7.seq}+{i5.seq}'
+
+        elif len(consistent_with_both) == 1:
+            sample = next(iter(consistent_with_both))
+            if sample == 'unknown':
+                sample = f'{i7.seq}+{i5.seq}'
+
+        else:
+            print(i7.seq, i5.seq, consistent_with_both)
+            raise ValueError
+            
+        counts[sample] += 1
+                    
+        if sample in sample_to_fhs:
+            sample_to_fhs[sample]['R1'].write(str(R1))
+            sample_to_fhs[sample]['R2'].write(str(R2))
+            
+    for fhs in sample_to_fhs.values():
+        for fh in fhs.values():
+            fh.close()      
+
+    index_counts_fn = data_dir / 'index_counts.txt'
+    pd.Series(counts).sort_values(ascending=False).to_csv(index_counts_fn, header=None)
