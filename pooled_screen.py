@@ -80,6 +80,7 @@ class SingleGuideExperiment(experiment.Experiment):
         self.read_types = [
             'collapsed_R2',
             'collapsed_uncommon_R2',
+            'low_quality_R2',
         ]
 
         self.supplemental_index_names = [
@@ -805,16 +806,28 @@ class SingleGuideNoUMIExperiment(SingleGuideExperiment):
         super().__init__(*args, **kwargs)
 
         self.outcome_fn_keys = ['outcome_list']
-    
+
     @property
     def final_Outcome(self):
         return coherence.gDNA_Outcome
 
     def merge_read_chunks(self):
-        with gzip.open(self.fns_by_read_type['fastq']['collapsed_R2'], 'wt', compresslevel=1) as combined_fh:
+        # Since chunks are deleted after being merged, if they aren't there, assume merging has
+        # already been done.
+        if not self.fns['chunks'].exists():
+            return
+
+        with gzip.open(self.fns_by_read_type['fastq']['collapsed_R2'], 'wt', compresslevel=1) as combined_fh, \
+             gzip.open(self.fns_by_read_type['fastq']['low_quality_R2'], 'wt', compresslevel=1) as low_quality_fh:
+
             for read in self.reads:
                 if read.Q30_fraction > 0.6:
                     combined_fh.write(str(read))
+                else:
+                    low_quality_fh.write(str(read))
+
+        # To minimize resouce usage, delete chunks after merging them.
+        shutil.rmtree(str(self.fns['chunks']))
 
     @memoized_property
     def filtered_cell_outcomes(self):
