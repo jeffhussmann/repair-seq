@@ -26,6 +26,7 @@ class GuideLibrary:
             'protospacers': self.full_dir / 'protospacers.fasta',
             'protospacer_mappings_dir': self.full_dir / 'protospacers',
             'protospacer_mappings_STAR_prefix': self.full_dir / 'protospacers' / 'mappings.',
+            'perturbseq_STAR_index': self.full_dir / 'perturbseq_STAR_index',
         }
 
     @memoized_property
@@ -74,6 +75,12 @@ class GuideLibrary:
             for name, seq in self.guides_df['protospacer'].items():
                 # Remove initial G from seq.
                 record = fasta.Record(name, seq[1:])
+                fh.write(str(record))
+
+    def make_guides_fasta(self):
+        with open(self.fns['guides_fasta'], 'w') as fh:
+            for name, seq in self.guides_df['full_seq'].items():
+                record = fasta.Record(name, seq)
                 fh.write(str(record))
 
     def map_protospacers(self):
