@@ -1319,15 +1319,18 @@ class PooledScreen:
     def canonical_outcomes(self):
         return self.outcomes_with_N_expected_in_quantile(15, 0.25)
 
-    @memoized_with_key
-    def active_guides_above_multiple_of_max_nt(self, multiple):
-        chi_squared = self.chi_squared_per_guide(relevant_outcomes=self.canonical_outcomes, exclude_unedited=True)
+    def active_guides_above_multiple_of_max_nt(self, relevant_outcomes, multiple):
+        chi_squared = self.chi_squared_per_guide(relevant_outcomes=relevant_outcomes, exclude_unedited=True)
         max_nt = chi_squared.loc[self.variable_guide_library.non_targeting_guides].max()
         return chi_squared[chi_squared > multiple * max_nt].index.values
 
+    def top_n_active_guides(self, relevant_outcomes, n):
+        chi_squared = self.chi_squared_per_guide(relevant_outcomes=relevant_outcomes, only_best_promoter=True, exclude_unedited=True)
+        return chi_squared.sort_values(ascending=False).iloc[:n].index.values
+
     @memoized_property
     def canonical_active_guides(self):
-        return self.active_guides_above_multiple_of_max_nt(2)
+        return self.active_guides_above_multiple_of_max_nt(self.canonical_outcomes, 2)
 
     @memoized_property
     def high_frequency_outcome_counts(self):
@@ -1404,21 +1407,27 @@ class PooledScreen:
         return pairs
 
     @memoized_with_key
-    def UMI_counts(self, guide_status):
+    def UMI_counts_full_arguments(self, guide_status):
         return self.outcome_counts(guide_status).sum()
+
+    @memoized_property
+    def UMI_counts(self):
+        return self.UMI_counts_full_arguments('perfect')['none']
     
     @memoized_with_key
     def outcome_fractions(self, guide_status):
-        per_guide_fractions = self.outcome_counts(guide_status) / self.UMI_counts(guide_status)
+        per_guide_fractions = self.outcome_counts(guide_status) / self.UMI_counts_full_arguments(guide_status)
         
-        all_nt_fractions = [self.non_targeting_fractions(guide_status, fixed_guide) for fixed_guide in list(self.fixed_guides) + [ALL_NON_TARGETING]]
+        all_nt_fractions = [self.non_targeting_fractions_full_arguments(guide_status, fixed_guide) for fixed_guide in list(self.fixed_guides) + [ALL_NON_TARGETING]]
+
         return pd.concat([per_guide_fractions] + all_nt_fractions, axis=1)
     
     @memoized_with_key
     def non_targeting_outcomes(self, fixed_guide):
         guide_outcomes = {}
         for nt_guide in self.variable_guide_library.non_targeting_guides:
-            exp = SingleGuideExperiment(self.base_dir, self.group, fixed_guide, nt_guide)
+            exp = self.Experiment(self.base_dir, self.group, fixed_guide, nt_guide)
+
             fn = exp.fns['filtered_cell_outcomes']
 
             outcomes = [coherence.Pooled_UMI_Outcome.from_line(line) for line in fn.open()]
@@ -1508,11 +1517,15 @@ class PooledScreen:
         return counts.sum(axis='columns').sort_values(ascending=False)
 
     @memoized_with_key
-    def non_targeting_fractions(self, guide_status, fixed_guide):
+    def non_targeting_fractions_full_arguments(self, guide_status, fixed_guide):
         counts = self.non_targeting_counts(guide_status, fixed_guide)
         fractions = counts / counts.sum()
         fractions.name = (fixed_guide, ALL_NON_TARGETING)
         return fractions
+
+    @memoized_property
+    def non_targeting_fractions(self):
+        return self.non_targeting_fractions_full_arguments('perfect', 'none')
 
     @memoized_with_key
     def most_frequent_outcomes(self, fixed_guide):
@@ -1549,10 +1562,18 @@ class PooledScreen:
         return fractions.div(denominator, axis=0)
 
     @memoized_with_key
-    def log2_fold_changes(self, guide_status, fixed_guide):
+    def log2_fold_changes_full_arguments(self, guide_status, fixed_guide):
         fc = self.fold_changes(guide_status, fixed_guide)
         fc = fc.fillna(2**5).replace(0, 2**-5)
         return np.log2(fc)
+
+    @memoized_property
+    def log2_fold_changes(self):
+        return self.log2_fold_changes_full_arguments('perfect', 'none')['none']
+
+    @memoized_property
+    def canonical_log2_fold_changes(self):
+        return self.log2_fold_changes.loc[self.canonical_outcomes, self.canonical_active_guides]
     
     def log2_fold_changes_multiple_outcomes(self, outcomes, fixed_guide='none', guide_status='perfect'):
         fractions = self.outcome_fractions(guide_status)[fixed_guide].loc[outcomes].sum(axis=0)
@@ -1899,7 +1920,12 @@ class PooledScreen:
 
         return reads_per_UMI
 
-    def chi_squared_per_guide(self, relevant_outcomes=None, fixed_guide='none', exclude_unedited=True):
+    def chi_squared_per_guide(self,
+                              relevant_outcomes=None,
+                              fixed_guide='none',
+                              exclude_unedited=True,
+                              only_best_promoter=False,
+                             ):
         if relevant_outcomes is None:
             relevant_outcomes = 50
         if isinstance(relevant_outcomes, int):
@@ -1922,7 +1948,12 @@ class PooledScreen:
         nt_fractions = nt_totals / nt_totals.sum()
         expected = pd.DataFrame(np.outer(nt_fractions, UMI_counts), index=counts.index, columns=nonzero_guides)
         difference = counts - expected
-        return (difference**2 / expected).sum().sort_values(ascending=False)
+        chi_squared = (difference**2 / expected).sum()
+        
+        if only_best_promoter:
+            chi_squared = chi_squared[self.variable_guide_library.guides_df['best_promoter']]
+
+        return chi_squared.sort_values(ascending=False)
 
     def explore(self, **kwargs):
         return explore(self.base_dir, self.group, **kwargs)
