@@ -4,12 +4,11 @@ import argparse
 import os.path
 from pathlib import Path
 
-import pandas as pd
 import Bio.SeqIO
 import tqdm
 
 from knock_knock import target_info
-from hits import fasta, mapping_tools, utilities
+from hits import utilities
 from ddr.guide_library import GuideLibrary
 
 def build_guide_specific_target(original_target,
@@ -73,7 +72,8 @@ def build_doubles_guide_specific_target(original_target,
     new_dir = original_target.dir.parent / new_name
     new_dir.mkdir(exist_ok=True)
 
-    gb_fn = original_target.dir / f'{original_target.name}.gb'
+    original_genbank_name = 'doubles_vector'
+    gb_fn = original_target.dir / f'{original_genbank_name}.gb'
     gb = Bio.SeqIO.read(str(gb_fn), 'genbank')
 
     fixed_ps = original_target.features[original_target.name, 'fixed_protospacer']
@@ -85,18 +85,32 @@ def build_doubles_guide_specific_target(original_target,
     gb.seq = gb.seq[:variable_ps.start] + variable_ps_seq + gb.seq[variable_ps.end + 1:]
 
     guide_bc_start = original_target.features[original_target.name, 'fixed_guide_barcode'].start
-    guide_bc_end = original_target.features[original_target.name, 'sequencing_start'].end
+    guide_bc_end = original_target.features[original_target.name, 'fixed_guide_barcode'].end
+
+    # guide barcode sequence in library df is on the reverse strand
+
     fixed_bc_seq_rc = fixed_guide_library.guides_df.loc[fixed_guide, 'guide_barcode']
     fixed_bc_seq = utilities.reverse_complement(fixed_bc_seq_rc)
     gb.seq = gb.seq[:guide_bc_start] + fixed_bc_seq + gb.seq[guide_bc_end + 1:]
 
-    Bio.SeqIO.write(gb, str(new_dir / f'{original_target.name}.gb'), 'genbank')
+    new_gb_fn = new_dir / f'{original_genbank_name}.gb'
+    if new_gb_fn.exists():
+        new_gb_fn.unlink() 
+    Bio.SeqIO.write(gb, str(new_gb_fn), 'genbank')
 
-    for fn in ['phiX.gb', 'donors.gb', 'manifest.yaml']:
-        try:
-            (new_dir / fn).symlink_to(original_target.dir / fn)
-        except FileExistsError:
-            pass
+    fns_to_copy = [f'{source}.gb' for source in original_target.sources if source != original_genbank_name]
+    fns_to_copy.append('manifest.yaml')
+
+    relative_original_dir = Path(os.path.relpath(original_target.dir, new_dir))
+
+    for fn in fns_to_copy:
+        new_fn = new_dir / fn
+        old_fn = relative_original_dir / fn
+
+        if new_fn.exists() or new_fn.is_symlink():
+            new_fn.unlink()
+
+        new_fn.symlink_to(old_fn)
 
     new_ti = target_info.TargetInfo(original_target.base_dir, new_name)
 
@@ -137,7 +151,7 @@ def build_all_singles(base_dir, original_target_name, original_genbank_name, gui
     #for args in args_list:
     #    build_guide_specific_target(*args)
 
-def build_all_doubles(base_dir):
+def build_all_doubles(base_dir, fixed_guide_library_name, variable_guide_library_name):
     warnings.simplefilter('ignore')
 
     original_target = target_info.TargetInfo(base_dir, 'doubles_vector')
@@ -147,8 +161,8 @@ def build_all_doubles(base_dir):
 
     args_list = []
 
-    fixed_guide_library = GuideLibrary(base_dir, 'DDR_skinny')
-    variable_guide_library = GuideLibrary(base_dir, 'DDR_sublibrary')
+    fixed_guide_library = GuideLibrary(base_dir, fixed_guide_library_name)
+    variable_guide_library = GuideLibrary(base_dir, variable_guide_library_name)
 
     manager = multiprocessing.Manager()
     tasks_done_queue = manager.Queue()
@@ -178,7 +192,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     if args.vector == 'PE_singles':
-        original_target = 'pPC1000_G6C_15'
+        original_target = 'pPC1000_1044'
         original_genbank_name = 'ppc1000'
         guide_library_names = ['DDR_library']
         build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)
@@ -190,8 +204,9 @@ if __name__ == '__main__':
             'DDR_library',
             'DDR_sublibrary',
             'DDR_microlibrary',
+            'MRE11_pool',
         ]
         build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)
 
     elif args.vector == 'doubles':
-        build_all_doubles(args.base_dir)
+        build_all_doubles(args.base_dir, 'MRN_MMR_fixed', 'MRN_MMR_variable')
