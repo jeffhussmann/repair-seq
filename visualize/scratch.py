@@ -206,6 +206,8 @@ def scatter_and_pc(pool,
                    avoid_overlapping_labels=False,
                    pn_to_name=None,
                    column_order=None,
+                   legend=True,
+                   draw_labels=True,
                   ):
     data = results['full_df'].xs('log2_fold_change', axis=1, level=1).copy()
     if column_order is not None:
@@ -227,6 +229,7 @@ def scatter_and_pc(pool,
                          lims=lims,
                          text_labels=['right'],
                          pn_to_name=pn_to_name,
+                         #legend=legend,
                         )
 
     #parallel_coordinates_genes(results['genes_df'], pc_ax,
@@ -250,6 +253,7 @@ def scatter_and_pc(pool,
             avoid_overlapping_labels=avoid_overlapping_labels,
             lims=lims,
             pn_to_name=pn_to_name,
+            draw_labels=draw_labels,
            )
 
     fig_transform = pc_ax.figure.transFigure
@@ -301,6 +305,7 @@ def scatter(data, ax, x_column, y_column,
             lims=(-4, 2),
             avoid_overlapping_labels=True,
             pn_to_name=None,
+            draw_labels=True,
            ):
 
     data = data.copy()
@@ -331,25 +336,26 @@ def scatter(data, ax, x_column, y_column,
     ax.set_xlabel(x_label + '\nlog2 fold change', size=12)
     ax.set_ylabel(y_label + '\nlog2 fold change', size=12)
     
-    ax.annotate('non-targeting guides',
-                xy=(0, 0),
-                xycoords='data',
-                xytext=(20, 10),
-                textcoords='offset points',
-                ha='left',
-                va='bottom',
-                color='C0',
-                size=10,
-               )
+    if draw_labels:
+        ax.annotate('non-targeting guides',
+                    xy=(0, 0),
+                    xycoords='data',
+                    xytext=(20, 10),
+                    textcoords='offset points',
+                    ha='left',
+                    va='bottom',
+                    color='C0',
+                    size=10,
+                )
 
-    hits.visualize.label_scatter_plot(ax, x_column, y_column, 'guide',
-                                      data=data.loc[guides_to_label],
-                                      text_kwargs={'size': 10},
-                                      initial_distance=20,
-                                      color='color',
-                                      avoid=avoid_overlapping_labels,
-                                      avoid_existing=avoid_overlapping_labels,
-                                     )
+        hits.visualize.label_scatter_plot(ax, x_column, y_column, 'guide',
+                                        data=data.loc[guides_to_label],
+                                        text_kwargs={'size': 10},
+                                        initial_distance=20,
+                                        color='color',
+                                        avoid=avoid_overlapping_labels,
+                                        avoid_existing=avoid_overlapping_labels,
+                                        )
 
 def parallel_coordinates(data, ax,
                          guides_to_label,
@@ -358,8 +364,15 @@ def parallel_coordinates(data, ax,
                          lims=(-4, 2),
                          text_labels=None,
                          pn_to_name=None,
+                         legend=((-0.35, 1), 'upper right'),
+                         y_label='log2 fold-change from all non-targeting',
+                         xs=None,
+                         markersize=8,
                         ):
     guide_to_kwargs = {}
+
+    if xs is None:
+        xs = np.arange(len(data.columns))
 
     if text_labels is None:
         text_labels = []
@@ -373,7 +386,7 @@ def parallel_coordinates(data, ax,
         for guide_i, guide in enumerate(guides):
             guide_to_kwargs[guide] = dict(color=guide_to_color[guide],
                                           marker='.',
-                                          markersize=8,
+                                          markersize=markersize,
                                           alpha=0.8,
                                           linewidth=2.5,
                                           label=f'{gene} guides' if guide_i == 0 else '',
@@ -392,7 +405,7 @@ def parallel_coordinates(data, ax,
         if kwargs is None:
             continue
         
-        ax.plot(row.values, **kwargs)
+        ax.plot(xs, row.values, **kwargs)
 
         if guide_to_gene[guide] != 'negative_control':
             if 'right' in text_labels:
@@ -407,14 +420,14 @@ def parallel_coordinates(data, ax,
                             size=6,
                 )
 
+    if legend is not None:
+        ax.legend(bbox_to_anchor=legend[0],
+                loc=legend[1],
+                )
         
-    ax.legend(bbox_to_anchor=(-0.35, 1),
-              loc='upper right',
-             )
-        
-    ax.set_ylabel('log2 fold-change from all non-targeting', size=12)
+    ax.set_ylabel(y_label, size=12)
 
-    ax.set_xticks(np.arange(len(data.columns)))
+    ax.set_xticks(xs)
     labels = []
     for n in data.columns:
         pn, outcome = n.rsplit('_', 1)
@@ -426,7 +439,7 @@ def parallel_coordinates(data, ax,
     ax.set_ylim(*lims)
 
     all_axs = [ax]
-    for x in range(1, len(data.columns)):
+    for x in xs[1:]:
         other_ax = ax.twinx()
 
         other_ax.spines['left'].set_position(('data', x))
@@ -440,6 +453,9 @@ def parallel_coordinates(data, ax,
         for side in ['right', 'top', 'bottom']:
             ax.spines[side].set_visible(False)
         ax.tick_params(axis='x', length=0)
+
+    x_extent = xs[-1] - xs[0]
+    #ax.set_xlim(xs[0] - x_extent * 0.05, xs[1] + x_extent * 0.05)
         
 def parallel_coordinates_genes(data, ax,
                          gene_to_color,
@@ -518,7 +534,7 @@ def parallel_coordinates_genes(data, ax,
             ax.spines[side].set_visible(False)
         ax.tick_params(axis='x', length=0)
 
-def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name):
+def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_labels=True):
     ax.set_autoscale_on(False)
     ax.set_xticklabels([])
 
@@ -579,13 +595,14 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name):
             for bp_x in bp_xs:
                 ax.plot([bp_x, bp_x], [top_strand_y, bottom_strand_y], alpha=0.5, solid_capstyle='butt', **common_kwargs)
                 
-        ax.annotate(pn_to_name[pn],
-                    xy=(x, label_y),
-                    xycoords=('data', 'axes fraction'),
-                    ha='left',
-                    va='bottom',
-                    rotation=45,
-                )
+        if show_text_labels:
+            ax.annotate(pn_to_name[pn],
+                        xy=(x, label_y),
+                        xycoords=('data', 'axes fraction'),
+                        ha='left',
+                        va='bottom',
+                        rotation=45,
+                    )
         
         ax.annotate(pools[pn].target_info.sgRNA,
                     xy=(x, sgRNA_y),

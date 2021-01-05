@@ -47,6 +47,10 @@ def outcome(outcome,
     if guide_aliases is None:
         guide_aliases = {}
 
+    if gene_to_color is None:
+        gene_to_color = {}
+    gene_to_color = dict(gene_to_color)
+
     if big_labels:
         axis_label_size = 18
         tick_label_size = 14
@@ -141,6 +145,7 @@ def outcome(outcome,
 
     df['fixed_gene'] = [pool.fixed_guide_library.guide_to_gene[f_g] for f_g, v_g in df.index.values]
     df['variable_gene'] = [pool.variable_guide_library.guide_to_gene[v_g] for f_g, v_g in df.index.values]
+    df['variable_guide_best_promoter'] = [pool.variable_guide_library.guides_df.loc[v_g, 'best_promoter'] for f_g, v_g in df.index.values]
 
     if guide_subset is None:
         guide_subset = df.index
@@ -154,7 +159,7 @@ def outcome(outcome,
 
         return guide
 
-    if isinstance(df.index, pd.core.index.MultiIndex):
+    if isinstance(df.index, pd.MultiIndex):
         if np.array_equal(pool.fixed_guide_library.guides, ['none']):
             df['alias'] = [convert_alias(v) for f, v in df.index]
         else:
@@ -203,9 +208,10 @@ def outcome(outcome,
 
     if gene_to_color is not None:
         for gene, color in gene_to_color.items():
-            # TODO: best promoter?
-            gene_guides = df.query('fixed_gene == @gene or variable_gene == @gene').index
-            #gene_guides = df.query('fixed_gene == @gene').index
+            query = '(fixed_gene == @gene or variable_gene == @gene)'
+            if only_best_promoter:
+                query += ' and variable_guide_best_promoter'
+            gene_guides = df.query(query).index
             df.loc[gene_guides, 'color'] = color
             df.loc[gene_guides, 'label_color'] = color
 
@@ -296,7 +302,7 @@ def outcome(outcome,
         if quantity_to_axis['num_cells'] == 'x':
             line_func = marg_axs['num_cells'].axvline
             annotate_kwargs = dict(
-                s=f'median = {median_UMIs:,} cells / guide',
+                text=f'median = {median_UMIs:,} cells / guide',
                 xy=(median_UMIs, 1.1),
                 xycoords=('data', 'axes fraction'),
                 xytext=(3, 0),
@@ -307,7 +313,7 @@ def outcome(outcome,
         else:
             line_func = marg_axs['num_cells'].axhline
             annotate_kwargs = dict(
-                s=f'median = {median_UMIs:,}\ncells / guide',
+                text=f'median = {median_UMIs:,}\ncells / guide',
                 xy=(1, median_UMIs),
                 xycoords=('axes fraction', 'data'),
                 xytext=(-5, 5),
@@ -491,14 +497,18 @@ def outcome(outcome,
                       )
 
     if gene_to_color is not None:
+        query = '(fixed_gene in @gene_to_color or variable_gene in @gene_to_color)'
+        if only_best_promoter:
+            query += ' and variable_guide_best_promoter'
+
         g.ax_joint.scatter(x=axis_to_quantity['x'],
                         y=axis_to_quantity['y'],
-                        data=df.query('fixed_gene in @gene_to_color'),
+                        data=df.query(query),
                         s=25,
                         alpha=0.9,
                         color='color',
                         linewidths=(0,),
-                        zorder=3,
+                        zorder=10,
                         )
 
         legend_elements = [Line2D([0], [0], marker='o', color=color, label=f'{gene} fixed guide', linestyle='none') for gene, color in gene_to_color.items()]
@@ -588,7 +598,10 @@ def outcome(outcome,
         if guides_to_label is not None:
             to_label = df[df.index.isin(guides_to_label)]
         elif genes_to_label is not None:
-            to_label = df.query('variable_gene in @genes_to_label')
+            query = '(fixed_gene in @genes_to_label or variable_gene in @genes_to_label)'
+            if only_best_promoter:
+                query += ' and variable_guide_best_promoter'
+            to_label = df.query(query)
 
         to_label = to_label.query(f'{fraction_key} >= @fraction_min and {fraction_key} <= @fraction_max')
 

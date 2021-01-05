@@ -66,6 +66,7 @@ def genes(pool, outcomes, gene_sets, interesting_genes,
           ax=None,
           color_labels=True,
           min_x=None,
+          label_size=10,
          ):
     guides_df, nt_fraction, genes_df = ddr.visualize.gene_significance.get_outcome_statistics(pool, outcomes, denominator_outcomes=denominator_outcomes)
 
@@ -138,7 +139,7 @@ def genes(pool, outcomes, gene_sets, interesting_genes,
 
     hits.visualize.label_scatter_plot(ax, x_column, y_column, 'gene',
                                       data=data.loc[genes_to_label],
-                                      text_kwargs={'size': 10},
+                                      text_kwargs={'size': label_size},
                                       initial_distance=5,
                                       distance_increment=10,
                                       color='color' if color_labels else 'black',

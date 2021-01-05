@@ -1,11 +1,17 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 import hits.utilities
 import hits.visualize
+
 from knock_knock.target_info import degenerate_indel_from_string, SNV, SNVs, effectors
-from ddr.outcome import *
+from knock_knock.outcome import *
+
+import ddr.visualize
+import ddr.visualize.heatmap
 
 def plot(outcome_order,
          target_info,
@@ -16,8 +22,11 @@ def plot(outcome_order,
          flip_if_reverse=True,
          center_at_PAM=False,
          draw_cut_afters=True,
-         size_multiple=0.8,
+         size_multiple=None,
+         inches_per_nt=0.12,
+         inches_per_outcome=0.25,
          draw_all_sequence=False,
+         draw_perfect_MH=True,
          draw_imperfect_MH=False,
          draw_wild_type_on_top=False,
          draw_donor_on_top=False,
@@ -25,10 +34,18 @@ def plot(outcome_order,
          fixed_guide='none',
          features_to_draw=None,
          replacement_text_for_complex=None,
-         protospacer_color='blue',
+         protospacer_color=hits.visualize.apply_alpha('blue', 0.3),
+         PAM_color=hits.visualize.apply_alpha('green', 0.3),
+         cut_color=hits.visualize.apply_alpha('black', 0.5),
          preserve_x_lims=False,
          shift_x=0,
+         block_alpha=0.1,
         ):
+
+    if size_multiple is not None:
+        width_multiple = size_multiple
+        height_multiple = size_multiple
+
     if isinstance(window, int):
         window_left, window_right = -window, window
     else:
@@ -37,7 +54,7 @@ def plot(outcome_order,
     if features_to_draw is None:
         features_to_draw = []
 
-    window_size = window_right - window_left
+    window_size = window_right - window_left + 1
 
     if num_outcomes is None:
         num_outcomes = len(outcome_order)
@@ -45,9 +62,14 @@ def plot(outcome_order,
     outcome_order = outcome_order[:num_outcomes]
 
     if ax is None:
-        fig, ax = plt.subplots(figsize=(size_multiple * 20 * window_size / 140, size_multiple * num_outcomes / 3))
+        fig, ax = plt.subplots(figsize=(inches_per_nt * window_size, inches_per_outcome * num_outcomes))
     else:
         fig = ax.figure
+
+    if isinstance(draw_all_sequence, float):
+        sequence_alpha = draw_all_sequence
+    else:
+        sequence_alpha = 0.1
 
     guide = target_info.features[target_info.target, target_info.primary_sgRNA]
 
@@ -80,7 +102,7 @@ def plot(outcome_order,
             else:
                 ys = [-0.5, num_outcomes - 0.5]
 
-            ax.plot([x, x], ys, color='black', linestyle='--', alpha=0.5, clip_on=False)
+            ax.plot([x, x], ys, color=cut_color, linestyle='--', clip_on=False)
     
     if flip:
         window_left, window_right = -window_right, -window_left
@@ -111,7 +133,6 @@ def plot(outcome_order,
                            )
         ax.add_patch(patch)
 
-    block_alpha = 0.1
     wt_height = 0.6
 
     #for feature_name in ['gDNA_reverse_primer']:
@@ -140,7 +161,7 @@ def plot(outcome_order,
         xs_to_skip = set()
 
         starts = np.array(deletion.starts_ats) - offset
-        if draw_MH and len(starts) > 1:
+        if draw_MH and draw_perfect_MH and len(starts) > 1:
             for x, b in zip(range(window_left, window_right + 1), seq):
                 if (starts[0] <= x < starts[-1]) or (starts[0] + deletion.length <= x < starts[-1] + deletion.length):
                     ax.annotate(transform_seq(b),
@@ -185,6 +206,9 @@ def plot(outcome_order,
         
         del_start = starts[0] - 0.5
         del_end = starts[0] + deletion.length - 1 + 0.5
+
+        for x in range(starts[0], starts[0] + deletion.length):
+            xs_to_skip.add(x)
         
         draw_rect(del_start, del_end, y - del_height / 2, y + del_height / 2, 0.4, color=color)
         draw_rect(window_left - 0.5, del_start, y - wt_height / 2, y + wt_height / 2, block_alpha)
@@ -216,26 +240,30 @@ def plot(outcome_order,
                             )
             
     def draw_wild_type(y, on_top=False, guides_to_draw=None):
-        if guides_to_draw is None:
-            guides_to_draw = [target_info.primary_sgRNA]
 
-        for guide_name in guides_to_draw:
-            PAM_start = target_info.PAM_slices[guide_name].start - 0.5 - offset
-            PAM_end = target_info.PAM_slices[guide_name].stop + 0.5 - 1 - offset
+        if on_top or not draw_wild_type_on_top:
+            draw_sequence(y, alpha=1)
+            if guides_to_draw is None:
+                guides_to_draw = [target_info.primary_sgRNA]
 
-            guide = target_info.features[target_info.target, guide_name]
-            guide_start = guide.start - 0.5 - offset
-            guide_end = guide.end + 0.5 - offset
+            for guide_name in guides_to_draw:
+                PAM_start = target_info.PAM_slices[guide_name].start - 0.5 - offset
+                PAM_end = target_info.PAM_slices[guide_name].stop + 0.5 - 1 - offset
 
-            draw_rect(guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, 0.3, color=protospacer_color)
-            draw_rect(PAM_start, PAM_end, y - wt_height / 2, y + wt_height / 2, 0.3, color='green')
+                guide = target_info.features[target_info.target, guide_name]
+                guide_start = guide.start - 0.5 - offset
+                guide_end = guide.end + 0.5 - offset
 
-        if not on_top:
-            # Draw grey blocks. Needs to be updated to support multiple sgRNAs.
-            draw_rect(window_left - 0.5, min(PAM_start, guide_start), y - wt_height / 2, y + wt_height / 2, block_alpha)
-            draw_rect(max(PAM_end, guide_end), window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+                draw_rect(guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, None, color=protospacer_color)
+                draw_rect(PAM_start, PAM_end, y - wt_height / 2, y + wt_height / 2, None, color=PAM_color)
 
-        draw_sequence(y, alpha=1)
+            if not on_top:
+                # Draw grey blocks. Needs to be updated to support multiple sgRNAs.
+                draw_rect(window_left - 0.5, min(PAM_start, guide_start), y - wt_height / 2, y + wt_height / 2, block_alpha)
+                draw_rect(max(PAM_end, guide_end), window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+
+        else:
+            draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
 
     def draw_donor(y, HDR_outcome, deletion_outcome, insertion_outcome, on_top=False):
         SNP_ps = sorted(p for (s, p), b in target_info.fingerprints[target_info.target])
@@ -315,7 +343,7 @@ def plot(outcome_order,
             draw_insertion(y, insertion_outcome.insertion)
 
         if draw_all_sequence:
-            draw_sequence(y, xs_to_skip=SNP_xs)
+            draw_sequence(y, xs_to_skip=SNP_xs, alpha=sequence_alpha)
 
         if on_top:
             strands = set(SNV['strand'] for SNV in target_info.donor_SNVs['donor'].values())
@@ -344,25 +372,25 @@ def plot(outcome_order,
     for i, (category, subcategory, details) in enumerate(outcome_order):
         y = num_outcomes - i - 1
             
-        if category == 'deletion':
+        if category == 'deletion' or (category == 'simple indel' and subcategory.startswith('deletion')):
             deletion = DeletionOutcome.from_string(details).undo_anchor_shift(target_info.anchor).deletion
+            deletion = target_info.expand_degenerate_indel(deletion)
+
             xs_to_skip = draw_deletion(y, deletion)
             if draw_all_sequence:
-                draw_sequence(y, xs_to_skip)
+                draw_sequence(y, xs_to_skip, alpha=sequence_alpha)
         
-        elif category == 'insertion':
+        elif category == 'insertion' or (category == 'simple indel' and subcategory.startswith('insertion')):
             insertion = InsertionOutcome.from_string(details).undo_anchor_shift(target_info.anchor).insertion
+            insertion = target_info.expand_degenerate_indel(insertion)
 
             draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
             draw_insertion(y, insertion)
 
             if draw_all_sequence:
-                draw_sequence(y)
+                draw_sequence(y, alpha=sequence_alpha)
                 
-        elif category == 'wild type':
-            draw_wild_type(y)
-
-        elif category == 'mismatches':
+        elif category == 'mismatches' or (category == 'wild type' and subcategory == 'mismatches'):
             SNV_xs = set()
             draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
             snvs = SNVs.from_string(details) 
@@ -390,9 +418,12 @@ def plot(outcome_order,
                 draw_rect(position - offset - 0.5, position - offset + 0.5, y - wt_height / 2, y + wt_height / 2, alpha, color=color)
 
             if draw_all_sequence:
-                draw_sequence(y, xs_to_skip=SNV_xs)
+                draw_sequence(y, xs_to_skip=SNV_xs, alpha=sequence_alpha)
 
-        elif category == 'deletion + adjacent mismatch':
+        elif category == 'wild type' or category == 'WT':
+            draw_wild_type(y)
+
+        elif category == 'deletion + adjacent mismatch' or category == 'deletion + mismatches':
             outcome = DeletionPlusMismatchOutcome.from_string(details).undo_anchor_shift(target_info.anchor)
             xs_to_skip = draw_deletion(y, outcome.deletion_outcome.deletion, draw_MH=True)
             
@@ -411,13 +442,14 @@ def plot(outcome_order,
                                 weight='bold',
                             )
 
-                # Draw box around mismatch to distinguish from MH.
-                x_buffer = 0.7
-                y_buffer = 0.7
-                draw_rect(x - x_buffer, x + x_buffer, y - y_buffer * wt_height, y + y_buffer * wt_height, 0.5, fill=False)
+                if category == 'deletion + adjacent mismatch':
+                    # Draw box around mismatch to distinguish from MH.
+                    x_buffer = 0.7
+                    y_buffer = 0.7
+                    draw_rect(x - x_buffer, x + x_buffer, y - y_buffer * wt_height, y + y_buffer * wt_height, 0.5, fill=False)
 
             if draw_all_sequence:
-                draw_sequence(y, xs_to_skip)
+                draw_sequence(y, xs_to_skip, alpha=sequence_alpha)
 
         elif category == 'donor' or category == 'donor + deletion' or category == 'donor + insertion':
             if category == 'donor':
@@ -440,7 +472,7 @@ def plot(outcome_order,
             draw_donor(y, HDR_outcome, deletion_outcome, insertion_outcome, False)
             
         else:
-            label = '{}, {}, {}'.format(category, subcategory, details)
+            label = f'{category}, {subcategory}, {details}'
             if replacement_text_for_complex is not None:
                 label = replacement_text_for_complex
             ax.annotate(label,
@@ -590,12 +622,16 @@ def plot_with_frequencies(pool, outcomes, fixed_guide='none', text_only=False, c
     return fig
 
 class DiagramGrid:
-    def __init__(self, outcomes, target_info, diagram_ax=None, **diagram_kwargs):
+    def __init__(self, outcomes, target_info, inches_per_nt=0.12, inches_per_outcome=0.25, diagram_ax=None, title=None, **diagram_kwargs):
 
         self.outcomes = outcomes
         self.target_info = target_info
 
+        self.inches_per_nt = inches_per_nt
+        self.inches_per_outcome = inches_per_outcome
+
         self.fig = None
+        self.title = title
 
         self.ordered_axs = []
 
@@ -603,6 +639,7 @@ class DiagramGrid:
             'diagram': diagram_ax,
         }
 
+        self.ims = []
         self.widths = {}
 
         self.diagram_kwargs = diagram_kwargs
@@ -610,7 +647,33 @@ class DiagramGrid:
         self.plot_diagrams()
 
     def plot_diagrams(self, **diagram_kwargs):
-        self.fig, ax = plot(self.outcomes, self.target_info, ax=self.axs_by_name['diagram'], **self.diagram_kwargs)
+        if isinstance(self.outcomes[0], tuple) and len(self.outcomes[0]) == 3:
+            self.fig, ax = plot(self.outcomes,
+                                self.target_info,
+                                ax=self.axs_by_name['diagram'],
+                                title=self.title,
+                                inches_per_outcome=self.inches_per_outcome,
+                                inches_per_nt=self.inches_per_nt,
+                                **self.diagram_kwargs,
+                               )
+        else:
+            self.fig, ax = plt.subplots(figsize=(3, len(self.outcomes) * 0.4))
+
+            for i, outcome in enumerate(self.outcomes):
+                if isinstance(outcome, tuple):
+                    outcome = ', '.join(outcome)
+
+                ax.annotate(outcome,
+                            xy=(1, len(self.outcomes) - i - 1),
+                            xycoords=('axes fraction', 'data'),
+                            ha='right',
+                            va='center',
+                )
+
+            ax.set_ylim(-0.5, len(self.outcomes) - 0.5)
+
+            ax.axis('off')
+            ax.set_title(self.title)
 
         self.axs_by_name['diagram'] = ax
         self.ordered_axs.append(ax)
@@ -620,17 +683,26 @@ class DiagramGrid:
 
         return self.fig
 
-    def add_ax(self, name, width_multiple=10, gap_multiple=1, title=''):
-        ax_p = self.ordered_axs[-1].get_position()
-
-        x0 = ax_p.x1 + self.width_per_heatmap_cell * gap_multiple
-        y0 = ax_p.y0
+    def add_ax(self, name, width_multiple=10, gap_multiple=1, title='', side='right'):
         width = self.width_per_heatmap_cell * width_multiple
+
+        if side == 'right':
+            ax_p = self.ordered_axs[-1].get_position()
+            x0 = ax_p.x1 + self.width_per_heatmap_cell * gap_multiple
+        else:
+            ax_p = self.ordered_axs[0].get_position()
+            x0 = ax_p.x0 - width - self.width_per_heatmap_cell * gap_multiple
+
         height = ax_p.height
+        y0 = ax_p.y0
 
         ax = self.fig.add_axes((x0, y0, width, height), sharey=self.axs_by_name['diagram'])
         self.axs_by_name[name] = ax
-        self.ordered_axs.append(ax)
+
+        if side == 'right':
+            self.ordered_axs.append(ax)
+        else:
+            self.ordered_axs.insert(0, ax)
 
         ax.set_yticks([])
         ax.xaxis.tick_top()
@@ -643,38 +715,98 @@ class DiagramGrid:
         
         ax.xaxis.set_label_position('top')
 
-        ax.annotate(title,
-                    xy=(0.5, 1),
-                    xycoords='axes fraction',
-                    xytext=(0, 20),
-                    textcoords='offset points',
-                    ha='center',
-                    va='bottom',
-                   )
-        
+        if title != '':
+            ax.annotate(title,
+                        xy=(0.5, 1),
+                        xycoords='axes fraction',
+                        xytext=(0, 20),
+                        textcoords='offset points',
+                        ha='center',
+                        va='bottom',
+                    )
+
         return ax
 
-    def plot_on_ax(self, name, value_source, **plot_kwargs):
-        ys = np.arange(len(self.outcomes) - 1, -1, -1)
-        xs = [value_source.get(outcome, 0) for outcome in self.outcomes]
-        ax = self.axs_by_name[name]
+    def add_ax_above(self, height_multiple=10):
+        ax_p = self.axs_by_name['diagram'].get_position()
+        x0 = ax_p.x0 
+
+        width = ax_p.width
+        height = self.height_per_heatmap_cell * height_multiple
+        
+        y0 = ax_p.y1 + self.height_per_heatmap_cell * 2
+
+        ax = self.fig.add_axes((x0, y0, width, height), sharex=self.axs_by_name['diagram'])
+        self.axs_by_name['above'] = ax
+
+    def plot_on_ax(self, name, value_source, interval_sources=None, transform=None, y_offset=0, interval_alpha=1, **plot_kwargs):
+        # To simplify logic of excluding panels, do nothing if name is not an existing ax.
+        ax = self.axs_by_name.get(name)
+        if ax is None:
+            return
+
+        ys = np.arange(len(self.outcomes) - 1, -1, -1) + y_offset
+
+        if transform is not None:
+            # suppress warnings from log of zeros
+            # Using the warnings context manager doesn't work here, maybe because of pandas multithreading.
+            warnings.filterwarnings('ignore')
+
+            value_source = transform(value_source)
+
+            if interval_sources is not None:
+                interval_sources = {k: transform(v) for k, v in interval_sources.items()}
+
+            warnings.resetwarnings()
+
+        xs = [value_source.get(outcome, np.nan) for outcome in self.outcomes]
 
         ax.plot(xs, ys, **plot_kwargs)
 
-    def style_log10_frequency_ax(self, name):
+        if interval_sources is not None:
+            interval_xs = {
+                side: [interval_sources[side].get(outcome, np.nan) for outcome in self.outcomes]
+                for side in ['lower', 'upper']
+            }
+
+            for y, lower_x, upper_x in zip(ys, interval_xs['lower'], interval_xs['upper']):
+                ax.plot([lower_x, upper_x], [y, y], color=plot_kwargs.get('color'), alpha=interval_alpha)
+
+    def plot_on_ax_above(self, xs, value_source, **kwargs):
+        ax = self.axs_by_name['above']
+
+        ys = [value_source[x] for x in xs]
+
+        ax.plot(xs, ys, **kwargs)
+
+    def style_log10_frequency_ax(self, name, manual_ticks=None):
         ax = self.axs_by_name[name]
 
         x_min, x_max = ax.get_xlim()
 
-        for exponent in [3, 2, 1]:
+        x_ticks = []
+
+        for exponent in [6, 5, 4, 3, 2, 1]:
             xs = np.log10(np.arange(1, 10) * 10**-exponent)        
             for x in xs:
-                if x < x_max:
+                if x_min < x < x_max:
                     ax.axvline(x, color='black', alpha=0.1, clip_on=False)
 
-        x_ticks = [x for x in [1e-3, 5e-3, 1e-2, 5e-2, 1e-1] if x_min <= np.log10(x) <= x_max]
+            if exponent <= 3:
+                multiples = [1, 5]
+            else:
+                multiples = [1]
+
+            for multiple in multiples:
+                x = multiple * 10**-exponent
+                if x_min <= np.log10(x) <= x_max:
+                    x_ticks.append(x)
+
+        if manual_ticks is not None:
+            x_ticks = manual_ticks
+
         ax.set_xticks(np.log10(x_ticks))
-        ax.set_xticklabels([f'{100 * x:g}' for x in x_ticks])
+        ax.set_xticklabels([f'{100 * x:g}' for x in x_ticks], size=8)
 
         for side in ['left', 'right']:
             ax.spines[side].set_visible(False)
@@ -694,14 +826,26 @@ class DiagramGrid:
         width_per_cell = diagram_position.height * 1 / len(self.outcomes) * fig_height_inches / fig_width_inches
         return width_per_cell
 
-    def add_heatmap(self, vals, name, gap_multiple=1, color='black'):
+    @property
+    def height_per_heatmap_cell(self):
+        diagram_position = self.axs_by_name['diagram'].get_position()
+        height_per_cell = diagram_position.height * 1 / len(self.outcomes)
+        return height_per_cell
+
+    def add_heatmap(self, vals, name,
+                    gap_multiple=1,
+                    color='black',
+                    colors=None,
+                    vmin=-2, vmax=2,
+                    cmap=ddr.visualize.fold_changes_cmap,
+                    draw_tick_labels=True,
+                   ):
         ax_to_left = self.ordered_axs[-1]
         ax_to_left_p = ax_to_left.get_position()
 
         num_rows, num_cols = vals.shape
 
         heatmap_height = ax_to_left_p.height
-        #heatmap_width = heatmap_height * num_cols / num_rows * fig_height_inches / fig_width_inches
         heatmap_width = self.width_per_heatmap_cell * num_cols
 
         gap = self.width_per_heatmap_cell * gap_multiple
@@ -710,14 +854,71 @@ class DiagramGrid:
         rect = [heatmap_left, ax_to_left_p.y0, heatmap_width, heatmap_height]
         ax = self.fig.add_axes(rect, sharey=ax_to_left)
 
-        im = ax.imshow(vals, cmap=plt.get_cmap('RdBu_r'), vmin=-2, vmax=2)
+        im = ax.imshow(vals, cmap=cmap, vmin=vmin, vmax=vmax)
+        self.ims.append(im)
         plt.setp(ax.spines.values(), visible=False)
 
-        ax.xaxis.tick_top()
-        ax.set_xticks(np.arange(num_cols))
-        ax.set_xticklabels(vals.columns, rotation=90, color=color)
+        if draw_tick_labels:
+            ax.xaxis.tick_top()
+            ax.set_xticks(np.arange(num_cols))
+            ax.set_xticklabels([])
+
+            tick_labels = vals.columns.values
+            if isinstance(tick_labels[0], tuple):
+                tick_labels = [', '.join(map(str, l)) for l in tick_labels]
+
+            if colors is None:
+                colors = [color for _ in range(len(tick_labels))]
+
+            for x, (label, color) in enumerate(zip(tick_labels, colors)):
+                ax.annotate(label,
+                            xy=(x, 1),
+                            xycoords=('data', 'axes fraction'),
+                            xytext=(0, 8),
+                            textcoords='offset points',
+                            rotation=90,
+                            ha='center',
+                            va='bottom',
+                            color=color,
+                           )
+
+        else:
+            ax.set_xticks([])
 
         self.axs_by_name[name] = ax
         self.ordered_axs.append(ax)
 
         return ax
+
+    def add_colorbar(self, baseline_condition_name='non-targeting', label_interpretation=True):
+        if len(self.ims) == 0:
+            return
+
+        ax_p = self.ordered_axs[-1].get_position()
+        x0 = ax_p.x1 + 3 * self.width_per_heatmap_cell
+        y0 = 0.5
+        width = 5 * self.width_per_heatmap_cell
+        height = 1 * self.height_per_heatmap_cell
+        ddr.visualize.heatmap.add_fold_change_colorbar(self.fig, self.ims[0], x0, y0, width, height,
+                                                       baseline_condition_name=baseline_condition_name,
+                                                       label_interpretation=label_interpretation,
+                                                      )
+
+    def mark_subset(self, outcomes_to_mark, color, title=''):
+        ax = self.add_ax(side='left', name='subset', width_multiple=1)
+        outcomes = list(self.outcomes)
+        # Note weird flipping
+        indices = [len(outcomes) - 1 - outcomes.index(outcome) for outcome in outcomes_to_mark]
+        for idx in indices:
+            ax.plot([0.5, 0.5], [idx - 0.3, idx + 0.3], linewidth=5, color=color)
+
+        ax.axis('off')
+
+        ax.annotate(title,
+                    xy=(0.5, 1),
+                    xycoords='axes fraction',
+                    xytext=(0, 15),
+                    textcoords='offset points',
+                    ha='center',
+                    va='bottom',
+                   )

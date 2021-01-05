@@ -17,7 +17,7 @@ idx = pd.IndexSlice
 
 bokeh.io.output_notebook()
 
-def add_fold_change_colorbar(fig, im, x0, y0, width, height):
+def add_fold_change_colorbar(fig, im, x0, y0, width, height, baseline_condition_name='non-targeting', label_interpretation=True):
     cbar_ax = fig.add_axes((x0, y0, width, height)) 
 
     v_min, v_max = im.get_clim()
@@ -28,29 +28,32 @@ def add_fold_change_colorbar(fig, im, x0, y0, width, height):
     tick_labels[0] = r'$\leq$' + tick_labels[0]
     tick_labels[-1] = r'$\geq$' + tick_labels[-1]
     cbar.set_ticklabels(tick_labels)
-    cbar_ax.xaxis.tick_top()
 
-    cbar_ax.annotate('gene activity\npromotes outcome',
-                     xy=(0, 0),
-                     xycoords='axes fraction',
-                     xytext=(0, -5),
-                     textcoords='offset points',
-                     ha='center',
-                     va='top',
-                     #size=10,
-                    )
+    if label_interpretation:
+        cbar_ax.xaxis.tick_top()
 
-    cbar_ax.annotate('gene activity\nsuppresses outcome',
-                     xy=(1, 0),
-                     xycoords='axes fraction',
-                     xytext=(0, -5),
-                     textcoords='offset points',
-                     ha='center',
-                     va='top',
-                     #size=10,
-                    )
+    if label_interpretation:
+        cbar_ax.annotate('gene activity\npromotes outcome',
+                        xy=(0, 0),
+                        xycoords='axes fraction',
+                        xytext=(0, -5),
+                        textcoords='offset points',
+                        ha='center',
+                        va='top',
+                        #size=10,
+                        )
 
-    cbar_ax.annotate('log2 fold change in\nfrequency from non-targeting',
+        cbar_ax.annotate('gene activity\nsuppresses outcome',
+                        xy=(1, 0),
+                        xycoords='axes fraction',
+                        xytext=(0, -5),
+                        textcoords='offset points',
+                        ha='center',
+                        va='top',
+                        #size=10,
+                        )
+
+    cbar_ax.annotate(f'log2 fold change\nin frequency from\n{baseline_condition_name}',
                      xy=(0.5, 1),
                      xycoords='axes fraction',
                      xytext=(0, 20),
@@ -143,6 +146,7 @@ def genes(pool,
         else:
             ax_order = [
                 'frequency',
+                'log10_frequency',
                 'change',
                 'log2_fold_change' if log_2 else 'fold_change',
             ]
@@ -168,7 +172,7 @@ def genes(pool,
             return p.high_frequency_outcome_fractions[f]
     else:
         def get_log2_fold_changes(p, f=fixed_guide):
-            return p.log2_fold_changes(guide_status, f)[f]
+            return p.log2_fold_changes_full_arguments(guide_status, f)[f]
         def get_outcome_fractions(p, f=fixed_guide):
             return p.outcome_fractions(guide_status)[f]
 
@@ -218,7 +222,7 @@ def genes(pool,
         if use_high_frequency:
             return pool.high_frequency_outcome_fractions[fixed_guide, 'all_non_targeting'].reindex(outcome_order, fill_value=0)
         else:
-            return pool.non_targeting_fractions('all', fixed_guide).reindex(outcome_order, fill_value=0)
+            return pool.non_targeting_fractions_full_arguments('all', fixed_guide).reindex(outcome_order, fill_value=0)
 
     fractions = get_outcome_fractions(pool).reindex(outcome_order, fill_value=0)
     nt_fracs = get_nt_fractions(pool, fixed_guide)
@@ -302,7 +306,7 @@ def genes(pool,
 
                 xs = fractions[guide]
                 if 'log10' in key:
-                    UMIs = pool.UMI_counts(guide_status).loc[fixed_guide, guide]
+                    UMIs = pool.UMI_counts_full_arguments(guide_status).loc[fixed_guide, guide]
                     min_frac = 0.5 / UMIs
                     xs = np.maximum(xs, min_frac)
                     xs = np.log10(xs)
@@ -1177,56 +1181,6 @@ def big_heatmap(pool_list,
 
     return fig
 
-def cluster(pool, outcomes, guides, metric='correlation', method='single', fixed_guide='none', min_UMIs=None):
-    if isinstance(outcomes, int):
-        outcomes = pool.most_frequent_outcomes(fixed_guide)[:outcomes]
-
-    l2_fcs = pool.log2_fold_changes('perfect', fixed_guide)[fixed_guide].loc[outcomes]
-    jitter = np.random.normal(0, 1e-6, l2_fcs.shape)
-    l2_fcs = l2_fcs + jitter
-
-    if isinstance(guides, int):
-        phenotype_strengths = pool.chi_squared_per_guide(outcomes, fixed_guide=fixed_guide)
-        if min_UMIs is not None:
-            UMIs = pool.UMI_counts('perfect').loc[fixed_guide]
-            enough_UMIs = UMIs[UMIs > min_UMIs].index
-            phenotype_strengths = phenotype_strengths[phenotype_strengths.index.isin(enough_UMIs)]
-
-        guides = phenotype_strengths.index[:guides]
-
-    guide_linkage = scipy.cluster.hierarchy.linkage(l2_fcs[guides].T,
-                                                    optimal_ordering=True,
-                                                    metric=metric,
-                                                    method=method,
-                                                   )
-    guide_dendro = scipy.cluster.hierarchy.dendrogram(guide_linkage,
-                                                      no_plot=True,
-                                                      labels=guides,
-                                                     )
-
-    guide_order = guide_dendro['ivl']
-    
-    outcome_linkage = scipy.cluster.hierarchy.linkage(l2_fcs[guides],
-                                                      optimal_ordering=True,
-                                                      metric=metric,
-                                                      method=method,
-                                                     )
-    outcome_dendro = scipy.cluster.hierarchy.dendrogram(outcome_linkage,
-                                                        no_plot=True,
-                                                        labels=outcomes,
-                                                       )
-
-    outcome_order = outcome_dendro['ivl']
-
-    l2_fcs = l2_fcs.loc[outcome_order, guide_order]
-
-    correlations = {
-        'guides': l2_fcs.corr(),
-        'outcomes': l2_fcs.T.corr(),
-    }
-
-    return guide_order, outcome_order, correlations
-
 def bokeh_heatmap(pool, num_outcomes=50, num_guides=200, cmap='RdBu_r', **kwargs):
     guide_order, outcome_order, correlations = cluster(pool, num_outcomes, num_guides, **kwargs)
 
@@ -1455,3 +1409,272 @@ def doubles_heatmap(pool, outcome, subtract_nt=False):
     outcome_diagrams.plot([outcome], pool.target_info, draw_wild_type_on_top=True, window=20, ax=diagram_ax)
 
     return fig, fcs
+
+def arrayed_group(group, outcomes=None, condition_to_sort_by=None, condition_order=None,
+                  xlims=None,
+                  panels_to_show=['freq', 'log10_freq', 'diff', 'log2_fc', 'heatmaps'],
+                  title=None,
+                  **diagram_kwargs,
+                 ):
+    diagram_kwargs.setdefault('window', (-45, 45))
+
+    if title is None:
+        title = group.group
+
+    if xlims is None:
+        xlims = {}
+
+    xlims.setdefault('freq', (0, 100))
+    xlims.setdefault('log10_freq', (np.log10(1e-4), np.log10(50e-2)))
+
+    if outcomes is None:
+        outcomes = 150
+    
+    if isinstance(outcomes, int):
+        outcome_order = group.outcomes_by_baseline_frequency[:outcomes]
+    else:
+        outcome_order = outcomes
+
+    if condition_to_sort_by is not None:
+        outcome_order = group.log2_fold_change_condition_means.loc[outcome_order, condition_to_sort_by].sort_values().index.values
+        
+    grid = ddr.visualize.outcome_diagrams.DiagramGrid(outcome_order, group.target_info, title=title, **diagram_kwargs)
+
+    if 'freq' in panels_to_show:
+        grid.add_ax('freq', width_multiple=10, gap_multiple=2, title='percentage of reads')
+
+    if 'log10_freq' in panels_to_show:
+        grid.add_ax('log10_freq', width_multiple=10, gap_multiple=2, title='percentage of reads\n(log scale)')
+
+    if 'diff' in panels_to_show:
+        grid.add_ax('diff', width_multiple=10, gap_multiple=2, title=f'percentage change\nfrom baseline')
+
+    if 'log2_fc' in panels_to_show:
+        grid.add_ax('log2_fc', width_multiple=10, gap_multiple=2, title=f'log2 fold-change\nfrom baseline')
+
+    if condition_order is None:
+        condition_order = group.conditions
+
+    for i, condition in enumerate(condition_order):
+        means = group.outcome_fraction_condition_means[condition]
+        stds = group.outcome_fraction_condition_stds[condition]
+        
+        interval_sources = {
+            'lower': means - stds,
+            'upper': means + stds,
+        }
+
+        color = f'C{i}'
+        common_kwargs = dict(marker='o', color=color, markersize=2, interval_alpha=0.5)
+
+        grid.plot_on_ax('freq', means, interval_sources=interval_sources, transform=lambda s: s * 100, **common_kwargs)
+        grid.plot_on_ax('log10_freq', means, interval_sources=interval_sources, transform=np.log10, **common_kwargs)
+        
+        means = group.outcome_fraction_difference_condition_means[condition].reindex(outcome_order)
+        stds = group.outcome_fraction_difference_condition_stds[condition].reindex(outcome_order)
+        
+        interval_sources = {
+            'lower': means - stds,
+            'upper': means + stds,
+        }
+        
+        grid.plot_on_ax('diff', means, interval_sources=interval_sources, transform=lambda s: s * 100, **common_kwargs)
+        
+        means = group.log2_fold_change_condition_means[condition].reindex(outcome_order)
+        stds = group.log2_fold_change_condition_stds[condition].reindex(outcome_order)
+        
+        interval_sources = {
+            'lower': means - stds,
+            'upper': means + stds,
+        }
+        
+        grid.plot_on_ax('log2_fc', means, interval_sources=interval_sources, **common_kwargs)
+        
+        if 'heatmaps' in panels_to_show:
+            if len(group.condition_keys) == 1:
+                level = group.condition_keys[0]
+            else:
+                level = group.condition_keys
+            # weird reversing of outcome_order
+            vs = group.log2_fold_changes.xs(condition, axis=1, level=level, drop_level=False).reindex(outcome_order[::-1])
+            grid.add_heatmap(vs, str(condition), gap_multiple=(2 if i == 0 else 0.5), color=color)
+        
+    #grid.axs_by_name['freq'].legend(bbox_to_anchor=(0.5, 1), loc='lower center')
+
+    for ax_name in xlims:
+        if ax_name in panels_to_show:
+            grid.axs_by_name[ax_name].set_xlim(*xlims[ax_name])
+
+    if 'log10_freq' in panels_to_show:
+        grid.style_log10_frequency_ax('log10_freq')
+    if 'log2_fc' in panels_to_show:
+        grid.style_fold_change_ax('log2_fc')
+
+    return grid
+
+def arrayed_group_categories(group, condition_to_sort_by=None, condition_order=None, draw_heatmaps=False):
+    outcome_order = group.categories_by_baseline_frequency
+
+    if condition_to_sort_by is not None:
+        outcome_order = group.category_log2_fold_change_condition_means.loc[outcome_order, condition_to_sort_by].sort_values().index.values
+        
+    grid = ddr.visualize.outcome_diagrams.DiagramGrid(outcome_order, group.target_info, title=group.group, window=(-10, 10), draw_all_sequence=False)
+
+    grid.add_ax('freq', width_multiple=7, gap_multiple=1, title='percentage of reads\n(linear scale)')
+    grid.add_ax('log10_freq', width_multiple=7, gap_multiple=1, title='percentage of reads\n(log scale)')
+    grid.add_ax('diff', width_multiple=7, gap_multiple=1, title=f'percentage change\nfrom baseline')
+    grid.add_ax('log2_fc', width_multiple=7, gap_multiple=1, title=f'log2 fold-change\nfrom baseline')
+
+    if condition_order is None:
+        condition_order = group.conditions
+
+    for i, condition in enumerate(condition_order):
+        means = group.category_fraction_condition_means[condition]
+        stds = group.category_fraction_condition_stds[condition]
+        
+        interval_sources = {
+            'lower': means - stds,
+            'upper': means + stds,
+        }
+
+        if group.Batch.condition_colors is not None:
+            color = group.Batch.condition_colors.loc[condition]
+        else:
+            color = f'C{i}'
+
+        common_kwargs = dict(marker='o', color=color, markersize=3, y_offset=0.05 * i)
+        grid.plot_on_ax('freq', means, interval_sources=interval_sources, transform=lambda s: s * 100, **common_kwargs)
+        grid.plot_on_ax('log10_freq', means, interval_sources=interval_sources, transform=np.log10, **common_kwargs)
+        
+        means = group.category_fraction_difference_condition_means[condition].loc[outcome_order]
+        stds = group.category_fraction_difference_condition_stds[condition].loc[outcome_order]
+        
+        interval_sources = {
+            'lower': means - stds,
+            'upper': means + stds,
+        }
+        
+        grid.plot_on_ax('diff', means, interval_sources=interval_sources, transform=lambda s: s * 100, **common_kwargs)
+        
+        means = group.category_log2_fold_change_condition_means[condition].loc[outcome_order]
+        stds = group.category_log2_fold_change_condition_stds
+
+        interval_sources = {
+            'lower': stds['lower'][condition].loc[outcome_order],
+            'upper': stds['upper'][condition].loc[outcome_order],
+        }
+        
+        grid.plot_on_ax('log2_fc', means, interval_sources=interval_sources, **common_kwargs)
+        
+        if draw_heatmaps:
+            # weird reversing of outcome_order
+            if len(group.condition_keys) == 1:
+                level = group.condition_keys[0]
+            else:
+                level = group.condition_keys
+
+            vs = group.category_log2_fold_changes.xs(condition, axis=1, level=level, drop_level=False).loc[outcome_order[::-1]]
+            grid.add_heatmap(vs, str(condition), gap_multiple=(1 if i == 0 else 0.5), color=color)
+
+    if draw_heatmaps:
+        grid.add_colorbar(baseline_condition_name=group.baseline_condition)
+        
+    #grid.axs_by_name['freq'].legend(bbox_to_anchor=(0.5, 1), loc='lower center')
+
+    grid.axs_by_name['freq'].set_xlim(0, 100)
+    grid.axs_by_name['log10_freq'].set_xlim(np.log10(5e-4), np.log10(0.85))
+    grid.style_log10_frequency_ax('log10_freq')
+    grid.style_fold_change_ax('log2_fc')
+
+    return grid.fig
+
+def pooled_screen_categories(pool, genes,
+                             condition_to_sort_by=None,
+                             top_n_outcomes=None, draw_heatmaps=False, subcategories=False, outcomes_to_drop=None,
+                             log10_freq_xlims=(np.log10(5e-4), np.log10(0.85)),
+                             ):
+    if outcomes_to_drop is None:
+        outcomes_to_drop = []
+
+    if subcategories:
+        outcome_order = pool.subcategories_by_baseline_frequency
+    else:
+        outcome_order = pool.categories_by_baseline_frequency
+
+    outcome_order = outcome_order[:top_n_outcomes]
+
+    outcome_order = [outcome for outcome in outcome_order if outcome not in outcomes_to_drop]
+
+    grid = ddr.visualize.outcome_diagrams.DiagramGrid(outcome_order, pool.target_info, title=pool.short_name, window=(-10, 10), draw_all_sequence=False)
+
+    grid.add_ax('freq', width_multiple=7, gap_multiple=1, title='percentage of reads\n(linear scale)')
+    grid.add_ax('log10_freq', width_multiple=7, gap_multiple=1, title='percentage of reads\n(log scale)')
+    grid.add_ax('diff', width_multiple=7, gap_multiple=1, title=f'percentage change\nfrom baseline')
+    grid.add_ax('log2_fc', width_multiple=7, gap_multiple=1, title=f'log2 fold-change\nfrom baseline')
+
+    nt_guides = pool.variable_guide_library.non_targeting_guides
+    if subcategories:
+        nt_freqs = pool.subcategory_fractions['all_non_targeting']
+        nt_stds = pool.subcategory_fractions[nt_guides].std(axis=1)
+    else:
+        nt_freqs = pool.category_fractions['all_non_targeting']
+        nt_stds = pool.category_fractions[nt_guides].std(axis=1)
+
+    interval_sources = {
+        'lower': nt_freqs - nt_stds,
+        'upper': nt_freqs + nt_stds,
+    }
+    
+    percentage = lambda s: s * 100
+    common_kwargs = dict(marker='o', color='black', markersize=3)
+    grid.plot_on_ax('freq', nt_freqs, interval_sources=interval_sources, transform=percentage, **common_kwargs)
+    grid.plot_on_ax('log10_freq', nt_freqs, interval_sources=interval_sources, transform=np.log10, **common_kwargs)
+
+    for i, gene in enumerate(genes):
+        guide_order = pool.variable_guide_library.gene_guides(gene, only_best_promoter=True)
+
+        color = f'C{i}'
+
+        common_kwargs = dict(marker='o', color=color, markersize=3, y_offset=0.05 * i)
+        for guide in guide_order:
+            if subcategories:
+                freqs = pool.subcategory_fractions.loc[outcome_order, guide]
+            else:
+                freqs = pool.category_fractions.loc[outcome_order, guide]
+
+            grid.plot_on_ax('freq', freqs, transform=percentage, **common_kwargs)
+            grid.plot_on_ax('log10_freq', freqs, transform=np.log10, **common_kwargs)
+        
+            if subcategories:
+                diffs = pool.subcategory_fraction_differences.loc[outcome_order, guide]
+            else:
+                diffs = pool.category_fraction_differences.loc[outcome_order, guide]
+            grid.plot_on_ax('diff', diffs, transform=percentage, **common_kwargs)
+            
+            if subcategories:
+                l2fcs = pool.subcategory_log2_fold_changes.loc[outcome_order, guide]
+            else:
+                l2fcs = pool.category_log2_fold_changes.loc[outcome_order, guide]
+            grid.plot_on_ax('log2_fc', l2fcs, **common_kwargs)
+        
+        if draw_heatmaps:
+            # weird reversing of outcome_order
+
+            if subcategories:
+                vs = pool.subcategory_log2_fold_changes.loc[outcome_order[::-1], guide_order]
+            else:
+                vs = pool.category_log2_fold_changes.loc[outcome_order[::-1], guide_order]
+            grid.add_heatmap(vs, 'gene', gap_multiple=(1 if i == 0 else 0.5), color=color)
+
+    if draw_heatmaps:
+        grid.add_colorbar()
+        
+    #grid.axs_by_name['freq'].legend(bbox_to_anchor=(0.5, 1), loc='lower center')
+
+    grid.axs_by_name['freq'].set_xlim(0, 100)
+    grid.axs_by_name['log10_freq'].set_xlim(*log10_freq_xlims)
+    grid.style_log10_frequency_ax('log10_freq')
+    grid.style_fold_change_ax('log2_fc')
+    grid.style_fold_change_ax('diff')
+
+    return grid.fig

@@ -242,8 +242,12 @@ def conversion_tracts(pool,
                       plot_genes=None,
                       guides=None,
                       fc_ylims=None,
+                      fc_xlims=(-4, 2),
                       frequency_threshold=0.002,
                       gene_to_sort_by='MLH1',
+                      x_lims=None,
+                      just_heatmaps=False,
+                      draw_labels=True,
                      ):
     fracs = pool.non_targeting_fractions('perfect', 'none')
     outcomes = [(c, s, d) for (c, s, d), f in fracs.items() if c == 'donor' and f > frequency_threshold]
@@ -259,13 +263,17 @@ def conversion_tracts(pool,
 
     c_ax_p = configuration_ax.get_position()
 
-    x_min = int(np.floor(min(xs))) - 2
-    x_max = int(np.ceil(max(xs))) + 2
+    if x_lims is not None:
+        x_min, x_max = x_lims
+    else:
+        x_min = int(np.floor(min(xs))) - 2
+        x_max = int(np.ceil(max(xs))) + 2
 
     left = c_ax_p.x0 + ((x_min - c_ax_x_min) / data_width * c_ax_p.width)
     width = (x_max - x_min) / data_width * c_ax_p.width
+    height = 0.5 * c_ax_p.height
 
-    frequency_ax = fig.add_axes([left, c_ax_p.y0 - 0.5 * c_ax_p.height, width, 0.5 * c_ax_p.height])
+    frequency_ax = fig.add_axes([left, c_ax_p.y0 - height, width, height])
 
     ys = pool.conversion_fractions['all_non_targeting']
     frequency_ax.plot(xs, ys * 100, 'o-', color='black', linewidth=2)
@@ -274,46 +282,53 @@ def conversion_tracts(pool,
     
     frequency_ax.set_ylim(0, max(ys * 100) * 1.1)
 
-    frequency_ax.set_ylabel('overall\nconversion\npercentage')
+    frequency_ax.set_ylabel('overall\nconversion\npercentage', size=12)
 
     frequency_ax.set_xlim(x_min, x_max)
+
+    plt.setp(frequency_ax.get_xticklabels(), visible=False)
 
     # log2 fold changes plot
 
     f_ax_p = frequency_ax.get_position()
-    fold_change_ax = fig.add_axes([f_ax_p.x0, f_ax_p.y0 - 2.2 * f_ax_p.height, f_ax_p.width, 2 * f_ax_p.height], sharex=frequency_ax)
+    height = 0.75 * c_ax_p.height
+    gap = height * 0.1
+    fold_change_ax = fig.add_axes([f_ax_p.x0, f_ax_p.y0 - gap - height, f_ax_p.width, height], sharex=frequency_ax)
 
     guide_sets = [
-        ('negative_control', pool.variable_guide_library.non_targeting_guides, 'non-targeting', dict(color='black', alpha=0.2)),
+        ('negative_control',
+         pool.variable_guide_library.non_targeting_guides,
+         'non-targeting',
+         dict(color='black', alpha=0.2),
+        ),
     ]
 
-    gene_to_color = {}
+    gene_to_color = {gene: ddr.visualize.good_colors[i] for i, gene in enumerate(heatmap_genes)}
 
     gene_guides_by_activity = pool.gene_guides_by_activity()
 
-    if heatmap_genes is not None:
-        for gene_i, gene in enumerate(heatmap_genes):
-            gene_to_color[gene] = ddr.visualize.good_colors[gene_i]
-
-            guide_sets.append((gene,
-                               gene_guides_by_activity[gene][:1],
-                               None,
-                               dict(color=gene_to_color[gene], alpha=0.8, linewidth=1.5),
-                              )
-                             )
-    elif guides is not None:
-        for gene_i, guide in enumerate(guides):
-            guide_sets.append((pool.variable_guide_library.guide_to_gene[guide],
-                               [guide],
-                               None,
-                               dict(color=ddr.visualize.good_colors[gene_i], alpha=0.8, linewidth=1.5),
-                              )
-                             )
+    for gene_i, gene in enumerate(plot_genes):
+        guide_sets.append((gene,
+                           gene_guides_by_activity[gene][:1],
+                           None,
+                           dict(color=gene_to_color[gene], alpha=0.8, linewidth=2.5, markersize=10),
+                          ),
+                         )
 
     max_y = 1
     min_y = -2
     
-    for gene, gene_guides, label, kwargs in guide_sets:
+    for gene_i, (gene, gene_guides, label, kwargs) in enumerate(guide_sets):
+
+        fold_change_ax.annotate(gene,
+                                xy=(1, 1),
+                                xycoords='axes fraction',
+                                xytext=(5, -10 - 16 * gene_i),
+                                textcoords='offset points',
+                                color=kwargs['color'],
+                                size=14,
+                               )
+
         for i, guide in enumerate(gene_guides):
             ys = pool.conversion_log2_fold_changes[guide]
 
@@ -332,7 +347,7 @@ def conversion_tracts(pool,
 
             fold_change_ax.plot(xs, ys, '.-', label=label_to_use, **kwargs)
 
-    fold_change_ax.legend(bbox_to_anchor=(1, 1), loc='upper left')
+
     plt.setp(fold_change_ax.get_xticklabels(), visible=False)
 
     if fc_ylims is None:
@@ -340,10 +355,13 @@ def conversion_tracts(pool,
     
     fold_change_ax.set_ylim(*fc_ylims)
 
+    #fold_change_ax.set_yticks(np.arange(-3, 2))
+    fold_change_ax.grid(alpha=0.5, axis='y')
+
     fold_change_ax.axhline(0, color='black', alpha=0.2)
     fold_change_ax.axvline(0, linestyle='--', color='black', alpha=0.5)
 
-    fold_change_ax.set_ylabel('log2 fold-change in conversion from non-targeting')
+    fold_change_ax.set_ylabel('log2 fold-change\nin conversion\nfrom non-targeting', size=12)
 
     fc_ax_p = fold_change_ax.get_position()
 
@@ -357,27 +375,30 @@ def conversion_tracts(pool,
     diagram_height = height_inches / fig_height_inches * 2
 
     diagram_left = fc_ax_p.x0
-    diagram_bottom = fc_ax_p.y0 - 0.1 * fc_ax_p.height - diagram_height
+    diagram_bottom = fc_ax_p.y0 - 0.4 * fc_ax_p.height - diagram_height
 
     diagram_rect = [diagram_left, diagram_bottom, diagram_width, diagram_height]
 
     diagram_ax = fig.add_axes(diagram_rect, sharex=frequency_ax)
 
-    sorted_outcomes = pool.sort_outcomes_by_gene_phenotype(outcomes, gene_to_sort_by)[::-1]
+    if gene_to_sort_by is None:
+        sorted_outcomes = outcomes[::-1]
+    else:
+        sorted_outcomes = pool.sort_outcomes_by_gene_phenotype(outcomes, gene_to_sort_by)[::-1]
 
     diagram_kwargs = dict(window=(x_min, x_max), preserve_x_lims=True, shift_x=-0.5, flip_if_reverse=False)
     # Note: plot does a weird flip of outcomes
     diagram_grid = ddr.visualize.outcome_diagrams.DiagramGrid(sorted_outcomes[::-1], pool.target_info, diagram_ax=diagram_ax, **diagram_kwargs)
 
-    diagram_grid.add_ax('log10 frequency', width_multiple=8, gap_multiple=1.5, title='percentage of outcomes\nin non-targeting')
+    diagram_grid.add_ax('log2 fold change', side='left', width_multiple=10, gap_multiple=1.5, title='log2 fold change\nfrom non-targeting' if draw_labels else '')
+    diagram_grid.add_ax('log10 frequency', side='left', width_multiple=15, gap_multiple=1.5, title='percentage of outcomes' if draw_labels else '')
 
     log10_frequencies = np.log10(pool.non_targeting_fractions('perfect', 'none').loc[sorted_outcomes])
-    diagram_grid.plot_on_ax('log10 frequency', log10_frequencies, marker='o', markersize=3, color='black')
+    diagram_grid.plot_on_ax('log10 frequency', log10_frequencies, marker='o', markersize=5, linewidth=2, color='black')
 
-    diagram_grid.axs_by_name['log10 frequency'].set_xlim(np.log10(0.002), np.log10(0.15))
+    diagram_grid.axs_by_name['log10 frequency'].set_xlim(np.log10(frequency_threshold), np.log10(0.25))
     diagram_grid.style_log10_frequency_ax('log10 frequency')
-
-    diagram_grid.add_ax('log2 fold change', width_multiple=8, gap_multiple=1.5, title='log2 fold change\nfrom non-targeting')
+    #diagram_grid.axs_by_name['log10 frequency'].invert_xaxis()
 
     fcs = pool.log2_fold_changes('perfect', 'none')['none'].loc[sorted_outcomes]
 
@@ -387,10 +408,13 @@ def conversion_tracts(pool,
             guide = 'DNA2_1'
         else:
             guide = gene_guides_by_activity[gene][0]
-        diagram_grid.plot_on_ax('log2 fold change', fcs[guide], marker='o', markersize=3, linewidth=1.5, color=gene_to_color[gene], clip_on=False)
+
+        diagram_grid.plot_on_ax('log2 fold change', fcs[guide], marker='o', markersize=5, linewidth=2, color=gene_to_color[gene], clip_on=False)
+        fracs = np.log10(pool.outcome_fractions('perfect')['none'].loc[sorted_outcomes, guide])
+        diagram_grid.plot_on_ax('log10 frequency', fracs, marker='o', markersize=3, linewidth=1.5, color=gene_to_color[gene], clip_on=False, alpha=0.8)
 
     diagram_grid.style_fold_change_ax('log2 fold change')
-    diagram_grid.axs_by_name['log2 fold change'].set_xlim(-4, 2)
+    diagram_grid.axs_by_name['log2 fold change'].set_xlim(*fc_xlims)
 
     for gene_i, gene in enumerate(heatmap_genes):
         if gene == 'DNA2':
@@ -405,6 +429,14 @@ def conversion_tracts(pool,
         else:
             gap_multiple = 0.25
 
-        diagram_grid.add_heatmap(vals, f'heatmap {gene}', gap_multiple=gap_multiple, color=gene_to_color[gene])
+        heatmap_ax = diagram_grid.add_heatmap(vals, f'heatmap {gene}', gap_multiple=gap_multiple, color=gene_to_color[gene])
+
+        if not draw_labels:
+            heatmap_ax.set_xticklabels([])
+
+    if just_heatmaps:
+        fig.delaxes(configuration_ax)
+        fig.delaxes(frequency_ax)
+        fig.delaxes(fold_change_ax)
 
     return fig

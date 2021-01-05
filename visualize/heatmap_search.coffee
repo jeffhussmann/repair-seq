@@ -2,30 +2,34 @@ models = cb_obj.document._all_models_by_name._dict
 
 data = models['quad_source'].data
 
-guides = {guides}
+row_labels = {row_labels}
+col_labels = {col_labels}
 
 query = cb_obj.value
 
 if query != ''
-    matches = (i for g, i in guides when g.indexOf(query) > -1)
-    alphas = (0.3 for g in guides)
+    row_matches = (i for r, i in row_labels when r.indexOf(query) > -1)
+    row_alphas = (0.3 for r in row_labels)
+    row_alphas[i] = 1 for i in row_matches
+
+    col_matches = (i for c, i in col_labels when c.indexOf(query) > -1)
+    col_alphas = (0.3 for c in col_labels)
+    col_alphas[i] = 1 for i in col_matches
 else
-    matches = []
-    alphas = (1 for g in guides)
+    row_matches = []
+    row_alphas = (1 for r in row_labels)
 
-lowers = ({lower_bound} for i in matches)
-uppers = ({upper_bound} for i in matches)
+    col_matches = []
+    col_alphas = (1 for c in col_labels)
 
-data['left'] = [({lower_bound} + i for i in matches)..., lowers...]
-data['right'] = [({lower_bound} + i + 1 for i in matches)..., uppers...]
-data['bottom'] = [lowers..., ({upper_bound} - i - 1 for i in matches)...]
-data['top'] = [uppers..., ({upper_bound} - i for i in matches)...]
+data['left'] = [({lower_bound} for i in row_matches)..., ({lower_bound} + i for i in col_matches)...]
+data['right'] = [({x_upper_bound} for i in row_matches)..., ({lower_bound} + i + 1 for i in col_matches)...]
+data['bottom'] = [({y_upper_bound} - i - 1 for i in row_matches)..., ({lower_bound} for i in col_matches)...]
+data['top'] = [({y_upper_bound} - i for i in row_matches)..., ({y_upper_bound} for i in col_matches)...]
 
-alphas[i] = 1 for i in matches
-
-models['label_source'].data['alpha'] = alphas
+models['row_label_source'].data['alpha'] = row_alphas
+models['col_label_source'].data['alpha'] = col_alphas
 
 models['quad_source'].change.emit()
-models['label_source'].change.emit()
-console.log matches
-console.log models['quad_source']
+models['row_label_source'].change.emit()
+models['col_label_source'].change.emit()

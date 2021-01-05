@@ -1,16 +1,15 @@
-import copy
-from collections import defaultdict, Counter
+from collections import defaultdict
 
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 import scipy.cluster.hierarchy as sch
-import seaborn as sns
 import pandas as pd
 
 import hits.visualize
 import hits.utilities
 import ddr.cluster
+import ddr.visualize
 import ddr.visualize.outcome_diagrams
 
 memoized_property = hits.utilities.memoized_property
@@ -64,37 +63,26 @@ class Clustermap:
 
             diagram_ax_rectangle = (0, 0, 1, 1)
 
+        self.diagram_ax_rectangle = diagram_ax_rectangle
+
         self.fig_width_inches, self.fig_height_inches = self.fig.get_size_inches()
         self.height_per_guide = self.inches_per_guide / self.fig_height_inches
         self.width_per_guide = self.inches_per_guide / self.fig_width_inches
 
-        self.x0['diagrams'], self.y0['diagrams'], width, height = diagram_ax_rectangle
-        self.width_inches['diagrams'] = width * self.fig_width_inches
-        self.height_inches['diagrams'] = height * self.fig_height_inches
-            
-        self.add_axes('diagrams')
-
-        diagrams_position = self.get_position('diagrams')
-        self.x0['fold changes'] = diagrams_position.x1 + diagrams_position.width * 0.02
-        self.y0['fold changes'] = diagrams_position.y0
-        self.width_inches['fold changes'] = self.inches_per_guide * self.num_guides
-        self.height_inches['fold changes'] = self.inches_per_guide * self.num_outcomes 
-
-        # TODO: fix weirdness in y axis here. Lining up diagrams, fold changes, and o
-        # outcome similarities requires sharey and reversing outcome order in diagrams.
-        self.add_axes('fold changes', sharey='diagrams')
-
-        fold_changes_position = self.get_position('fold changes')
-
-        gap = 0.5 * self.width_per_guide
-        self.x0['outcome similarity'] = fold_changes_position.x1 + gap
-        self.y0['outcome similarity'] = fold_changes_position.y0
-        self.width_inches['outcome similarity'] = self.height_inches['fold changes'] / 2
-        self.height_inches['outcome similarity'] = self.height_inches['fold changes']
-
-        self.add_axes('outcome similarity')
-
         self.draw()
+
+    def draw(self):
+        self.draw_diagrams()
+
+        self.draw_fold_changes()
+
+        self.draw_outcome_similarities()
+        self.draw_guide_similarities()
+
+        self.draw_guide_clusters()
+        self.annotate_guide_clusters()
+
+        self.draw_outcome_clusters()
 
     def width(self, ax_name):
         return self.width_inches[ax_name] / self.fig_width_inches
@@ -131,11 +119,21 @@ class Clustermap:
         return self.axs[ax_name].get_position()
 
     def draw_diagrams(self):
-        ax = self.axs['diagrams']
+        self.x0['diagrams'], self.y0['diagrams'], width, height = self.diagram_ax_rectangle
+        self.width_inches['diagrams'] = width * self.fig_width_inches
+        self.height_inches['diagrams'] = height * self.fig_height_inches
+            
+        ax = self.add_axes('diagrams')
 
-        # See TODO comment above on reversing here.
-        ddr.visualize.outcome_diagrams.plot(self.clusterer.clustered_outcomes[::-1],
-                                            self.clusterer.pool.target_info,
+        # See TODO comment in fold changes on reversing here.
+
+        outcomes = self.clusterer.clustered_outcomes[::-1]
+        if len(outcomes[0]) == 4:
+            # outcomes include pool names:
+            outcomes = [(c, s, d) for pn, c, s, d in outcomes]
+
+        ddr.visualize.outcome_diagrams.plot(outcomes,
+                                            self.clusterer.target_info,
                                             ax=ax,
                                             **self.options['diagram_kwargs'],
                                            )
@@ -144,9 +142,21 @@ class Clustermap:
         ax.set_position(self.rectangle('diagrams'))
 
     def draw_fold_changes(self):
-        ax = self.axs['fold changes']
+        diagrams_position = self.get_position('diagrams')
+        self.x0['fold changes'] = diagrams_position.x1 + diagrams_position.width * 0.02
+        self.y0['fold changes'] = diagrams_position.y0
+        self.width_inches['fold changes'] = self.inches_per_guide * self.num_guides
+        self.height_inches['fold changes'] = self.inches_per_guide * self.num_outcomes 
 
-        heatmap_im = ax.imshow(self.clusterer.clustered_log2_fold_changes, cmap=fold_changes_cmap, vmin=-2, vmax=2, interpolation='none')
+        # TODO: fix weirdness in y axis here. Lining up diagrams, fold changes, and
+        # outcome similarities requires sharey and reversing outcome order in diagrams.
+        ax = self.add_axes('fold changes', sharey='diagrams')
+
+        im = ax.imshow(self.clusterer.clustered_log2_fold_changes,
+                       cmap=ddr.visualize.fold_changes_cmap,
+                       vmin=-2, vmax=2,
+                       interpolation='none',
+                      )
 
         ax.axis('off')
 
@@ -166,7 +176,15 @@ class Clustermap:
                        )
 
     def draw_outcome_similarities(self):
-        ax = self.axs['outcome similarity']
+        fold_changes_position = self.get_position('fold changes')
+
+        gap = 0.5 * self.width_per_guide
+        self.x0['outcome similarity'] = fold_changes_position.x1 + gap
+        self.y0['outcome similarity'] = fold_changes_position.y0
+        self.width_inches['outcome similarity'] = self.height_inches['fold changes'] / 2
+        self.height_inches['outcome similarity'] = self.height_inches['fold changes']
+
+        ax = self.add_axes('outcome similarity')
 
         vs = self.clusterer.outcome_clustering['similarities']
         
@@ -175,7 +193,12 @@ class Clustermap:
 
         ax.spines['right'].set_color('white')
 
-        im = ax.imshow(vs, cmap=correlation_cmap, vmin=-1, vmax=1, interpolation='none')
+        im = ax.imshow(vs,
+                       cmap=ddr.visualize.correlation_cmap,
+                       vmin=-1,
+                       vmax=1,
+                       interpolation='none',
+                      )
 
         transform = matplotlib.transforms.Affine2D().rotate_deg(45) + ax.transData
         im.set_transform(transform)
@@ -206,7 +229,12 @@ class Clustermap:
 
         vs = self.clusterer.guide_clustering['similarities']
 
-        guide_corr_im = ax.imshow(vs, cmap=correlation_cmap, vmin=-1, vmax=1, interpolation='none')
+        im = ax.imshow(vs,
+                       cmap=ddr.visualize.correlation_cmap,
+                       vmin=-1,
+                       vmax=1,
+                       interpolation='none',
+                      )
 
         ax.set_xticks([])
         ax.set_yticks([])
@@ -215,7 +243,7 @@ class Clustermap:
 
         transform = matplotlib.transforms.Affine2D().rotate_deg(-45) + ax.transData
 
-        guide_corr_im.set_transform(transform)
+        im.set_transform(transform)
 
         diag_length = np.sqrt(2 * len(vs)**2)
 
@@ -353,7 +381,7 @@ class Clustermap:
 
         assignments = guide_clustering['cluster_assignments']
         cluster_blocks = ddr.cluster.get_cluster_blocks(assignments)
-        cluster_genes = ddr.cluster.get_cluster_genes(guide_clustering, self.clusterer.pool.variable_guide_library)
+        cluster_genes = ddr.cluster.get_cluster_genes(guide_clustering, self.clusterer.guide_to_gene)
         cluster_colors = guide_clustering['cluster_colors']
 
         ax = self.axs['guide clusters']
@@ -390,14 +418,6 @@ class Clustermap:
                                 color=cluster_colors[cluster_id],
                                 size=self.options['gene_text_size'],
                                )
-
-    def draw(self):
-        self.draw_diagrams()
-        self.draw_fold_changes()
-        self.draw_outcome_similarities()
-        self.draw_guide_similarities()
-        self.draw_guide_clusters()
-        self.annotate_guide_clusters()
 
 class SinglePoolClustermap(Clustermap):
     def __init__(self, pool, **kwargs):

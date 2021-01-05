@@ -13,7 +13,7 @@ import bokeh.models
 from ddr import pooled_screen
 from ddr.visualize import outcome_diagrams
 from hits import utilities
-from hits.visualize.interactive.external_coffeescript import build_callback
+#from hits.visualize.interactive.external_coffeescript import build_callback
 
 def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='none', denominator_outcomes=None):
     def pval_down(outcome_count, UMI_count, nt_fraction):
@@ -44,7 +44,7 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
         guides_to_omit = []
 
     if denominator_outcomes is None:
-        UMI_counts = pool.UMI_counts('perfect')[fixed_guide]
+        UMI_counts = pool.UMI_counts_full_arguments('perfect')[fixed_guide]
     else:
         UMI_counts = pool.outcome_counts('perfect')[fixed_guide].loc[denominator_outcomes].sum()
 
