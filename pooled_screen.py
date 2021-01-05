@@ -62,6 +62,8 @@ class SingleGuideExperiment(experiment.Experiment):
             'filtered_templated_insertion_details': self.results_dir / 'filtered_templated_insertion_details.hdf5',
             'filtered_duplication_details': self.results_dir / 'filtered_duplication_details.hdf5',
 
+            'deletion_ranges': self.results_dir / 'deletion_ranges.hdf5',
+
             'collapsed_UMI_outcomes': self.results_dir / 'collapsed_UMI_outcomes.txt',
             'cell_outcomes': self.results_dir / 'cell_outcomes.txt',
             'filtered_cell_outcomes': self.results_dir / 'filtered_cell_outcomes.txt',
@@ -767,6 +769,25 @@ class SingleGuideExperiment(experiment.Experiment):
                 outcome = pooled_layout.LongTemplatedInsertionOutcome.from_string(line.strip())
                 outcomes.append(outcome)
         return outcomes
+
+    def extract_deletion_ranges(self):
+        deletion_ranges = ranges.Ranges.deletion_ranges([self], with_edit=True, without_edit=True)
+
+        with h5py.File(self.fns['deletion_ranges'], mode='w') as h5_file:
+            h5_file.create_dataset('starts', data=np.array(deletion_ranges.starts))
+            h5_file.create_dataset('ends', data=np.array(deletion_ranges.ends))
+            h5_file.attrs['total_reads'] = deletion_ranges.total_reads
+
+    @memoized_property
+    def deletion_ranges(self):
+        with h5py.File(self.fns['deletion_ranges'], mode='r') as h5_file:
+            starts = h5_file['starts'][()]
+            ends = h5_file['ends'][()]
+            total_reads = h5_file.attrs['total_reads']
+
+        empty_read_info = ('', '', '')
+        range_iter = ((empty_read_info, start, end) for start, end in zip(starts, ends))
+        return ranges.Ranges(self.target_info, self.target_info.target, range_iter, total_reads, exps=[self])
 
     def process(self, stage):
         try:
