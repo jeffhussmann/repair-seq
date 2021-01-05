@@ -1626,9 +1626,63 @@ class PooledScreen:
             
         return pd.Series(SNV_name_to_position).sort_index()
 
-    def sort_outcomes_by_gene_phenotype(self, outcomes, gene):
-        guides = self.variable_guide_library.gene_guides(gene)
-        fcs = self.log2_fold_changes('perfect', 'none')['none'].loc[outcomes, guides]
+    @memoized_property
+    def outcomes_containing_specific_mismatch(self):
+        outcomes_containing_specific_mismatch = defaultdict(list)
+
+        reverse = self.target_info.sgRNA_feature.strand == '-'
+        if reverse:
+            offset = self.target_info.PAM_slice.stop - 1
+        else:
+            offset = self.target_info.PAM_slice.start
+
+        for c, s, d in self.non_targeting_fractions_full_arguments('perfect', 'none').index.values:
+            if c == 'mismatches':
+                outcome = ddr.pooled_layout.MismatchOutcome.from_string(d).undo_anchor_shift(self.target_info.anchor)
+                for p, b in zip(outcome.snvs.positions, outcome.snvs.basecalls):
+                    # positive direction for x is towards protospacer from PAM
+                    if reverse:
+                        b = utilities.reverse_complement(b.upper())
+                        x = p - offset
+                    else:
+                        b = b.upper()
+                        x = offset - p
+
+                    outcomes_containing_specific_mismatch[x, b].append((c, s, d))
+
+        return outcomes_containing_specific_mismatch
+
+    @memoized_property
+    def mismatch_rates(self):
+        mismatch_rates = {}
+        outcome_fractions = self.outcome_fractions('perfect')['none']
+
+        for (x, b), outcomes in self.outcomes_containing_specific_mismatch.items():             
+            mismatch_rates[x, b] = outcome_fractions.loc[outcomes].sum()
+            
+        xs = np.arange(-100, 100)
+
+        for x in xs:
+            for b in 'TCAG':
+                if (x, b) not in mismatch_rates:
+                    mismatch_rates[x, b] = pd.Series(0, index=outcome_fractions.columns)
+
+        mismatch_rates = pd.DataFrame(mismatch_rates).T.sort_index()
+        mismatch_rates.index.names = ['offset', 'base']
+
+        return mismatch_rates
+
+    @memoized_property
+    def total_mismatch_rates(self):
+        return self.mismatch_rates.sum(level='offset')
+                    
+    def sort_outcomes_by_gene_phenotype(self, outcomes, gene, top_n=None):
+        if top_n is None:
+            guides = self.variable_guide_library.gene_guides(gene)
+        else:
+            guides = self.gene_guides_by_activity()[gene][:top_n]
+
+        fcs = self.log2_fold_changes_full_arguments('perfect', 'none')['none'].loc[outcomes, guides]
         average_fcs = fcs.mean(axis=1)
         sorted_outcomes = average_fcs.sort_values().index.values
         return sorted_outcomes
