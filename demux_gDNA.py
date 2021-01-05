@@ -2,6 +2,7 @@ import argparse
 import gzip
 import multiprocessing
 import itertools
+import shutil
 
 from pathlib import Path
 from collections import defaultdict, Counter
@@ -13,22 +14,38 @@ import yaml
 import tqdm
 
 from hits import fastq, fasta, utilities
+import knock_knock.target_info
 import ddr.guide_library
 import ddr.pooled_screen
+import ddr.guide_library
 
 def load_sample_sheet(base_dir, batch):
     sample_sheet_fn = Path(base_dir) / 'data' / batch / 'gDNA_sample_sheet.yaml'
     sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
+
     pool_details = load_pool_details(base_dir, batch)
     if pool_details is not None:
         sample_sheet['pool_details'] = pool_details
+
+    data_dir = base_dir / 'data' / batch 
+
+    R1_fns = [(data_dir / d['R1']).with_suffix('.fastq.gz') for d in sample_sheet['quartets'].values()]
+    R1_lengths = {fastq.get_read_length(R1_fn) for R1_fn in R1_fns}
+    if len(R1_lengths) != 1:
+        raise ValueError(R1_lengths)
+    else:
+        R1_length = R1_lengths.pop()
+
+    sample_sheet['R1_read_length'] = R1_length
+
     return sample_sheet
 
 def load_pool_details(base_dir, batch):
     pool_details_fn = Path(base_dir) / 'data' / batch / 'gDNA_pool_details.csv'
     if pool_details_fn.exists():
         pool_details = pd.read_csv(pool_details_fn, index_col='pool_name').replace({np.nan: None})
-        for key_to_split in ['I7_index', 'I5_index', 'sgRNA', 'primer_names']:
+
+        for key_to_split in ['I7_index', 'I5_index', 'sgRNA']:
             if key_to_split in pool_details:
                 pool_details[key_to_split] = [s.split(';') if s is not None else s for s in pool_details[key_to_split]]
         pool_details = pool_details.T.to_dict()
@@ -43,18 +60,20 @@ def make_pool_sample_sheets(base_dir, batch):
         pool_sample_sheet = {
             'pooled': True,
             'gDNA': True,
-            'sequencing_start_feature_name': 'gDNA_reverse_primer',
+            'primer_names': [sample_sheet['R1_primer'], sample_sheet['R2_primer']],
             'variable_guide_library': sample_sheet['variable_guide_library'],
+            'has_UMIs': sample_sheet['has_UMIs'],
+            'layout_module': sample_sheet['layout_module'],
+            'infer_homology_arms': sample_sheet['infer_homology_arms'],
         }
+
+        if 'target_info_prefix' in sample_sheet:
+            target_info_prefix = sample_sheet['target_info_prefix']
+        else:
+            target_info_prefix = 'pooled_vector'
 
         if 'fixed_guide_library' in sample_sheet:
             pool_sample_sheet['fixed_guide_library'] = sample_sheet['fixed_guide_library']
-            target_info_prefix = 'doubles_vector'
-        else:
-            if 'target_info_prefix' in sample_sheet:
-                target_info_prefix = sample_sheet['target_info_prefix']
-            else:
-                target_info_prefix = 'pooled_vector'
 
         pool_sample_sheet['target_info_prefix'] = target_info_prefix
 
@@ -116,6 +135,7 @@ class FastqChunker:
         
     def split_into_chunks(self):
         line_groups = fastq.get_line_groups(self.input_fn)
+
         if self.debug:
             line_groups = itertools.islice(line_groups, int(5e5))
         
@@ -201,7 +221,72 @@ def get_resolvers(base_dir, group):
     resolvers['I7'] = utilities.get_one_mismatch_resolver(I7_indices).get
     resolvers['I5'] = utilities.get_one_mismatch_resolver(I5_indices).get
 
-    if 'fixed_guide_library' not in sample_sheet:
+    variable_guide_library = ddr.guide_library.GuideLibrary(base_dir, sample_sheet['variable_guide_library'])
+
+    ti_prefix = sample_sheet['target_info_prefix']
+
+    guide_seqs = {}
+    guide_seqs['variable_guide'] = defaultdict(set)
+
+    if 'fixed_guide_library' in sample_sheet:
+        has_fixed_barcode = True
+        fixed_guide_library = ddr.guide_library.GuideLibrary(base_dir, sample_sheet['fixed_guide_library'])
+        guide_seqs['fixed_guide_barcode'] = defaultdict(set)
+        guide_pairs = list(itertools.product(fixed_guide_library.guides, variable_guide_library.guides))
+    else:
+        has_fixed_barcode = False
+        guide_pairs = [('none', vg) for vg in variable_guide_library.guides]
+
+    for fg, vg in guide_pairs:
+        if fg == 'none':
+            ti_name = f'{ti_prefix}_{variable_guide_library.name}_{vg}'
+        else:
+            ti_name = f'{ti_prefix}-{fg}-{vg}'
+        
+        ti = knock_knock.target_info.TargetInfo(base_dir, ti_name)
+        
+        R1_primer = ti.features[ti.target, sample_sheet['R1_primer']]
+        R2_primer = ti.features[ti.target, sample_sheet['R2_primer']]
+        
+        target_seq = ti.reference_sequences[ti.target]
+        
+        expected_R1 = target_seq[R1_primer.start:R1_primer.start + sample_sheet['R1_read_length']]
+        guide_seqs['variable_guide'][vg].add(expected_R1)
+        
+        if fg != 'none':
+            fixed_guide_barcode = ti.features[ti.target, 'fixed_guide_barcode']
+
+            expected_R2 = utilities.reverse_complement(target_seq[fixed_guide_barcode.start:R2_primer.end + 1])
+            guide_seqs['fixed_guide_barcode'][fg].add(expected_R2)
+        
+    for which in ['fixed_guide_barcode', 'variable_guide']:
+        dictionary = guide_seqs[which]
+        
+        for g in sorted(dictionary):
+            seqs = dictionary[g]
+            if len(seqs) != 1:
+                raise ValueError(which, g, seqs)
+            else:
+                seq = seqs.pop()
+                dictionary[g] = seq
+                
+        # convert from defaultdict to dict
+        guide_seqs[which] = dict(dictionary)
+
+    if has_fixed_barcode:
+        fixed_lengths = {len(s) for s in guide_seqs['fixed_guide_barcode'].values()}
+        if len(fixed_lengths) != 1:
+            raise ValueError(fixed_lengths)
+
+        fixed_length = fixed_lengths.pop()
+        guide_barcode_slice = idx[:fixed_length]
+        # If a guide barcode is present, remove it from R2 before passing along
+        # to simplify analysis of common sequences in pool.
+        after_guide_barcode_slice = idx[fixed_length:]
+
+        resolvers['fixed_guide_barcode'] = utilities.get_one_mismatch_resolver(guide_seqs['fixed_guide_barcode']).get
+        expected_seqs['fixed_guide_barcode'] = set(guide_seqs['fixed_guide_barcode'].values())
+    else:
         # If there weren't multiple fixed guide pools present, keep everything
         # to allow possibility of outcomes that don't include the intended NotI site.
         def fixed_guide_barcode_resolver(*args):
@@ -210,21 +295,16 @@ def get_resolvers(base_dir, group):
         resolvers['fixed_guide_barcode'] = fixed_guide_barcode_resolver
         expected_seqs['fixed_guide_barcode'] = set()
 
-    else:
-        fixed_guide_library = ddr.guide_library.GuideLibrary(base_dir, sample_sheet['fixed_guide_library'])
-        resolvers['fixed_guide_barcode'] = utilities.get_one_mismatch_resolver(fixed_guide_library.guide_barcodes).get
-        expected_seqs['fixed_guide_barcode'] = set(fixed_guide_library.guide_barcodes)
+        guide_barcode_slice = None
+        after_guide_barcode_slice = idx[:]
 
-    variable_guide_library = ddr.guide_library.GuideLibrary(base_dir, sample_sheet['variable_guide_library'])
-    guides = fasta.to_dict(variable_guide_library.fns['guides_fasta'])
-    # Note: primer for gDNA prep makes R1 read start 1 downstream of UMI prep.
-    resolvers['variable_guide'] = utilities.get_one_mismatch_resolver({g: s[1:45] for g, s in guides.items()}).get
-    expected_seqs['variable_guide'] = set(s[1:45] for s in guides.values())
+    resolvers['variable_guide'] = utilities.get_one_mismatch_resolver(guide_seqs['variable_guide']).get
+    expected_seqs['variable_guide'] = set(guide_seqs['variable_guide'].values())
 
-    return resolvers, expected_seqs
+    return resolvers, expected_seqs, guide_barcode_slice, after_guide_barcode_slice
 
 def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
-    resolvers, expected_seqs = get_resolvers(base_dir, group)
+    resolvers, expected_seqs, guide_barcode_slice, after_guide_barcode_slice = get_resolvers(base_dir, group)
     
     fastq_fns = [FastqChunker(base_dir, group, quartet_name, which).get_chunk_fn(chunk_number) for which in fastq.quartet_order]
 
@@ -232,18 +312,7 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
 
     counts = defaultdict(Counter)
 
-    sample_sheet = load_sample_sheet(base_dir, group)
-
-    guide_barcode_slice = idx[:22]
-
-    if 'fixed_guide_library' in sample_sheet:
-        # If a guide barcode is present, remove it from R2 before passing along
-        # to simplify analysis of common sequences in pool.
-        after_guide_barcode_slice = idx[22:] 
-    else:
-        after_guide_barcode_slice = idx[:]
-
-    for quartet in fastq.read_quartets(fastq_fns, up_to_space=True, standardize_names=True):
+    for quartet in fastq.read_quartets(fastq_fns, standardize_names=True):
         if len({r.name for r in quartet}) != 1:
             raise ValueError('quartet out of sync')
 
@@ -316,7 +385,7 @@ def merge_seq_counts(base_dir, group, k):
 
     merged_fn = Path(base_dir) / 'data' / group / f'{k}_stats.txt'
 
-    resolvers, expected_seqs = get_resolvers(base_dir, group)
+    resolvers, expected_seqs, *_ = get_resolvers(base_dir, group)
     resolver = resolvers[k]
     expected_seqs = expected_seqs[k]
 
@@ -325,6 +394,9 @@ def merge_seq_counts(base_dir, group, k):
 
         for seq, count in counts.most_common(100):
             name = resolver(seq, '')
+
+            if isinstance(name, set):
+                name = sorted(name)
 
             if seq in expected_seqs:
                 mismatches = ''
@@ -464,6 +536,7 @@ if __name__ == '__main__':
     merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'I5')))
     merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'I7')))
     merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'variable_guide')))
+    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'fixed_guide_barcode')))
     merge_results.append(merge_pool.apply_async(merge_ids, args=(base_dir, batch)))
 
     merge_pool.close()
@@ -481,7 +554,7 @@ if __name__ == '__main__':
 
     for pool_name in pool_details:
         if pool_name in id_counts:
-            full_pool_name = f'{batch}_{pool_name}'
+            full_pool_name = f"{sample_sheet['group_name']}_{pool_name}"
             pool = ddr.pooled_screen.PooledScreen(base_dir, full_pool_name)
             counts = id_counts.loc[pool_name].sort_values(ascending=False)
             counts.to_csv(pool.fns['read_counts'], sep='\t', header=True)
