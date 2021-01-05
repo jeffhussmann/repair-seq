@@ -584,3 +584,39 @@ class ReplicatePair:
                     relevant_outcomes.append((c, s, d))
                     
         return relevant_outcomes
+
+class PoolReplicates:
+    def __init__(self, pools):
+        self.pools = pools
+        
+    @memoized_property
+    def outcome_fractions(self):
+        return pd.concat({pool.group: pool.outcome_fractions('perfect')['none'] for pool in self.pools}, axis=1).fillna(0)
+    
+    @memoized_property
+    def outcome_fraction_means(self):
+        return self.outcome_fractions.mean(axis=1, level=1)
+
+    @memoized_property
+    def outcome_fraction_stds(self):
+        return self.outcome_fractions.std(axis=1, level=1)
+
+    @memoized_property
+    def non_targeting_fraction_means(self):
+        return self.outcome_fraction_means[ALL_NON_TARGETING].sort_values(ascending=False)
+
+    @memoized_property
+    def non_targeting_fraction_stds(self):
+        return self.outcome_fraction_stds[ALL_NON_TARGETING].loc[self.non_targeting_fraction_means.index]
+
+    @memoized_property
+    def log2_fold_changes(self):
+        fs = self.outcome_fraction_means
+        fold_changes = fs.div(fs[ALL_NON_TARGETING], axis=0)
+        return np.log2(fold_changes)
+
+    @memoized_property
+    def log2_fold_change_intervals(self):
+        fs = self.outcome_fraction_means
+        fold_changes = fs.div(fs[ALL_NON_TARGETING], axis=0)
+        return np.log2(fold_changes)
