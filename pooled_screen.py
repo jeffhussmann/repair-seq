@@ -372,7 +372,7 @@ class SingleGuideExperiment(experiment.Experiment):
                 if self.has_UMIs or isinstance(self, CommonSequenceExperiment):
                     annotation = collapse.Annotations['collapsed_UMI_mismatch'].from_identifier(read.name)
 
-                    if category in ['uncategorized', 'SD-MMEJ'] and not self.use_memoized_outcomes:
+                    if category in ['uncategorized'] and not self.use_memoized_outcomes:
                         if int(annotation['UMI']) < 1000: 
                             details = '{},{}_{}'.format(details, annotation['UMI'], annotation['num_reads'])
 
