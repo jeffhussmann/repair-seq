@@ -976,6 +976,9 @@ class PooledScreen:
             'collapsed_outcome_counts': self.group_dir / 'collapsed_outcome_counts.npz',
             'collapsed_total_outcome_counts': self.group_dir / 'collapsed_total_outcome_counts.txt',
 
+            'category_counts': self.group_dir / 'category_counts.txt',
+            'subcategory_counts': self.group_dir / 'subcategory_counts.txt',
+
             'high_frequency_outcome_counts': self.group_dir / 'high_frequency_outcome_counts.hdf5',
 
             'filtered_cell_bam': self.group_dir / 'filtered_cell_alignments.bam',
@@ -1400,6 +1403,64 @@ class PooledScreen:
             guide_outcomes[nt_guide] = outcomes
 
         return guide_outcomes
+
+    def extract_category_counts(self):
+        nt_guides = self.variable_guide_library.non_targeting_guides
+        category_counts = self.outcome_counts('perfect')['none'].sum(level='category')
+        category_counts = category_counts.drop('malformed layout', errors='ignore')
+        category_counts['all_non_targeting'] = category_counts[nt_guides].sum(axis=1)
+        category_counts.to_csv(self.fns['category_counts'])
+
+        subcategory_counts = self.outcome_counts('perfect')['none'].sum(level=['category', 'subcategory'])
+        subcategory_counts = subcategory_counts.drop('malformed layout', errors='ignore')
+        subcategory_counts['all_non_targeting'] = subcategory_counts[nt_guides].sum(axis=1)
+        subcategory_counts.to_csv(self.fns['subcategory_counts'])
+
+    @memoized_property
+    def category_counts(self):
+        category_counts = pd.read_csv(self.fns['category_counts'], index_col=0)
+        category_counts.columns.name = 'variable_guide'
+        return category_counts
+
+    @memoized_property
+    def subcategory_counts(self):
+        subcategory_counts = pd.read_csv(self.fns['subcategory_counts'], index_col=[0, 1])
+        subcategory_counts.columns.name = 'variable_guide'
+        return subcategory_counts
+
+    @memoized_property
+    def category_fractions(self):
+        return self.category_counts / self.category_counts.sum(axis=0)
+
+    @memoized_property
+    def categories_by_baseline_frequency(self):
+        return self.category_fractions['all_non_targeting'].sort_values(ascending=False).index.values
+
+    @memoized_property
+    def category_log2_fold_changes(self):
+        fold_changes = self.category_fractions.div(self.category_fractions['all_non_targeting'], axis=0)
+        return np.log2(fold_changes)
+
+    @memoized_property
+    def category_fraction_differences(self):
+        return self.category_fractions.sub(self.category_fractions['all_non_targeting'], axis=0)
+
+    @memoized_property
+    def subcategory_fractions(self):
+        return self.subcategory_counts / self.subcategory_counts.sum(axis=0)
+
+    @memoized_property
+    def subcategories_by_baseline_frequency(self):
+        return self.subcategory_fractions['all_non_targeting'].sort_values(ascending=False).index.values
+
+    @memoized_property
+    def subcategory_log2_fold_changes(self):
+        fold_changes = self.subcategory_fractions.div(self.subcategory_fractions['all_non_targeting'], axis=0)
+        return np.log2(fold_changes)
+
+    @memoized_property
+    def subcategory_fraction_differences(self):
+        return self.subcategory_fractions.sub(self.subcategory_fractions['all_non_targeting'], axis=0)
 
     @memoized_with_key
     def non_targeting_counts(self, guide_status, fixed_guide):
