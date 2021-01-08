@@ -1893,6 +1893,9 @@ class Layout(layout.Categorizer):
                       ]
         target_als = sorted(target_als, key=interval.get_covered)
 
+        # Realignment may be have been able to extend an existing alignment.
+        target_als = interval.make_parsimonious(target_als)
+
         merged_als = sam.merge_any_adjacent_pairs(target_als, ti.reference_sequences)
 
         covereds = []
