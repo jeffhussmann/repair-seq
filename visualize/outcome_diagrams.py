@@ -218,13 +218,20 @@ def plot(outcome_order,
 
     def draw_insertion(y, insertion):
         starts = np.array(insertion.starts_afters) - offset
+
+        cut = target_info.cut_after - offset
+        if cut in starts:
+            start_to_label = cut
+        else:
+            start_to_label = 0
+
         for i, (start, bs) in enumerate(zip(starts, insertion.seqs)):
             ys = [y - 0.3, y + 0.3]
             xs = [start + 0.5, start + 0.5]
 
             ax.plot(xs, ys, color='purple', linewidth=1.5, alpha=0.6)
-            
-            if i == 0:
+
+            if start == start_to_label:
                 width = 0.9
                 center = start + 0.5
                 left_edge = center - (len(bs) * 0.5 * width)
