@@ -245,6 +245,25 @@ def plot(outcome_order,
                                 color=hits.visualize.igv_colors[transform_seq(b)],
                                 weight='bold',
                             )
+
+    def draw_duplication(y, duplication):
+        draw_rect(window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+
+        starts, ends = duplication.ref_junctions[0]
+        starts = np.array(starts) - offset
+        ends = np.array(ends) - offset
+        bottom = y - 0.55 * wt_height
+        top = y + 0.55 * wt_height
+
+        for i, (start, end) in enumerate(zip(starts, ends)):
+            if i == 0:
+                alpha = 1
+            else:
+                alpha = 0.3
+
+            y_offset = i * wt_height * 0.1
+
+            draw_rect(start - 0.5, end + 0.5, bottom + y_offset, top + y_offset, alpha, color='tab:purple', fill=False)
             
     def draw_wild_type(y, on_top=False, guides_to_draw=None):
 
@@ -477,6 +496,10 @@ def plot(outcome_order,
                 insertion_outcome = HDR_plus_insertion_outcome.insertion_outcome
     
             draw_donor(y, HDR_outcome, deletion_outcome, insertion_outcome, False)
+
+        elif category == 'duplication' and subcategory == 'simple':
+            duplication_outcome = DuplicationOutcome.from_string(details)
+            draw_duplication(y, duplication_outcome)
             
         else:
             label = f'{category}, {subcategory}, {details}'
