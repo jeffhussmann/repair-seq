@@ -187,7 +187,7 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
         for sample_name in self.sample_names:
             yield self.sample_name_to_experiment(sample_name, no_progress=no_progress)
 
-    @property
+    @memoized_property
     def first_experiment(self):
         return next(self.experiments())
 
