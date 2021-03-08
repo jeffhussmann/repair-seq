@@ -23,10 +23,17 @@ class GuideLibrary:
             'best_promoters': self.full_dir / 'best_promoters.txt',
             'updated_gene_names': self.full_dir / 'updated_gene_names.txt',
 
+            'non_targeting_guide_sets': self.full_dir / 'non_targeting_guide_sets.txt',
+
             'protospacers': self.full_dir / 'protospacers.fasta',
             'protospacer_mappings_dir': self.full_dir / 'protospacers',
             'protospacer_mappings_STAR_prefix': self.full_dir / 'protospacers' / 'mappings.',
             'perturbseq_STAR_index': self.full_dir / 'perturbseq_STAR_index',
+
+            'cell_cycle_phase_fractions': self.full_dir / 'cell_cycle_phase_fractions.txt',
+            'cell_cycle_log2_fold_changes': self.full_dir / 'cell_cycle_effects.txt',
+            
+            'K562_knockdown': self.full_dir / 'K562_knockdown.txt',
         }
 
     @memoized_property
@@ -124,7 +131,11 @@ class GuideLibrary:
 
     @memoized_property
     def guide_to_gene(self):
-        return self.guides_df['gene']
+        guide_to_gene = self.guides_df['gene'].copy()
+        for nt_guide_set, guides in self.non_targeting_guide_sets.items():
+            for guide in guides:
+                guide_to_gene[guide] = nt_guide_set
+        return guide_to_gene
 
     @memoized_property
     def guide_barcodes(self):
@@ -134,6 +145,32 @@ class GuideLibrary:
     def gene_indices(self, gene):
         idxs = [i for i, g in enumerate(self.guides_df['gene']) if g == gene]
         return min(idxs), max(idxs)
+
+    @memoized_property
+    def cell_cycle_log2_fold_changes(self):
+        return pd.read_csv(self.fns['cell_cycle_log2_fold_changes'], index_col=0)
+
+    @memoized_property
+    def cell_cycle_phase_fractions(self):
+        return pd.read_csv(self.fns['cell_cycle_phase_fractions'], index_col=0)
+
+    @memoized_property
+    def K562_knockdown(self):
+        return pd.read_csv(self.fns['K562_knockdown'], index_col=0)
+
+    @memoized_property
+    def non_targeting_guide_sets(self):
+        non_targeting_guide_sets = {}
+
+        with open(self.fns['non_targeting_guide_sets']) as fh:
+            for i, line in enumerate(fh):
+                guides = line.strip().split(',')
+
+                set_name = f'non-targeting_set_{i:05d}'
+
+                non_targeting_guide_sets[set_name] = list(guides)
+
+        return non_targeting_guide_sets
 
 class DummyGuideLibrary:
     def __init__(self):
