@@ -522,6 +522,11 @@ class ArrayedExperiment:
 
             for name, als in self.progress(alignment_groups, desc='Categorizing reads'):
                 seq = als[0].get_forward_sequence()
+
+                # Special handling of empty sequence.
+                if seq is None:
+                    seq = ''
+
                 if seq in self.seq_to_outcome:
                     layout = self.seq_to_outcome[seq]
                     layout.query_name = name
