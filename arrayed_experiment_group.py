@@ -79,6 +79,30 @@ class Batch:
 
         return exps
 
+def get_batch(base_dir, batch_name, progress=None):
+    batch = None
+
+    group_dir = Path(base_dir) / 'data' / batch_name
+    group_descriptions_fn = group_dir / 'group_descriptions.csv'
+
+    if group_descriptions_fn.exists():
+        batch = Batch(base_dir, batch_name, progress)
+
+    return batch
+
+def get_all_batches(base_dir=Path.home() / 'projects' / 'ddr', progress=None):
+    possible_batch_dirs = [p for p in (Path(base_dir) / 'results').iterdir() if p.is_dir()]
+
+    batches = {}
+
+    for possible_batch_dir in possible_batch_dirs:
+        batch_name = possible_batch_dir.name
+        batch = get_batch(base_dir, batch_name, progress=progress)
+        if batch is not None:
+            batches[batch_name] = batch
+
+    return batches
+
 class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
     def __init__(self, base_dir, batch, group, progress=None):
         self.base_dir = Path(base_dir)
