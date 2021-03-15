@@ -1,3 +1,5 @@
+import pandas as pd
+
 import knock_knock.target_info
 from hits import utilities
 
@@ -9,7 +11,7 @@ def convert_to_sgRNA_coords(target_info, a):
         return target_info.sgRNA_feature.end - (a + target_info.anchor)
 
 def convert_to_anchor_coords(target_info, s):
-    ''' given s in coordinates relative sgRNA beginning and sgRNA strand, convert to anchor coords + coords'''
+    ''' given s in coordinates relative to sgRNA beginning and sgRNA strand, convert to anchor coords + coords'''
     if target_info.sgRNA_feature.strand == '+':
         return (s + target_info.sgRNA_feature.start) - target_info.anchor 
     else:
@@ -58,3 +60,42 @@ def convert_outcomes(outcomes, source_target_info, dest_target_info):
         converted.append((c, s, d))
     
     return converted
+
+def compare_pool_to_endogenous(pool, group, guide=None, condition=None):
+    ''' '''
+    endogenous_outcomes = [(c, s, d) for c, s, d in group.outcomes_by_baseline_frequency if c != 'uncategorized' and s != 'far from cut' and s != 'mismatches']
+    endogenous_outcomes_converted = convert_outcomes(endogenous_outcomes, pool.target_info, group.target_info)
+
+    outcomes = sorted(set(pool.non_targeting_fractions.index.values) | set(endogenous_outcomes_converted))
+
+    outcomes = [(c, s, d) for c, s, d in outcomes if c != 'uncategorized']
+
+    group_fs = group.outcome_fraction_baseline_means.loc[endogenous_outcomes]
+    group_fs.index = pd.MultiIndex.from_tuples(endogenous_outcomes_converted)
+    group_fs = group_fs.reindex(outcomes).fillna(0)
+
+    pool_fs = pool.non_targeting_fractions.reindex(outcomes).fillna(0)
+
+    fs_df = pd.DataFrame({'group': group_fs, 'pool': pool_fs})
+    fs_df.index.names = ('category', 'subcategory', 'details')
+
+    # Collapse genomic insertions to one row.
+    genomic_insertion_collapsed = fs_df.loc[['genomic insertion']].groupby('subcategory').sum()
+
+    fs_df.drop('genomic insertion', inplace=True)
+
+    for subcategory, row in genomic_insertion_collapsed.iterrows():
+        fs_df.loc['genomic insertion', subcategory, 'collapsed'] = row
+
+    if guide is not None and condition is not None:
+        group_l2fcs = group.log2_fold_change_condition_means.loc[endogenous_outcomes, condition]
+        group_l2fcs.index = pd.MultiIndex.from_tuples(endogenous_outcomes_converted)
+        group_l2fcs = group_l2fcs.reindex(outcomes).fillna(0)
+
+        pool_l2fcs = pool.log2_fold_changes.reindex(outcomes)[guide]
+
+        l2fcs_df = pd.DataFrame({'group': group_l2fcs, 'pool': pool_l2fcs})
+    else:
+        l2fcs_df = None
+
+    return fs_df, l2fcs_df
