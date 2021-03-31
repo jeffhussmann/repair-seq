@@ -11,7 +11,7 @@ import hits.utilities
 
 progress = tqdm.tqdm
 
-def demux_SE(base_dir, batch, payload_read_type='R1'):
+def demux_SE(base_dir, batch, payload_read_type='R1', num_reads=None, only_first_n=None):
     base_dir = Path(base_dir)
     data_dir = base_dir  / 'data' / batch
 
@@ -29,7 +29,14 @@ def demux_SE(base_dir, batch, payload_read_type='R1'):
 
     zipped_reads = zip(reads[payload_read_type], reads['i7'], reads['i5'])
 
-    for payload_read, i7, i5 in progress(zipped_reads):
+    if only_first_n is not None:
+        zipped_reads = itertools.islice(zipped_reads, only_first_n)
+        if num_reads is not None:
+            num_reads = min(num_reads, only_first_n)
+        else:
+            num_reads = only_first_n
+
+    for payload_read, i7, i5 in progress(zipped_reads, total=num_reads):
         i7_samples = resolvers['i7'](i7.seq, {'unknown'})
         i5_samples = resolvers['i5'](i5.seq, {'unknown'})
         
