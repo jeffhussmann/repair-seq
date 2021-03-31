@@ -1,5 +1,7 @@
+import copy
 from collections import defaultdict
 
+import bokeh.palettes
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -8,6 +10,7 @@ import pandas as pd
 
 import hits.visualize
 import hits.utilities
+import knock_knock.outcome
 import ddr.cluster
 import ddr.visualize
 import ddr.visualize.outcome_diagrams
@@ -25,6 +28,7 @@ class Clustermap:
         diagram_ax_rectangle: rectangle (in figure fraction coords) for diagrams to occupy in existing figure
         '''
         options.setdefault('upside_down', False)
+        options.setdefault('draw_outcome_clusters', False)
         options.setdefault('guide_library', None)
         options.setdefault('diagram_kwargs', {})
         options.setdefault('gene_text_size', 14)
@@ -82,7 +86,8 @@ class Clustermap:
         self.draw_guide_clusters()
         self.annotate_guide_clusters()
 
-        self.draw_outcome_clusters()
+        if self.options['draw_outcome_clusters']:
+            self.draw_outcome_clusters()
 
     def width(self, ax_name):
         return self.width_inches[ax_name] / self.fig_width_inches
@@ -257,7 +262,7 @@ class Clustermap:
     def draw_guide_clusters(self):
         guide_clustering = self.clusterer.guide_clustering
 
-        gap_before_clusters = self.height_per_guide * 6
+        gap_before_clusters = self.height_per_guide * 10
 
         fold_changes_position = self.get_position('fold changes')
 
@@ -295,6 +300,58 @@ class Clustermap:
         ax.set_ylim(0.5, 1.5)
         ax.set_xlim(0, len(self.clusterer.guides))
         ax.axis('off')
+
+    def draw_guide_cell_cycle_effects(self):
+        ax_key = 'guide cell cycle'
+        guide_order = self.clusterer.guide_clustering['clustered_order']
+        cell_cycle_fold_changes = self.clusterer.guide_library.cell_cycle_log2_fold_changes[guide_order]
+
+        gap_between = self.height_per_guide * 6
+
+        fold_changes_position = self.get_position('fold changes')
+
+        self.x0[ax_key] = fold_changes_position.x0
+
+        if self.options['upside_down']:
+            self.y0[ax_key] = fold_changes_position.y1 + gap_between
+        else:
+            self.y1[ax_key] = fold_changes_position.y0 - gap_between
+
+        self.width_inches[ax_key] = self.width_inches['fold changes']
+        self.height_inches[ax_key] = self.inches_per_guide * 3
+
+        ax = self.add_axes(ax_key)
+
+        im = ax.imshow(cell_cycle_fold_changes,
+                       cmap=ddr.visualize.cell_cycle_cmap,
+                       vmin=-1, vmax=1,
+                       interpolation='none',
+                      )
+
+        for y, phase in enumerate(cell_cycle_fold_changes.index):
+            ax.annotate(phase,
+                        xy=(0, y),
+                        xycoords=('axes fraction', 'data'),
+                        xytext=(-5, 0),
+                        textcoords='offset points',
+                        ha='right',
+                        va='center',
+                       )
+
+        ax.axis('off')
+
+        colorbar_key = f'{ax_key} colorbar'
+        heatmap_position = self.get_position(ax_key)
+
+        self.x0[colorbar_key] = heatmap_position.x1 + self.width_per_guide * 5
+        self.y0[colorbar_key] = heatmap_position.y0 + self.height_per_guide * 0.75
+
+        self.width_inches[colorbar_key] = self.inches_per_guide * 5
+        self.height_inches[colorbar_key] = self.inches_per_guide * 1.5
+
+        colorbar_ax = self.add_axes(colorbar_key)
+        colorbar = plt.colorbar(mappable=im, cax=colorbar_ax, orientation='horizontal')
+        colorbar.set_label(f'log$_2$ fold change\nin cell-cycle phase\noccupancy')
 
     def draw_guide_dendrogram(self):
         clusters_position = self.get_position('guide clusters')
@@ -352,6 +409,84 @@ class Clustermap:
 
         ax.set_xlim(0.5, 1.5)
         ax.set_ylim(0, len(self.clusterer.outcomes))
+        ax.axis('off')
+
+    def draw_outcome_categories(self):
+        diagrams_position = self.get_position('diagrams')
+
+        gap_before_categories = self.width_per_guide * 0.5
+
+        self.x1['outcome categories'] = diagrams_position.x0 - gap_before_categories
+        self.y0['outcome categories'] = diagrams_position.y0
+
+        self.height_inches['outcome categories'] = self.height_inches['fold changes']
+        self.width_inches['outcome categories'] = self.inches_per_guide * 5
+
+        ax = self.add_axes('outcome categories')
+
+        full_categories = defaultdict(list)
+
+        outcomes = self.clusterer.clustered_outcomes[::-1]
+        if len(outcomes[0]) == 4:
+            # outcomes include pool names:
+            outcomes = [(c, s, d) for pn, c, s, d in outcomes]
+
+        for c, s, d in outcomes:
+            ti = self.clusterer.target_info
+            if c == 'deletion':
+                deletion = knock_knock.outcome.DeletionOutcome.from_string(d).undo_anchor_shift(ti.anchor)
+                directionality = deletion.classify_directionality(ti)
+                full_category = f'{c}, {directionality}'
+            else:
+                full_category = c
+                
+            full_categories[full_category].append((c, s, d))
+
+        cat_color_order = [
+            'SD-MMEJ',
+            'deletion, PAM-distal',
+            'deletion, PAM-proximal',
+            'deletion, ambiguous',
+            'deletion, bidirectional',
+            'genomic insertion',
+            'insertion',
+            'wild type',
+        ]
+
+        palette = bokeh.palettes.Dark2[8]
+        colors = dict(zip(cat_color_order, palette))
+
+        category_aliases = {
+            'wild type': 'unedited',
+            'deletion, PAM-distal': 'deletion on PAM-distal side',
+            'deletion, bidirectional': 'bidirectional deletion',
+            'deletion, PAM-proximal': 'deletion on PAM-proximal side',
+            'SD-MMEJ': 'insertion and deletion',
+        }
+
+        cat_display_order = [
+            'wild type',
+            'insertion',
+            'deletion, bidirectional',
+            'deletion, PAM-distal',
+            'deletion, PAM-proximal',
+            'deletion, ambiguous',
+            'SD-MMEJ',
+        ]
+
+        x = 0
+        for cat in cat_display_order:
+            cat_outcomes = full_categories[cat]
+            if len(cat_outcomes) > 0:
+                indices = [len(outcomes) - 1 - outcomes.index(outcome) for outcome in cat_outcomes]
+
+                for idx in indices:
+                    ax.plot([x, x], [idx - 0.3, idx + 0.3], linewidth=5, color=colors[cat], clip_on=False)
+
+                x -= 1
+
+        ax.set_xlim(x - 1, 1)
+        ax.set_ylim(-0.5, len(outcomes) - 0.5)
         ax.axis('off')
 
     def draw_outcome_dendrogram(self):
