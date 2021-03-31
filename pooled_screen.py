@@ -2592,19 +2592,29 @@ def get_all_pools(base_dir=Path.home() / 'projects' / 'ddr', progress=None):
 
     return pools
 
-def parallel(base_dir, pool_name, max_procs):
-    pool = get_pool(base_dir, pool_name, progress=None)#tqdm.tqdm)
+def parallel(base_dir, pool_name, max_procs, show_progress_bars=False, preload_indices=False):
+    if show_progress_bars:
+        progress = tqdm.tqdm
+        possibly_progress = ['--bar']
+        num_args = '4'
+    else:
+        progress = None
+        possibly_progress = []
+        num_args = '5'
 
-    for org in pool.supplemental_indices:
-        index_dir = pool.supplemental_indices[org]['STAR']
-        print(f'Loading {org} index at {index_dir}...')
-        mapping_tools.load_STAR_index(index_dir)
+    pool = get_pool(base_dir, pool_name, progress=progress)
+
+    if preload_indices:
+        for organism in pool.supplemental_indices:
+            index_dir = pool.supplemental_indices[org]['STAR']
+            print(f'Loading {organism} index at {index_dir}...')
+            mapping_tools.load_STAR_index(index_dir)
 
     def process_stage(stage):
         parallel_command = [
             'parallel',
-            '-n', '4', 
-            #'--progress',
+            '-n', num_args,
+        ] + possibly_progress + [
             '--max-procs', str(max_procs),
             'ddr',
             '--base_dir', str(base_dir),
@@ -2612,25 +2622,33 @@ def parallel(base_dir, pool_name, max_procs):
         ]
 
         arg_tuples = []
+
         for fixed_guide, variable_guide in pool.guide_combinations_by_read_count:
-            arg_tuples.append((pool_name, fixed_guide, variable_guide, stage))
+            arg_tuple = (pool_name, fixed_guide, variable_guide, stage)
+            if not show_progress_bars:
+                arg_tuple += ('--timestamp',)
+
+            arg_tuples.append(arg_tuple)
 
         for t in arg_tuples:
             parallel_command.extend(t)
-        
-        completed_process = subprocess.run(parallel_command)
+
+        env = os.environ
+        env['OPENBLAS_NUM_THREADS'] = '1'
+
+        completed_process = subprocess.run(parallel_command, env=env)
         if completed_process.returncode != 0:
             print('error in parallel')
             sys.exit(1)
-
-    process_stage('preprocess')
-    pool.make_common_sequences()
-    parallel_common_sequences(pool, max_procs)
+        
+    #process_stage('preprocess')
+    #pool.make_common_sequences()
+    parallel_common_sequences(pool, max_procs, show_progress_bars)
     pool.write_common_outcome_files()
 
     pool.merge_common_sequence_special_alignments()
 
-    process_stage('align')
+    #process_stage('align')
     process_stage('categorize')
 
     pool.make_outcome_counts()
@@ -2642,11 +2660,16 @@ def parallel(base_dir, pool_name, max_procs):
     #pool.compute_fraction_removed()
     #pool.merge_special_alignments()
 
-def parallel_common_sequences(pool, max_procs):
+def parallel_common_sequences(pool, max_procs, show_progress_bars=False):
+    if show_progress_bars:
+        possibly_progress = ['--progress']
+    else:
+        possibly_progress = []
+
     parallel_command = [
         'parallel',
-        '-n', '2', 
-        #'--progress',
+        '-n', '2',
+    ] + possibly_progress + [
         '--max-procs', str(max_procs),
         'ddr',
         '--base_dir', str(pool.base_dir),
@@ -2657,21 +2680,35 @@ def parallel_common_sequences(pool, max_procs):
     for pair in sorted(arg_pairs):
         parallel_command.extend(pair)
     
-    completed_process = subprocess.run(parallel_command)
+    env = os.environ
+    env['OPENBLAS_NUM_THREADS'] = '1'
+
+    completed_process = subprocess.run(parallel_command, env=env)
     if completed_process.returncode != 0:
         print('error in parallel')
         sys.exit(1)
 
-def process(base_dir, pool_name, fixed_guide, variable_guide, stage, progress=None):
+def timestamp():
+    return f'{datetime.datetime.now():%Y-%m-%d %H:%M:%S}'
+
+def process(base_dir, pool_name, fixed_guide, variable_guide, stage, progress=None, print_timestamps=False):
     pool = get_pool(base_dir, pool_name, progress=progress)
     exp = pool.single_guide_experiment(fixed_guide, variable_guide)
-    print(f'Started {fixed_guide}-{variable_guide} {stage}')
+
+    if print_timestamps:
+        print(f'{timestamp()} Started {fixed_guide}-{variable_guide} {stage}')
+
     exp.process(stage)
-    print(f'Finished {fixed_guide}-{variable_guide} {stage}')
+
+    if print_timestamps:
+        print(f'{timestamp()} Finished {fixed_guide}-{variable_guide} {stage}')
 
 def process_common_sequences(base_dir, pool_name, chunk, progress=None):
     pool = get_pool(base_dir, pool_name, progress=progress)
     exp = pool.common_sequence_chunk_exp_from_name(chunk)
-    print(f'Started {chunk}')
+
+    print(f'{timestamp()} Started {chunk}')
+
     exp.process()
-    print(f'Finished {chunk}')
+
+    print(f'{timestamp()} Finished {chunk}')

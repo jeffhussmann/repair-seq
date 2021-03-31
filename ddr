@@ -3,7 +3,6 @@
 import argparse
 from pathlib import Path
 
-import yaml
 import tqdm
 
 parser = argparse.ArgumentParser()
@@ -12,7 +11,7 @@ subparsers.required = True
 
 def process(args):
     from ddr import pooled_screen
-    pooled_screen.process(args.base_dir, args.pool, args.fixed_guide, args.variable_guide, args.stage, args.progress)
+    pooled_screen.process(args.base_dir, args.pool, args.fixed_guide, args.variable_guide, args.stage, args.progress, print_timestamps=args.timestamp)
 
 parser_process = subparsers.add_parser('process')
 parser_process.add_argument('pool')
@@ -20,15 +19,17 @@ parser_process.add_argument('fixed_guide')
 parser_process.add_argument('variable_guide')
 parser_process.add_argument('stage', type=str, choices=['preprocess', 'align', 'categorize'])
 parser_process.add_argument('--progress', const=tqdm.tqdm, action='store_const')
+parser_process.add_argument('--timestamp', action='store_true')
 parser_process.set_defaults(func=process)
 
 def parallel(args):
     from ddr import pooled_screen
-    pooled_screen.parallel(args.base_dir, args.pool, args.max_procs)
+    pooled_screen.parallel(args.base_dir, args.pool, args.max_procs, args.show_progress_bars)
 
 parser_parallel = subparsers.add_parser('parallel')
 parser_parallel.add_argument('max_procs', type=int)
 parser_parallel.add_argument('pool')
+parser_parallel.add_argument('--show_progress_bars', action='store_true')
 parser_parallel.set_defaults(func=parallel)
 
 def process_common_sequences(args):
