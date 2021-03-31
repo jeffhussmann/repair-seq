@@ -21,7 +21,6 @@ def convert_deletion(d, source_target_info, dest_target_info):
     ''' deletions are defined by starts_ats and length.
     When switching between anchor/+ and sgRNA/sgRNA strand coordinate, starts_ats may become ends_ats.
     '''
-    
     start_end_pairs = list(zip(d.starts_ats, d.ends_ats))
     sgRNA_coords = [(convert_to_sgRNA_coords(source_target_info, s), convert_to_sgRNA_coords(source_target_info, e)) for s, e in start_end_pairs]
     anchor_coords = [(convert_to_anchor_coords(dest_target_info, s), convert_to_anchor_coords(dest_target_info, e)) for s, e in sgRNA_coords]
@@ -61,23 +60,62 @@ def convert_outcomes(outcomes, source_target_info, dest_target_info):
     
     return converted
 
-def compare_pool_to_endogenous(pool, group, guide=None, condition=None):
+def compare_pool_to_endogenous(pools, groups, destination_target_info=None, guide=None, condition=None):
     ''' '''
-    endogenous_outcomes = [(c, s, d) for c, s, d in group.outcomes_by_baseline_frequency if c != 'uncategorized' and s != 'far from cut' and s != 'mismatches']
-    endogenous_outcomes_converted = convert_outcomes(endogenous_outcomes, pool.target_info, group.target_info)
+    if destination_target_info is None:
+        destination_target_info = pools[0].target_info
 
-    outcomes = sorted(set(pool.non_targeting_fractions.index.values) | set(endogenous_outcomes_converted))
+    all_outcomes = set()
+    all_fs = []
+    all_l2fcs = {}
 
-    outcomes = [(c, s, d) for c, s, d in outcomes if c != 'uncategorized']
+    for group in groups:
+        endogenous_outcomes = [(c, s, d) for c, s, d in group.outcomes_by_baseline_frequency if c != 'uncategorized' and s != 'far from cut' and s != 'mismatches']
+        endogenous_outcomes_converted = convert_outcomes(endogenous_outcomes, destination_target_info, group.target_info)
 
-    group_fs = group.outcome_fraction_baseline_means.loc[endogenous_outcomes]
-    group_fs.index = pd.MultiIndex.from_tuples(endogenous_outcomes_converted)
-    group_fs = group_fs.reindex(outcomes).fillna(0)
+        group_fs = group.outcome_fractions.loc[endogenous_outcomes]
+        group_fs.index = pd.MultiIndex.from_tuples(endogenous_outcomes_converted)
 
-    pool_fs = pool.non_targeting_fractions.reindex(outcomes).fillna(0)
+        means = group.outcome_fraction_condition_means.loc[endogenous_outcomes]
+        means.index = pd.MultiIndex.from_tuples(endogenous_outcomes_converted)
+        means = pd.concat({'mean': means}, axis=1)
 
-    fs_df = pd.DataFrame({'group': group_fs, 'pool': pool_fs})
+        means.columns.names = ['replicate'] + group_fs.columns.names[:-1]
+        means.columns = means.columns.reorder_levels(group_fs.columns.names[:-1] + ['replicate'])
+
+        group_fs_with_means = pd.concat([group_fs, means], axis=1).sort_index(axis=1)
+        group_fs_with_means.columns = [f'{group.batch} {group.group} ' + ' '.join(map(str, v)) for v in group_fs_with_means.columns.values]
+
+        all_fs.append(group_fs_with_means)
+
+        all_outcomes |= set(endogenous_outcomes_converted)
+
+        if condition is not None:
+            group_l2fcs = group.log2_fold_change_condition_means.loc[endogenous_outcomes, condition]
+            group_l2fcs.index = pd.MultiIndex.from_tuples(endogenous_outcomes_converted)
+
+            all_l2fcs[f'{group.batch} {group.group}'] = group_l2fcs
+
+    for pool in pools:
+        all_outcomes |= set(pool.non_targeting_fractions.index.values)
+        all_fs[pool.group] = pool.non_targeting_fractions
+
+        if guide is not None:
+            all_l2fcs[pool.group] = pool.log2_fold_changes[guide]
+
+    all_outcomes = [(c, s, d) for c, s, d in all_outcomes if c != 'uncategorized']
+
+    all_fs = [v.reindex(all_outcomes).fillna(0) for v in all_fs]
+
+    for k, v in all_l2fcs.items():
+        all_l2fcs[k] = v.reindex(all_outcomes).fillna(0)
+
+    fs_df = pd.concat(all_fs, axis=1)
     fs_df.index.names = ('category', 'subcategory', 'details')
+
+    l2fcs_df = pd.DataFrame(all_l2fcs)
+    if guide is not None or condition is not None:
+        l2fcs_df.index.names = ('category', 'subcategory', 'details')
 
     # Collapse genomic insertions to one row.
     genomic_insertion_collapsed = fs_df.loc[['genomic insertion']].groupby('subcategory').sum()
@@ -87,15 +125,37 @@ def compare_pool_to_endogenous(pool, group, guide=None, condition=None):
     for subcategory, row in genomic_insertion_collapsed.iterrows():
         fs_df.loc['genomic insertion', subcategory, 'collapsed'] = row
 
-    if guide is not None and condition is not None:
-        group_l2fcs = group.log2_fold_change_condition_means.loc[endogenous_outcomes, condition]
-        group_l2fcs.index = pd.MultiIndex.from_tuples(endogenous_outcomes_converted)
-        group_l2fcs = group_l2fcs.reindex(outcomes).fillna(0)
-
-        pool_l2fcs = pool.log2_fold_changes.reindex(outcomes)[guide]
-
-        l2fcs_df = pd.DataFrame({'group': group_l2fcs, 'pool': pool_l2fcs})
-    else:
-        l2fcs_df = None
-
     return fs_df, l2fcs_df
+
+def compare_cut_sites(groups):
+    ''' '''
+
+    all_fs = []
+
+    for group in groups:
+        group_fs = group.outcome_fractions
+
+        means = group.outcome_fraction_condition_means
+        means = pd.concat({'mean': means}, axis=1)
+
+        means.columns.names = ['replicate'] + group_fs.columns.names[:-1]
+        means.columns = means.columns.reorder_levels(group_fs.columns.names[:-1] + ['replicate'])
+
+        group_fs_with_means = pd.concat([group_fs, means], axis=1).sort_index(axis=1)
+        group_fs_with_means.columns = [f'{group.batch} {group.group} ' + ' '.join(map(str, v)) for v in group_fs_with_means.columns.values]
+
+        all_fs.append(group_fs_with_means)
+
+    fs_df = pd.concat(all_fs, axis=1).fillna(0)
+    fs_df.index.names = ('category', 'subcategory', 'details')
+
+    # Collapse genomic insertions to one row.
+    genomic_insertion_collapsed = fs_df.loc[['genomic insertion']].groupby('subcategory').sum()
+
+    fs_df.drop('genomic insertion', inplace=True)
+    fs_df.drop('uncategorized', inplace=True)
+
+    for subcategory, row in genomic_insertion_collapsed.iterrows():
+        fs_df.loc['genomic insertion', subcategory, 'collapsed'] = row
+
+    return fs_df
