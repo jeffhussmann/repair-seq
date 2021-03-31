@@ -1,17 +1,19 @@
-import tempfile
-import subprocess
 import argparse
+import gzip
 import multiprocessing
+import subprocess
+import tempfile
 
 from pathlib import Path
 from collections import Counter
 
-import yaml
-import pandas as pd
+import anndata as ad
 import numpy as np
+import pandas as pd
 import pysam
 import scanpy as sc 
 import scipy.sparse
+import yaml
 
 from pomegranate import GeneralMixtureModel, PoissonDistribution, NormalDistribution
 
@@ -121,6 +123,7 @@ class PerturbseqLane:
         self.output_dir = self.base_dir / 'results' / self.group / self.name
         self.sgRNA_dir  = self.output_dir / 'sgRNA'
         self.GEX_dir  = self.output_dir / 'GEX'
+        self.cellranger_dir = self.output_dir / 'cellranger_output'
 
         self.guide_library = ddr.guide_library.GuideLibrary(self.base_dir, full_sample_sheet['guide_libary'])
         self.guide_index = self.guide_library.fns['perturbseq_STAR_index']
@@ -153,6 +156,12 @@ class PerturbseqLane:
             'genemap': Path(full_sample_sheet['kallisto_genemap']),
             'ecmap': self.GEX_dir / 'matrix.ec',
             'txnames': self.GEX_dir / 'transcripts.txt',
+
+            'cellranger_filtered_feature_bc_matrix_dir': self.cellranger_dir / 'filtered_feature_bc_matrix',
+            'cellranger_barcodes': self.cellranger_dir / 'filtered_feature_bc_matrix' / 'barcodes.tsv.gz',
+            'sgRNA_counts_list': self.cellranger_dir / 'sgRNA_counts_list.csv.gz',
+            'sgRNA_counts_csv': self.cellranger_dir / 'sgRNA_counts.csv.gz',
+            'sgRNA_counts_h5ad': self.cellranger_dir / 'sgRNA_counts.h5ad',
         }
 
         self.fns = {
@@ -301,11 +310,13 @@ class PerturbseqLane:
                 
             ENSG_to_name[ENSG] = name_to_use
 
-        return ENSG_to_name
+        ENSG_to_name['negative_control'] = 'negative_control'
+
+        return pd.Series(ENSG_to_name)
 
     @memoized_property
     def name_to_ENSG(self):
-        return utilities.reverse_dictionary(self.ENSG_to_name)
+        return pd.Series(utilities.reverse_dictionary(self.ENSG_to_name))
 
     def combine_sgRNA_and_GEX_counts(self):
         gex_data = self.GEX_data
@@ -359,18 +370,48 @@ class PerturbseqLane:
         return guide_calls, num_guides
 
     @memoized_property
+    def cellranger_barcodes(self):
+        bcs = []
+
+        with gzip.open(self.GEX_fns['cellranger_barcodes'], 'rt') as fh:
+            for line in fh:
+                bcs.append(line.strip())
+
+        return pd.Index(bcs)
+
+    def make_guide_count_tables(self):
+        cells_with_dummy_lane = [f'{cell_bc}-1' for cell_bc in self.sgRNA_data.obs_names]
+        self.sgRNA_data.obs.index = cells_with_dummy_lane
+
+        cells_in_both = self.cellranger_barcodes.intersection(self.sgRNA_data.obs_names)
+
+        sgRNA_data = self.sgRNA_data[cells_in_both]
+        sgRNA_data.write(self.GEX_fns['sgRNA_counts_h5ad'])
+
+        df = sgRNA_data.to_df().astype(int)
+        df.index.name = 'cell_barcode'
+        df.columns.name = 'guide_identity'
+        df.to_csv(self.GEX_fns['sgRNA_counts_csv'])
+
+        stacked = df.stack()
+        stacked.name = 'UMI_count'
+        stacked.index.names = ('cell_barcode', 'guide_identity')
+        stacked.to_csv(self.GEX_fns['sgRNA_counts_list'])
+
+    @memoized_property
     def annotated_counts(self):
         return sc.read_h5ad(self.fns['annotated_counts'])
 
     def process(self):
-        self.map_sgRNA_reads()
-        self.convert_sgRNA_bam_to_bus()
-        self.convert_bus_to_counts(self.sgRNA_fns)
+        #self.map_sgRNA_reads()
+        #self.convert_sgRNA_bam_to_bus()
+        #self.convert_bus_to_counts(self.sgRNA_fns)
 
-        self.pseudoalign_GEX_reads()
-        self.convert_bus_to_counts(self.GEX_fns)
+        #self.pseudoalign_GEX_reads()
+        #self.convert_bus_to_counts(self.GEX_fns)
 
-        self.combine_sgRNA_and_GEX_counts()
+        #self.combine_sgRNA_and_GEX_counts()
+        self.make_guide_count_tables()
 
 def load_sample_sheet(sample_sheet_fn):
     sample_sheet = yaml.safe_load(Path(sample_sheet_fn).read_text())
@@ -389,10 +430,28 @@ class MultipleLanes:
         self.lanes = [PerturbseqLane(self.base_dir, self.group, name) for name in full_sample_sheet['lanes']]
 
         self.results_dir = self.base_dir / 'results' / self.group
+        self.cellranger_dir = self.results_dir / 'cellranger_aggregated' / 'outs'
 
         self.fns = {
             'all_cells': self.results_dir / 'all_cells.h5ad',
         }
+
+        self.GEX_fns = {
+            'cellranger_filtered_feature_bc_matrix_dir': self.cellranger_dir / 'filtered_feature_bc_matrix',
+            'cellranger_barcodes': self.cellranger_dir / 'filtered_feature_bc_matrix' / 'barcodes.tsv.gz',
+            'sgRNA_counts_list': self.cellranger_dir / 'sgRNA_counts_list.csv.gz',
+            'sgRNA_counts_csv': self.cellranger_dir / 'sgRNA_counts.csv.gz',
+            'sgRNA_counts_h5ad': self.cellranger_dir / 'sgRNA_counts.h5ad',
+            'guide_assignments': self.cellranger_dir / 'guide_assignments.csv.gz',
+        }
+
+    @memoized_property
+    def ENSG_to_name(self):
+        return self.lanes[0].ENSG_to_name
+
+    @memoized_property
+    def name_to_ENSG(self):
+        return self.lanes[0].name_to_ENSG
 
     def combine_counts(self):
         all_cells = {}
@@ -411,12 +470,39 @@ class MultipleLanes:
         all_cells = sc.AnnData(all_Xs, all_obs, all_var)
         all_cells.write(self.fns['all_cells'])
 
+    def make_guide_count_tables(self):
+        all_sgRNA_counts = []
+        for lane in self.lanes:
+            sgRNA_counts = sc.read_h5ad(lane.GEX_fns['sgRNA_counts_h5ad'])
+            lane_num = lane.name[-1]
+            sgRNA_counts.obs.index = [f'{cell_bc.rsplit("-", 1)[0]}-{lane_num}' for cell_bc in sgRNA_counts.obs_names]
+            all_sgRNA_counts.append(sgRNA_counts)
+
+        sgRNA_data = ad.concat(all_sgRNA_counts)
+        sgRNA_data.write(self.GEX_fns['sgRNA_counts_h5ad'])
+
+        df = sgRNA_data.to_df().astype(int)
+        df.index.name = 'cell_barcode'
+        df.columns.name = 'guide_identity'
+        df.to_csv(self.GEX_fns['sgRNA_counts_csv'])
+
+        stacked = df.stack()
+        stacked.name = 'UMI_count'
+        stacked.index.names = ('cell_barcode', 'guide_identity')
+        stacked.to_csv(self.GEX_fns['sgRNA_counts_list'])
+
     @memoized_property
     def cells(self):
         return sc.read_h5ad(self.fns['all_cells'])
 
 def process_in_pool(lane):
     lane.process()
+
+def parallel(lanes, max_procs):
+    pool = multiprocessing.Pool(processes=max_procs)
+    pool.map(process_in_pool, lanes.lanes)
+
+    #lanes.combine_counts()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -429,7 +515,4 @@ if __name__ == '__main__':
 
     lanes = MultipleLanes(args.base_dir, args.group)
 
-    pool = multiprocessing.Pool(processes=args.max_procs)
-    pool.map(process_in_pool, lanes.lanes)
-
-    lanes.combine_counts()
+    parallel(lanes, args.max_procs)
