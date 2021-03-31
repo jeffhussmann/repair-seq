@@ -132,6 +132,11 @@ class GuideLibrary:
     @memoized_property
     def guide_to_gene(self):
         guide_to_gene = self.guides_df['gene'].copy()
+        return guide_to_gene
+
+    @memoized_property
+    def guide_to_gene_with_non_targeting_guide_sets(self):
+        guide_to_gene = self.guides_df['gene'].copy()
         for nt_guide_set, guides in self.non_targeting_guide_sets.items():
             for guide in guides:
                 guide_to_gene[guide] = nt_guide_set
@@ -177,6 +182,7 @@ class DummyGuideLibrary:
         self.guides = ['none']
         self.non_targeting_guides = ['none']
         self.genes = ['negative_control']
+        self.name = None
     
     @memoized_property
     def guide_to_gene(self):
