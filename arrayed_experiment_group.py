@@ -22,7 +22,13 @@ from hits import utilities, sam
 memoized_property = utilities.memoized_property
 
 class Batch:
-    def __init__(self, base_dir, batch, progress=None):
+    def __init__(self, base_dir, batch,
+                 category_groupings=None,
+                 baseline_condition=None,
+                 add_pseudocount=False,
+                 only_edited=False,
+                 progress=None,
+                ):
         self.base_dir = Path(base_dir)
         self.batch = batch
         self.data_dir = self.base_dir / 'data' / batch
@@ -33,6 +39,11 @@ class Batch:
             progress = ignore_kwargs
 
         self.progress = progress
+
+        self.category_groupings = category_groupings
+        self.baseline_condition = baseline_condition
+        self.add_pseudocount = add_pseudocount
+        self.only_edited = only_edited
 
         self.sample_sheet_fn = self.data_dir / 'sample_sheet.csv'
         self.sample_sheet = pd.read_csv(self.sample_sheet_fn, index_col='sample_name')
@@ -54,7 +65,13 @@ class Batch:
         return self.sample_sheet['group'].unique()
 
     def group(self, group_name):
-        return ArrayedExperimentGroup(self.base_dir, self.batch, group_name, progress=self.progress)
+        return ArrayedExperimentGroup(self.base_dir, self.batch, group_name,
+                                      category_groupings=self.category_groupings,
+                                      baseline_condition=self.baseline_condition,
+                                      add_pseudocount=self.add_pseudocount,
+                                      only_edited=self.only_edited,
+                                      progress=self.progress,
+                                     )
 
     @memoized_property
     def groups(self):
@@ -79,35 +96,45 @@ class Batch:
 
         return exps
 
-def get_batch(base_dir, batch_name, progress=None):
+def get_batch(base_dir, batch_name, progress=None, **kwargs):
     batch = None
 
     group_dir = Path(base_dir) / 'data' / batch_name
     group_descriptions_fn = group_dir / 'group_descriptions.csv'
 
     if group_descriptions_fn.exists():
-        batch = Batch(base_dir, batch_name, progress)
+        batch = Batch(base_dir, batch_name, progress, **kwargs)
 
     return batch
 
-def get_all_batches(base_dir=Path.home() / 'projects' / 'ddr', progress=None):
+def get_all_batches(base_dir=Path.home() / 'projects' / 'ddr', progress=None, **kwargs):
     possible_batch_dirs = [p for p in (Path(base_dir) / 'results').iterdir() if p.is_dir()]
 
     batches = {}
 
     for possible_batch_dir in possible_batch_dirs:
         batch_name = possible_batch_dir.name
-        batch = get_batch(base_dir, batch_name, progress=progress)
+        batch = get_batch(base_dir, batch_name, progress=progress, **kwargs)
         if batch is not None:
             batches[batch_name] = batch
 
     return batches
 
 class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
-    def __init__(self, base_dir, batch, group, progress=None):
+    def __init__(self, base_dir, batch, group,
+                 category_groupings=None,
+                 progress=None,
+                 baseline_condition=None,
+                 add_pseudocount=None,
+                 only_edited=False,
+                ):
         self.base_dir = Path(base_dir)
         self.batch = batch
         self.group = group
+
+        self.category_groupings = category_groupings
+        self.add_pseudocount = add_pseudocount
+        self.only_edited = only_edited
 
         self.group_args = (base_dir, batch, group)
 
@@ -132,7 +159,10 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
         self.condition_keys = self.description['condition_keys'].split(';')
         self.full_condition_keys = tuple(self.condition_keys + ['replicate'])
 
-        self.baseline_condition = tuple(self.description['baseline_condition'].split(';'))
+        if baseline_condition is not None:
+            self.baseline_condition = baseline_condition
+        else:
+            self.baseline_condition = tuple(self.description['baseline_condition'].split(';'))
 
         self.experiment_type = self.description['experiment_type']
 
@@ -154,7 +184,10 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
 
         conditions_are_unique = len(set(self.full_conditions)) == len(self.full_conditions)
         if not conditions_are_unique:
-            raise ValueError(Counter(self.full_conditions))
+            print(f'{self}\nconditions are not unique:')
+            for k, v in Counter(self.full_conditions).most_common():
+                print(k, v)
+            raise ValueError
 
         self.full_condition_to_sample_name = {full_condition_from_row(row): sample_name for sample_name, row in self.sample_sheet.iterrows()}
 
@@ -277,6 +310,13 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
     def outcome_counts(self):
         # Ignore nonspecific amplification products in denominator of any outcome fraction calculations.
         to_drop = ['nonspecific amplification', 'bad sequence']
+
+        # Empirically, overall editing rates can vary considerably across arrayed 
+        # experiments, presumably due to nucleofection efficiency. If self.only_edited
+        # is true, exlcude unedited reads from outcome counting.
+        if self.only_edited:
+            to_drop.append('wild type')
+
         outcome_counts = self.outcome_counts_df(False).drop(to_drop, errors='ignore')
         
         # Sort columns to avoid annoying pandas PerformanceWarnings.
@@ -302,7 +342,7 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
         fractions = self.outcome_counts / self.total_valid_reads
         order = fractions[self.baseline_condition].mean(axis='columns').sort_values(ascending=False).index
         fractions = fractions.loc[order]
-        return fractions.iloc[:1000]
+        return fractions
 
     @memoized_property
     def outcome_fractions_with_bad(self):
@@ -358,7 +398,30 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
 
     @memoized_property
     def category_fractions(self):
-        return self.outcome_fractions.sum(level='category')
+        fs = self.outcome_fractions.sum(level='category')
+
+        if self.category_groupings is not None:
+            only_relevant_cats = pd.Index.difference(fs.index, self.category_groupings['not_relevant'])
+            relevant_but_not_specific_cats = pd.Index.difference(only_relevant_cats, self.category_groupings['specific'])
+
+            only_relevant = fs.loc[only_relevant_cats]
+
+            only_relevant_normalized = only_relevant / only_relevant.sum()
+
+            relevant_but_not_specific = only_relevant_normalized.loc[relevant_but_not_specific_cats].sum()
+
+            grouped = only_relevant_normalized.loc[self.category_groupings['specific']]
+            grouped.loc['all others'] = relevant_but_not_specific
+
+            fs = grouped
+
+            if self.add_pseudocount:
+                reads_per_sample = self.outcome_counts.drop(self.category_groupings['not_relevant'], errors='ignore').sum()
+                counts = fs * reads_per_sample
+                counts += 1
+                fs = counts / counts.sum()
+
+        return fs
 
     @memoized_property
     def category_fraction_condition_means(self):
@@ -412,6 +475,69 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
         means = self.category_fraction_condition_means
         stds = self.category_fraction_condition_stds
         baseline_means = self.category_fraction_baseline_means
+        return {
+            'lower': np.log2((means - stds).div(baseline_means, axis=0)),
+            'upper': np.log2((means + stds).div(baseline_means, axis=0)),
+        }
+
+    # TODO: figure out how to avoid this hideous code duplication.
+
+    @memoized_property
+    def subcategory_fractions(self):
+        return self.outcome_fractions.sum(level=['category', 'subcategory'])
+
+    @memoized_property
+    def subcategory_fraction_condition_means(self):
+        return self.subcategory_fractions.mean(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def subcategory_fraction_baseline_means(self):
+        return self.subcategory_fraction_condition_means[self.baseline_condition]
+
+    @memoized_property
+    def subcategory_fraction_condition_stds(self):
+        return self.subcategory_fractions.std(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def subcategories_by_baseline_frequency(self):
+        return self.subcategory_fraction_baseline_means.sort_values(ascending=False).index.values
+
+    @memoized_property
+    def subcategory_fraction_differences(self):
+        return self.subcategory_fractions.sub(self.subcategory_fraction_baseline_means, axis=0)
+
+    @memoized_property
+    def subcategory_fraction_difference_condition_means(self):
+        return self.subcategory_fraction_differences.mean(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def subcategory_fraction_difference_condition_stds(self):
+        return self.subcategory_fraction_differences.std(axis='columns', level=self.condition_keys)
+
+    @memoized_property
+    def subcategory_log2_fold_changes(self):
+        # Using the warnings context manager doesn't work here, maybe because of pandas multithreading?
+        warnings.filterwarnings('ignore')
+
+        fold_changes = self.subcategory_fractions.div(self.subcategory_fraction_baseline_means, axis=0)
+        log2_fold_changes = np.log2(fold_changes)
+
+        warnings.resetwarnings()
+
+        return log2_fold_changes
+
+    @memoized_property
+    def subcategory_log2_fold_change_condition_means(self):
+        # calculate mean in linear space, not log space
+        fold_changes = self.subcategory_fraction_condition_means.div(self.subcategory_fraction_baseline_means, axis=0)
+        return np.log2(fold_changes)
+
+    @memoized_property
+    def subcategory_log2_fold_change_condition_stds(self):
+        # calculate effective log2 fold change of mean +/- std in linear space
+        means = self.subcategory_fraction_condition_means
+        stds = self.subcategory_fraction_condition_stds
+        baseline_means = self.subcategory_fraction_baseline_means
         return {
             'lower': np.log2((means - stds).div(baseline_means, axis=0)),
             'upper': np.log2((means + stds).div(baseline_means, axis=0)),
