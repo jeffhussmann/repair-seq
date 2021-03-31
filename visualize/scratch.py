@@ -1,4 +1,5 @@
 import itertools
+from collections import defaultdict
 
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -208,36 +209,47 @@ def scatter_and_pc(pool,
                    column_order=None,
                    legend=True,
                    draw_labels=True,
+                   guide_to_color=None,
+                   gene_to_color=None,
+                   guides_to_highlight=None,
+                   manual_labels=None,
                   ):
+
+    if manual_labels is None:
+        manual_labels = []
+
     data = results['full_df'].xs('log2_fold_change', axis=1, level=1).copy()
     if column_order is not None:
         data = data[column_order]
     best_promoter = pool.variable_guide_library.guides_df['best_promoter']
     guide_to_gene = results['full_df']['gene']
         
-    guides_to_label = guide_to_gene[guide_to_gene.isin(genes_to_label) & best_promoter].index
-    #guides_to_label = guide_to_gene[guide_to_gene.isin(genes_to_label)].index
+    if guides_to_highlight is None:
+        guides_to_highlight = guide_to_gene[guide_to_gene.isin(genes_to_label) & best_promoter].index
 
-    guide_to_color, gene_to_color = make_color_column(guide_to_gene, genes_to_label, full_gene_list=full_gene_list)
+    if gene_to_color is None and guide_to_color is None:
+        guide_to_color, gene_to_color = make_color_column(guide_to_gene, genes_to_label, full_gene_list=full_gene_list)
 
     fig, pc_ax = plt.subplots(figsize=(0.75 * len(data.columns), 6))
     
-    parallel_coordinates(data, pc_ax,
-                         guides_to_label,
-                         guide_to_gene,
-                         guide_to_color,
-                         lims=lims,
-                         text_labels=['right'],
-                         pn_to_name=pn_to_name,
-                         #legend=legend,
-                        )
-
-    #parallel_coordinates_genes(results['genes_df'], pc_ax,
-    #                     gene_to_color,
+    #parallel_coordinates(data, pc_ax,
+    #                     guides_to_label,
+    #                     guide_to_gene,
+    #                     guide_to_color,
     #                     lims=lims,
     #                     text_labels=['right'],
     #                     pn_to_name=pn_to_name,
+    #                     #legend=legend,
     #                    )
+
+    parallel_coordinates_genes(results['genes_df'], pc_ax,
+                               gene_to_color,
+                               genes_to_label,
+                               lims=lims,
+                               text_labels=['right'],
+                               pn_to_name=pn_to_name,
+                               legend=legend,
+                              )
 
     pc_ax_p = pc_ax.get_position()
     fig_width, fig_height = fig.get_size_inches()
@@ -248,13 +260,22 @@ def scatter_and_pc(pool,
     scatter(data, scatter_ax,
             x_column,
             y_column,
-            guides_to_label,
+            guides_to_highlight,
             guide_to_color,
             avoid_overlapping_labels=avoid_overlapping_labels,
             lims=lims,
             pn_to_name=pn_to_name,
             draw_labels=draw_labels,
            )
+
+    for label, color, xy in manual_labels:
+        scatter_ax.annotate(label,
+                            xy=xy,
+                            xycoords='data',
+                            color=color,
+                            ha='center',
+                            annotation_clip=False,
+                           )
 
     fig_transform = pc_ax.figure.transFigure
     inverse_figure = fig_transform.inverted()
@@ -300,7 +321,7 @@ def scatter_and_pc(pool,
     return fig, pc_ax, scatter_ax
 
 def scatter(data, ax, x_column, y_column,
-            guides_to_label,
+            guides_to_highlight,
             guide_to_color, 
             lims=(-4, 2),
             avoid_overlapping_labels=True,
@@ -312,10 +333,16 @@ def scatter(data, ax, x_column, y_column,
 
     data['color'] = guide_to_color
 
-    common_kwargs = dict(x=x_column, y=y_column, c='color', linewidths=(0,))
+    common_kwargs = dict(x=x_column,
+                         y=y_column,
+                         c='color',
+                         linewidths=(0,),
+                        )
+
+    to_plot = data[[x_column, y_column, 'color']].dropna()
     
-    ax.scatter(data=data.loc[data.index.difference(guides_to_label)], s=15, alpha=0.5, **common_kwargs)
-    ax.scatter(data=data.loc[guides_to_label], s=25, alpha=0.95, zorder=10, **common_kwargs)
+    ax.scatter(data=to_plot.loc[to_plot.index.difference(guides_to_highlight)], s=15, alpha=0.5, **common_kwargs)
+    ax.scatter(data=to_plot.loc[guides_to_highlight], s=35, alpha=0.95, zorder=10, **common_kwargs)
 
     ax.axhline(0, color='black', alpha=0.3)
     ax.axvline(0, color='black', alpha=0.3)
@@ -349,7 +376,7 @@ def scatter(data, ax, x_column, y_column,
                 )
 
         hits.visualize.label_scatter_plot(ax, x_column, y_column, 'guide',
-                                        data=data.loc[guides_to_label],
+                                        data=to_plot.loc[guides_to_highlight],
                                         text_kwargs={'size': 10},
                                         initial_distance=20,
                                         color='color',
@@ -358,9 +385,9 @@ def scatter(data, ax, x_column, y_column,
                                         )
 
 def parallel_coordinates(data, ax,
-                         guides_to_label,
-                         guide_to_gene,
-                         guide_to_color,
+                         guides_to_label=None,
+                         guide_to_gene=None,
+                         guide_to_color=None,
                          lims=(-4, 2),
                          text_labels=None,
                          pn_to_name=None,
@@ -368,8 +395,22 @@ def parallel_coordinates(data, ax,
                          y_label='log2 fold-change from all non-targeting',
                          xs=None,
                          markersize=8,
+                         draw_non_targeting=True,
+                         linewidth=2.5,
+                         draw_all_guides=False,
+                         alpha=0.9,
+                         guide_to_kwargs=None,
+                         **kwargs,
                         ):
-    guide_to_kwargs = {}
+
+    if guides_to_label is None:
+        guides_to_label = []
+
+    if guide_to_gene is None:
+        guide_to_gene = pd.Series()
+
+    if guide_to_color is None:
+        guide_to_color = defaultdict(lambda: 'grey')
 
     if xs is None:
         xs = np.arange(len(data.columns))
@@ -381,31 +422,56 @@ def parallel_coordinates(data, ax,
         pn_to_name = {n.rsplit('_', 1)[0]: n.rsplit('_', 1)[0] for n in data.columns}
 
     genes_to_label = guide_to_gene[guides_to_label].unique()
-    for gene_i, gene in enumerate(genes_to_label, 1):
-        guides = guides_to_label[guide_to_gene[guides_to_label] == gene]
-        for guide_i, guide in enumerate(guides):
-            guide_to_kwargs[guide] = dict(color=guide_to_color[guide],
-                                          marker='.',
-                                          markersize=markersize,
-                                          alpha=0.8,
-                                          linewidth=2.5,
-                                          label=f'{gene} guides' if guide_i == 0 else '',
-                                          clip_on=False,
-                                         )
+    #for gene_i, gene in enumerate(genes_to_label, 1):
+    #    guides = guides_to_label[guide_to_gene[guides_to_label] == gene]
+    #    for guide_i, guide in enumerate(guides):
+    #        guide_to_kwargs[guide] = dict(color=guide_to_color[guide],
+    #                                      marker='.',
+    #                                      markersize=markersize,
+    #                                      alpha=0.8,
+    #                                      linewidth=2.5,
+    #                                      label=f'{gene} guides' if guide_i == 0 else '',
+    #                                      clip_on=False,
+    #                                     )
 
-    for guide_i, guide in enumerate(guide_to_gene[guide_to_gene == 'negative_control'].index):     
-        guide_to_kwargs[guide] = dict(color=guide_to_color[guide],
-                                      alpha=0.4,
-                                      linewidth=1,
-                                      label='individual\nnon-targeting\nguides' if guide_i == 0 else '',
-                                     )
+
+    if guide_to_kwargs is None:
+        guide_to_kwargs = {}
+
+        if draw_non_targeting:
+            for guide_i, guide in enumerate(guide_to_gene[guide_to_gene == 'negative_control'].index):     
+                guide_to_kwargs[guide] = dict(color=guide_to_color[guide],
+                                            alpha=kwargs.get('nt_guides_alpha', 0.8),
+                                            linewidth=1,
+                                            label='individual\nnon-targeting\nguides' if guide_i == 0 else '',
+                                            )
+
+        for guide_i, guide in enumerate(guides_to_label):
+            guide_to_kwargs[guide] = dict(color=guide_to_color[guide],
+                                        marker='.',
+                                        markersize=markersize,
+                                        alpha=alpha,
+                                        linewidth=linewidth,
+                                        clip_on=False,
+                                        zorder=10,
+                                        )
+
+        if draw_all_guides:
+            for guide in data.index:
+                if guide not in guide_to_kwargs:
+                    guide_to_kwargs[guide] = dict(color=guide_to_color[guide],
+                                                alpha=kwargs.get('other_guides_alpha', 0.2),
+                                                linewidth=1,
+                                                clip_on=False,
+                                                )
+
 
     for guide, row in data.iterrows():
-        kwargs = guide_to_kwargs.get(guide)
+        plot_kwargs = guide_to_kwargs.get(guide)
         if kwargs is None:
             continue
         
-        ax.plot(xs, row.values, **kwargs)
+        ax.plot(xs, row.values, clip_on=False, **plot_kwargs)
 
         if guide_to_gene[guide] != 'negative_control':
             if 'right' in text_labels:
@@ -414,24 +480,27 @@ def parallel_coordinates(data, ax,
                             xycoords=('axes fraction', 'data'),
                             xytext=(5, 0),
                             textcoords='offset points',
-                            color=kwargs['color'],
+                            color=plot_kwargs['color'],
                             ha='left',
                             va='center',
-                            size=6,
+                            size=markersize,
                 )
 
     if legend is not None:
         ax.legend(bbox_to_anchor=legend[0],
-                loc=legend[1],
-                )
+                  loc=legend[1],
+                 )
         
-    ax.set_ylabel(y_label, size=12)
+    ax.set_ylabel(y_label, size=kwargs.get('axis_label_size', 12))
 
     ax.set_xticks(xs)
     labels = []
-    for n in data.columns:
-        pn, outcome = n.rsplit('_', 1)
-        label = f'{pn_to_name[pn]} {outcome}'
+    for pn in data.columns:
+        try:
+            label = pn_to_name[pn]
+        except KeyError:
+            pn, outcome = pn.rsplit('_', 1)
+            label = f'{pn_to_name[pn]} {outcome}'
         labels.append(label)
     ax.set_xticklabels(labels, rotation=45, ha='left')
     ax.tick_params(labelbottom=False, labeltop=True)
@@ -452,17 +521,25 @@ def parallel_coordinates(data, ax,
     for ax in all_axs:
         for side in ['right', 'top', 'bottom']:
             ax.spines[side].set_visible(False)
-        ax.tick_params(axis='x', length=0)
 
-    x_extent = xs[-1] - xs[0]
+        ax.spines['left'].set_alpha(0.5)
+        ax.tick_params(axis='x', length=0)
+        ax.tick_params(axis='y', length=2, color=hits.visualize.apply_alpha('black', 0.35))
+
+    #x_extent = xs[-1] - xs[0]
     #ax.set_xlim(xs[0] - x_extent * 0.05, xs[1] + x_extent * 0.05)
+
+    return all_axs
         
-def parallel_coordinates_genes(data, ax,
-                         gene_to_color,
-                         lims=(-4, 2),
-                         text_labels=None,
-                         pn_to_name=None,
-                        ):
+def parallel_coordinates_genes(data,
+                               ax,
+                               gene_to_color,
+                               genes_to_label,
+                               lims=(-4, 2),
+                               text_labels=None,
+                               pn_to_name=None,
+                               legend=True,
+                              ):
     gene_to_kwargs = {}
 
     if pn_to_name is None:
@@ -471,12 +548,19 @@ def parallel_coordinates_genes(data, ax,
     if text_labels is None:
         text_labels = []
 
-    for gene, color in gene_to_color.items():
-        gene_to_kwargs[gene] = dict(color=color,
+    non_targeting_sets = [g for g in data.index if g.startswith('non-targeting_set')]
+    for non_targeting_set in non_targeting_sets:     
+        gene_to_kwargs[non_targeting_set] = dict(color='black',
+                                        alpha=0.5,
+                                        linewidth=1,
+                                        )
+
+    for gene in genes_to_label:
+        gene_to_kwargs[gene] = dict(color=gene_to_color.get(gene, 'tab:blue'),
                                     marker='.',
-                                    markersize=8,
+                                    markersize=12,
                                     alpha=0.8,
-                                    linewidth=2.5,
+                                    linewidth=3.5,
                                     label=gene,
                                     clip_on=False,
                                    )
@@ -488,6 +572,9 @@ def parallel_coordinates_genes(data, ax,
         
         ax.plot(row.values, **kwargs)
 
+        if gene.startswith('non-targeting_set'):
+            continue
+
         if 'right' in text_labels:
             ax.annotate(gene,
                         xy=(1, row.values[-1]),
@@ -497,15 +584,15 @@ def parallel_coordinates_genes(data, ax,
                         color=kwargs['color'],
                         ha='left',
                         va='center',
-                        size=6,
+                        size=12,
             )
-
         
-    ax.legend(bbox_to_anchor=(-0.35, 1),
-              loc='upper right',
-             )
+    if legend:
+        ax.legend(bbox_to_anchor=(-0.35, 1),
+                loc='upper right',
+                )
         
-    ax.set_ylabel('log2 fold-change from non-targeting\n(average of top 2 guides)', size=12)
+    ax.set_ylabel('log2 fold-change from non-targeting\n(average of 2 most active guides)', size=12)
 
     ax.set_xticks(np.arange(len(data.columns)))
     labels = []

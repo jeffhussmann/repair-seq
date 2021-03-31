@@ -15,6 +15,38 @@ from ddr.visualize import outcome_diagrams
 from hits import utilities
 #from hits.visualize.interactive.external_coffeescript import build_callback
 
+def extract_numerator_and_denominator_counts(pool, numerator_outcomes, denominator_outcomes=None):
+    if isinstance(numerator_outcomes, pd.Series):
+        # numerator_outcomes is a series of counts
+        if isinstance(numerator_outcomes.index, pd.MultiIndex):
+            # indexed by (fixed_guide, varaible_guide)
+            numerator_counts = numerator_outcomes['none']
+        else:
+            # indexed by varaible_guide
+            numerator_counts = numerator_outcomes
+    else:
+        if all(outcome in pool.category_counts.index for outcome in list(numerator_outcomes)):
+            count_source = pool.category_counts
+        elif all(outcome in pool.subcategory_counts.index for outcome in list(numerator_outcomes)):
+            count_source = pool.subcategory_counts
+        else:
+            count_source = pool.outcome_counts('perfect')['none']
+            
+        numerator_counts = count_source.loc[numerator_outcomes].sum(axis='index')
+        
+    if denominator_outcomes is None:
+        denominator_counts = pool.UMI_counts
+    else:
+        if not all(outcome in count_source.index for outcome in denominator_outcomes):
+            raise ValueError(denominator_outcomes)
+        denominator_counts = count_source.loc[denominator_outcomes].sum(axis='index')
+        
+    # Make sure neither counts has 'all_non_targeting' in index.
+    for counts in [numerator_counts, denominator_counts]:
+        counts.drop(['all_non_targeting', 'eGFP_NT2'], errors='ignore', inplace=True)
+        
+    return numerator_counts, denominator_counts
+
 def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='none', denominator_outcomes=None):
     def pval_down(outcome_count, UMI_count, nt_fraction):
         return scipy.stats.binom.cdf(outcome_count, UMI_count, nt_fraction)
@@ -43,29 +75,37 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
     else:
         guides_to_omit = []
 
-    if denominator_outcomes is None:
-        UMI_counts = pool.UMI_counts_full_arguments('perfect')[fixed_guide]
-    else:
-        UMI_counts = pool.outcome_counts('perfect')[fixed_guide].loc[denominator_outcomes].sum()
+    numerator_counts, denominator_counts = extract_numerator_and_denominator_counts(pool, outcomes, denominator_outcomes)
 
-    if isinstance(outcomes, pd.Series):
-        numerator_counts = outcomes.loc[fixed_guide]
-    else:
-        numerator_counts = pool.outcome_counts('perfect')[fixed_guide].loc[outcomes].sum()
+    #if denominator_outcomes is None:
+    #    UMI_counts = pool.UMI_counts_full_arguments('perfect')[fixed_guide]
+    #else:
+    #    UMI_counts = pool.outcome_counts('perfect')[fixed_guide].loc[denominator_outcomes].sum()
 
-    frequencies = numerator_counts / UMI_counts
+    #if isinstance(outcomes, pd.Series):
+    #    numerator_counts = outcomes.loc[fixed_guide]
+    #else:
+    #    numerator_counts = pool.outcome_counts('perfect')[fixed_guide].loc[outcomes].sum()
+
+    frequencies = numerator_counts / denominator_counts
     
     nt_guides = pool.variable_guide_library.non_targeting_guides
-    nt_fraction = numerator_counts.loc[nt_guides].sum() / UMI_counts.loc[nt_guides].sum()
+    nt_fraction = numerator_counts.loc[nt_guides].sum() / denominator_counts.loc[nt_guides].sum()
 
-    ps_down = pval_down(numerator_counts.values, UMI_counts.values, nt_fraction)
-    ps_up = pval_up(numerator_counts.values, UMI_counts.values, nt_fraction)
+    data = pd.DataFrame({
+        'total_UMIs': denominator_counts,
+        'outcome_count': numerator_counts,
+    }) 
+
+    ps_down = pval_down(data['outcome_count'].values, data['total_UMIs'].values, nt_fraction)
+    ps_up = pval_up(data['outcome_count'].values, data['total_UMIs'].values, nt_fraction)
 
     genes = pool.variable_guide_library.guides_df['gene']
+    genes.drop('eGFP_NT2', errors='ignore', inplace=True)
 
     capped_fc = np.minimum(2**5, np.maximum(2**-5, frequencies / nt_fraction))
 
-    guides_df = pd.DataFrame({'total_UMIs': UMI_counts,
+    guides_df = pd.DataFrame({'total_UMIs': denominator_counts,
                               'outcome_count': numerator_counts,
                               'frequency': frequencies,
                               'log2_fold_change': np.log2(capped_fc),
@@ -74,6 +114,9 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
                               'gene': genes,
                              })
     guides_df = guides_df.drop(guides_to_omit, errors='ignore')
+
+    for set_name, guides in pool.variable_guide_library.non_targeting_guide_sets.items():
+        guides_df.loc[guides, 'gene'] = set_name
     
     ps = defaultdict(list)
 
@@ -107,7 +150,7 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
 
     guides_df.index.name = 'guide'
 
-    targeting_ps = corrected_ps_df.drop(index='negative_control')
+    targeting_ps = corrected_ps_df.drop(index='negative_control', errors='ignore')
 
     up_genes = targeting_ps.query('up < down')['up'].sort_values(ascending=False).index
 

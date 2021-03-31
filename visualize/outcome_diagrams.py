@@ -20,11 +20,13 @@ def plot(outcome_order,
          window=70,
          ax=None,
          flip_if_reverse=True,
+         force_flip=False,
          center_at_PAM=False,
          draw_cut_afters=True,
          size_multiple=None,
          inches_per_nt=0.12,
          inches_per_outcome=0.25,
+         line_widths=1.5,
          draw_all_sequence=False,
          draw_perfect_MH=True,
          draw_imperfect_MH=False,
@@ -34,12 +36,13 @@ def plot(outcome_order,
          fixed_guide='none',
          features_to_draw=None,
          replacement_text_for_complex=None,
-         protospacer_color=hits.visualize.apply_alpha('blue', 0.3),
-         PAM_color=hits.visualize.apply_alpha('green', 0.3),
+         protospacer_color=None,
+         PAM_color=None,
          cut_color=hits.visualize.apply_alpha('black', 0.5),
          preserve_x_lims=False,
          shift_x=0,
          block_alpha=0.1,
+         **kwargs,
         ):
 
     if size_multiple is not None:
@@ -73,7 +76,14 @@ def plot(outcome_order,
 
     guide = target_info.features[target_info.target, target_info.primary_sgRNA]
 
-    if flip_if_reverse and guide.strand == '-':
+    if protospacer_color is None:
+        protospacer_color = guide.attribute['color']
+
+    PAM_feature = target_info.PAM_features[target_info.target, f'{target_info.primary_sgRNA}_PAM']
+    if PAM_color is None:
+        PAM_color = PAM_feature.attribute['color']
+
+    if force_flip or (flip_if_reverse and guide.strand == '-'):
         flip = True
         transform_seq = hits.utilities.complement
         cut_offset_sign = 1
@@ -97,12 +107,12 @@ def plot(outcome_order,
         for cut_after in target_info.cut_afters.values():
             x = (cut_after + 0.5 * cut_offset_sign) - offset + shift_x
 
-            if draw_wild_type_on_top:
+            if draw_wild_type_on_top and not draw_donor_on_top:
                 ys = [-0.5, num_outcomes + 0.5]
             else:
                 ys = [-0.5, num_outcomes - 0.5]
 
-            ax.plot([x, x], ys, color=cut_color, linestyle='--', clip_on=False)
+            ax.plot([x, x], ys, color=cut_color, linestyle='--', clip_on=False, linewidth=line_widths)
     
     if flip:
         window_left, window_right = -window_right, -window_left
@@ -128,7 +138,7 @@ def plot(outcome_order,
                             closed=True,
                             alpha=alpha,
                             color=color,
-                            linewidth=0 if fill else 1.5,
+                            linewidth=0 if fill else line_widths,
                             clip_on=False,
                            )
         ax.add_patch(patch)
@@ -223,13 +233,13 @@ def plot(outcome_order,
         if cut in starts:
             start_to_label = cut
         else:
-            start_to_label = 0
+            start_to_label = starts[0]
 
         for i, (start, bs) in enumerate(zip(starts, insertion.seqs)):
             ys = [y - 0.3, y + 0.3]
             xs = [start + 0.5, start + 0.5]
 
-            ax.plot(xs, ys, color='purple', linewidth=1.5, alpha=0.6)
+            ax.plot(xs, ys, color='purple', linewidth=line_widths, alpha=0.6)
 
             if start == start_to_label:
                 width = 0.9
@@ -284,7 +294,7 @@ def plot(outcome_order,
                 draw_rect(PAM_start, PAM_end, y - wt_height / 2, y + wt_height / 2, None, color=PAM_color)
 
             if not on_top:
-                # Draw grey blocks. Needs to be updated to support multiple sgRNAs.
+                # Draw PAMs. Needs to be updated to support multiple sgRNAs.
                 draw_rect(window_left - 0.5, min(PAM_start, guide_start), y - wt_height / 2, y + wt_height / 2, block_alpha)
                 draw_rect(max(PAM_end, guide_end), window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
 
@@ -502,6 +512,9 @@ def plot(outcome_order,
             draw_duplication(y, duplication_outcome)
             
         else:
+            if category == 'SD-MMEJ':
+                category = 'insertion + deletion'
+
             label = f'{category}, {subcategory}, {details}'
             if replacement_text_for_complex is not None:
                 label = replacement_text_for_complex
@@ -515,11 +528,23 @@ def plot(outcome_order,
 
     if draw_donor_on_top and len(target_info.donor_SNVs['target']) > 0:
         donor_SNV_read_bases = ''.join(d['base'] for name, d in sorted(target_info.donor_SNVs['donor'].items()))
+        strands = set(SNV['strand'] for SNV in target_info.donor_SNVs['donor'].values())
+        if len(strands) > 1:
+            raise ValueError('donor strand is weird')
+        else:
+            strand = strands.pop()
         HDR_outcome = HDROutcome(donor_SNV_read_bases, [])
-        draw_donor(num_outcomes + 0.75, HDR_outcome, None, None, on_top=True)
+        if strand == '-':
+            y = num_outcomes + 0.5
+        else:
+            y = num_outcomes + 2.5
+        draw_donor(y, HDR_outcome, None, None, on_top=True)
 
     if draw_wild_type_on_top:
-        draw_wild_type(num_outcomes, on_top=True, guides_to_draw=target_info.sgRNAs)
+        y = num_outcomes
+        if draw_donor_on_top:
+            y += 1.5
+        draw_wild_type(y, on_top=True, guides_to_draw=target_info.sgRNAs)
         ax.set_xticks([])
                 
     if not preserve_x_lims:
@@ -538,13 +563,14 @@ def plot(outcome_order,
 
     if title:
         ax.annotate(title,
-                    xy=(0, 1),
-                    xycoords=('data', 'axes fraction'),
-                    xytext=(0, 28),
+                    xy=(0.5, 1),
+                    xycoords=('axes fraction', 'axes fraction'),
+                    xytext=(0, 20),
                     textcoords='offset points',
                     ha='center',
                     va='bottom',
-                    size=14,
+                    size=kwargs.get('title_size', 14),
+                    color=PAM_color,
                    )
         
     ax.set_yticks([])
@@ -652,13 +678,30 @@ def plot_with_frequencies(pool, outcomes, fixed_guide='none', text_only=False, c
     return fig
 
 class DiagramGrid:
-    def __init__(self, outcomes, target_info, inches_per_nt=0.12, inches_per_outcome=0.25, diagram_ax=None, title=None, **diagram_kwargs):
+    def __init__(self,
+                 outcomes,
+                 target_info,
+                 inches_per_nt=0.12,
+                 inches_per_outcome=0.25,
+                 outcome_ax_width=3,
+                 diagram_ax=None,
+                 title=None,
+                 label_aliases=None,
+                 cut_color=None,
+                 **diagram_kwargs,
+                ):
 
         self.outcomes = outcomes
         self.target_info = target_info
+        PAM_feature = target_info.PAM_features[target_info.target, f'{target_info.primary_sgRNA}_PAM']
+        self.PAM_color = PAM_feature.attribute['color']
+
+        if cut_color == 'PAM':
+            diagram_kwargs['cut_color'] = self.PAM_color
 
         self.inches_per_nt = inches_per_nt
         self.inches_per_outcome = inches_per_outcome
+        self.outcome_ax_width = outcome_ax_width
 
         self.fig = None
         self.title = title
@@ -674,6 +717,10 @@ class DiagramGrid:
 
         self.diagram_kwargs = diagram_kwargs
 
+        if label_aliases is None:
+            label_aliases = {}
+        self.label_aliases = label_aliases
+
         self.plot_diagrams()
 
     def plot_diagrams(self, **diagram_kwargs):
@@ -687,17 +734,19 @@ class DiagramGrid:
                                 **self.diagram_kwargs,
                                )
         else:
-            self.fig, ax = plt.subplots(figsize=(3, len(self.outcomes) * 0.4))
+            self.fig, ax = plt.subplots(figsize=(self.outcome_ax_width, len(self.outcomes) * self.inches_per_outcome))
 
             for i, outcome in enumerate(self.outcomes):
                 if isinstance(outcome, tuple):
                     outcome = ', '.join(outcome)
 
-                ax.annotate(outcome,
+                label = self.label_aliases.get(outcome, outcome)
+                ax.annotate(label,
                             xy=(1, len(self.outcomes) - i - 1),
                             xycoords=('axes fraction', 'data'),
                             ha='right',
                             va='center',
+                            size=8,
                 )
 
             ax.set_ylim(-0.5, len(self.outcomes) - 0.5)
@@ -713,7 +762,7 @@ class DiagramGrid:
 
         return self.fig
 
-    def add_ax(self, name, width_multiple=10, gap_multiple=1, title='', side='right'):
+    def add_ax(self, name, width_multiple=10, gap_multiple=1, title='', side='right', title_size=12):
         width = self.width_per_heatmap_cell * width_multiple
 
         if side == 'right':
@@ -739,7 +788,7 @@ class DiagramGrid:
         ax.spines['left'].set_alpha(0.3)
         ax.spines['right'].set_alpha(0.3)
         ax.tick_params(labelsize=6)
-        ax.grid(axis='x', alpha=0.3)
+        ax.grid(axis='x', alpha=0.3, clip_on=False)
         
         ax.spines['bottom'].set_visible(False)
         
@@ -753,6 +802,7 @@ class DiagramGrid:
                         textcoords='offset points',
                         ha='center',
                         va='bottom',
+                        size=title_size,
                     )
 
         return ax
@@ -769,11 +819,27 @@ class DiagramGrid:
         ax = self.fig.add_axes((x0, y0, width, height), sharex=self.axs_by_name['diagram'])
         self.axs_by_name['above'] = ax
 
-    def plot_on_ax(self, name, value_source, interval_sources=None, transform=None, y_offset=0, interval_alpha=1, **plot_kwargs):
-        # To simplify logic of excluding panels, do nothing if name is not an existing ax.
-        ax = self.axs_by_name.get(name)
+    def plot_on_ax(self,
+                   ax_name,
+                   value_source,
+                   interval_sources=None,
+                   transform=None,
+                   y_offset=0,
+                   interval_alpha=1,
+                   marker_alpha=1,
+                   line_alpha=1,
+                   label='',
+                   **plot_kwargs,
+                  ):
+        # To simplify logic of excluding panels, do nothing if ax_name is not an existing ax.
+        ax = self.axs_by_name.get(ax_name)
         if ax is None:
             return
+
+        if transform == 'percentage':
+            transform = lambda f: 100 * f
+        elif transform == 'log10':
+            transform = np.log10
 
         ys = np.arange(len(self.outcomes) - 1, -1, -1) + y_offset
 
@@ -791,7 +857,8 @@ class DiagramGrid:
 
         xs = [value_source.get(outcome, np.nan) for outcome in self.outcomes]
 
-        ax.plot(xs, ys, **plot_kwargs)
+        ax.plot(xs, ys, '.', alpha=marker_alpha, label=label, **plot_kwargs)
+        ax.plot(xs, ys, '-', alpha=line_alpha, **plot_kwargs)
 
         if interval_sources is not None:
             interval_xs = {
@@ -800,7 +867,11 @@ class DiagramGrid:
             }
 
             for y, lower_x, upper_x in zip(ys, interval_xs['lower'], interval_xs['upper']):
-                ax.plot([lower_x, upper_x], [y, y], color=plot_kwargs.get('color'), alpha=interval_alpha)
+                ax.plot([lower_x, upper_x], [y, y],
+                        color=plot_kwargs.get('color'),
+                        alpha=interval_alpha,
+                        clip_on=plot_kwargs.get('clip_on', True),
+                       )
 
     def plot_on_ax_above(self, xs, value_source, **kwargs):
         ax = self.axs_by_name['above']
@@ -809,8 +880,11 @@ class DiagramGrid:
 
         ax.plot(xs, ys, **kwargs)
 
-    def style_log10_frequency_ax(self, name, manual_ticks=None):
-        ax = self.axs_by_name[name]
+    def style_log10_frequency_ax(self, name, manual_ticks=None, label_size=8, include_percentage=False):
+        # To simplify logic of excluding panels, do nothing if name is not an existing ax.
+        ax = self.axs_by_name.get(name)
+        if ax is None:
+            return
 
         x_min, x_max = ax.get_xlim()
 
@@ -820,7 +894,7 @@ class DiagramGrid:
             xs = np.log10(np.arange(1, 10) * 10**-exponent)        
             for x in xs:
                 if x_min < x < x_max:
-                    ax.axvline(x, color='black', alpha=0.1, clip_on=False)
+                    ax.axvline(x, color='black', alpha=0.05, clip_on=False)
 
             if exponent <= 3:
                 multiples = [1, 5]
@@ -836,18 +910,23 @@ class DiagramGrid:
             x_ticks = manual_ticks
 
         ax.set_xticks(np.log10(x_ticks))
-        ax.set_xticklabels([f'{100 * x:g}' for x in x_ticks], size=8)
+        ax.set_xticklabels([f'{100 * x:g}' + ('%' if include_percentage else '') for x in x_ticks], size=label_size)
 
         for side in ['left', 'right']:
             ax.spines[side].set_visible(False)
 
     def style_fold_change_ax(self, name):
-        ax = self.axs_by_name[name]
+        # To simplify logic of excluding panels, do nothing if name is not an existing ax.
+        ax = self.axs_by_name.get(name)
+        if ax is None:
+            return
 
         for side in ['left', 'right']:
             ax.spines[side].set_visible(False)
 
         ax.axvline(0, color='black', alpha=0.5, clip_on=False)
+
+        plt.setp(ax.get_xticklabels(), size=8)
 
     @property
     def width_per_heatmap_cell(self):
@@ -869,6 +948,9 @@ class DiagramGrid:
                     vmin=-2, vmax=2,
                     cmap=ddr.visualize.fold_changes_cmap,
                     draw_tick_labels=True,
+                    text_size=10,
+                    tick_label_rotation=90,
+                    tick_label_pad=8,
                    ):
         ax_to_left = self.ordered_axs[-1]
         ax_to_left_p = ax_to_left.get_position()
@@ -904,12 +986,13 @@ class DiagramGrid:
                 ax.annotate(label,
                             xy=(x, 1),
                             xycoords=('data', 'axes fraction'),
-                            xytext=(0, 8),
+                            xytext=(0, tick_label_pad),
                             textcoords='offset points',
-                            rotation=90,
+                            rotation=tick_label_rotation,
                             ha='center',
                             va='bottom',
                             color=color,
+                            size=text_size,
                            )
 
         else:
@@ -920,27 +1003,52 @@ class DiagramGrid:
 
         return ax
 
-    def add_colorbar(self, baseline_condition_name='non-targeting', label_interpretation=True):
+    def add_colorbar(self,
+                     width_multiple=5,
+                     baseline_condition_name='non-targeting',
+                     label_interpretation=True,
+                     loc='right',
+                     **kwargs,
+                    ):
         if len(self.ims) == 0:
             return
 
         ax_p = self.ordered_axs[-1].get_position()
-        x0 = ax_p.x1 + 3 * self.width_per_heatmap_cell
-        y0 = 0.5
-        width = 5 * self.width_per_heatmap_cell
+
+        if loc == 'right':
+            x0 = ax_p.x1 + 3 * self.width_per_heatmap_cell
+            y0 = 0.5
+        else:
+            x0 = ax_p.x1 + 3 * self.width_per_heatmap_cell
+            y0 = 0.5
+
+        width = width_multiple * self.width_per_heatmap_cell
         height = 1 * self.height_per_heatmap_cell
         ddr.visualize.heatmap.add_fold_change_colorbar(self.fig, self.ims[0], x0, y0, width, height,
                                                        baseline_condition_name=baseline_condition_name,
                                                        label_interpretation=label_interpretation,
+                                                       **kwargs,
                                                       )
 
-    def mark_subset(self, outcomes_to_mark, color, title=''):
-        ax = self.add_ax(side='left', name='subset', width_multiple=1)
+    def mark_subset(self, outcomes_to_mark, color,
+                    title='',
+                    width_multiple=1,
+                    gap_multiple=0.5,
+                    side='left',
+                    size=12,
+                    linewidth=5,
+                   ):
+        ax = self.add_ax(side=side, name='subset', width_multiple=width_multiple, gap_multiple=gap_multiple)
         outcomes = list(self.outcomes)
+        outcomes_to_mark = [outcome for outcome in outcomes_to_mark if outcome in outcomes]
         # Note weird flipping
         indices = [len(outcomes) - 1 - outcomes.index(outcome) for outcome in outcomes_to_mark]
         for idx in indices:
-            ax.plot([0.5, 0.5], [idx - 0.3, idx + 0.3], linewidth=5, color=color)
+            ax.plot([0.5, 0.5], [idx - 0.5, idx + 0.5],
+                    linewidth=linewidth,
+                    color=color,
+                    solid_capstyle='butt',
+                   )
 
         ax.axis('off')
 
@@ -951,4 +1059,13 @@ class DiagramGrid:
                     textcoords='offset points',
                     ha='center',
                     va='bottom',
+                    rotation=90,
+                    color=color,
+                    size=size,
                    )
+
+    def set_xlim(self, ax_name, lims):
+        if lims is not None:
+            ax = self.axs_by_name.get(ax_name)
+            if ax is not None:
+                ax.set_xlim(*lims)

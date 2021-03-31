@@ -29,7 +29,7 @@ def outcome(outcome,
             guide_status='perfect',
             guide_subset=None,
             draw_marginals='hist',
-            draw_negative_control_marginals=False,
+            draw_negative_control_marginal=False,
             draw_diagram=True,
             gene_to_color=None,
             color_labels=False,
@@ -43,6 +43,11 @@ def outcome(outcome,
             flip_axes=False,
             draw_intervals=True,
             nt_guide_color='C0',
+            nt_fraction=None,
+            fig_size=10,
+            marker_size=25,
+            label_median_UMIs=True,
+            **kwargs,
            ):
     if guide_aliases is None:
         guide_aliases = {}
@@ -54,12 +59,12 @@ def outcome(outcome,
     if big_labels:
         axis_label_size = 18
         tick_label_size = 14
-        big_guide_label_size = 10
+        big_guide_label_size = kwargs.get('big_guide_label_size', 10)
         small_guide_label_size = 8
     else:
         axis_label_size = 12
         tick_label_size = 10
-        big_guide_label_size = 10
+        big_guide_label_size = kwargs.get('big_guide_label_size', 10)
         small_guide_label_size = 6
 
     fraction_scaling_factor = 100 if as_percentage else 1
@@ -78,13 +83,16 @@ def outcome(outcome,
 
     quantity_to_axis = hits.utilities.reverse_dictionary(axis_to_quantity)
 
-    UMI_counts = pool.UMI_counts(guide_status).xs(fixed_guide, level=0, drop_level=False)
+    UMI_counts = pool.UMI_counts_full_arguments(guide_status).xs(fixed_guide, level=0, drop_level=False)
     max_cells = max(UMI_counts)
 
     granular_df = pool.outcome_counts(guide_status).xs(fixed_guide, level=0, axis=1, drop_level=False)
 
-    if isinstance(outcome, tuple):
-        nt_fraction = pool.non_targeting_fractions(guide_status, fixed_guide)[outcome]
+    if isinstance(outcome, pd.Series):
+        outcome_counts = outcome
+
+    elif isinstance(outcome, tuple):
+        nt_fraction = pool.non_targeting_fractions_full_arguments(guide_status, fixed_guide)[outcome]
         outcome_counts = granular_df.loc[outcome]
 
     else:
@@ -138,7 +146,7 @@ def outcome(outcome,
         'count': outcome_counts,
     }
 
-    df = pd.DataFrame(data)
+    df = pd.DataFrame(data).fillna(0)
     df.index.name = 'guide'
     df['fraction'] = df['count'] / df['num_cells']
     df['percentage'] = df['fraction'] * 100
@@ -236,11 +244,11 @@ def outcome(outcome,
     g = sns.JointGrid(x=axis_to_quantity['x'],
                       y=axis_to_quantity['y'],
                       data=df,
-                      height=10,
+                      height=fig_size,
                       xlim=lims[axis_to_quantity['x']],
                       ylim=lims[axis_to_quantity['y']],
-                      space=0,
-                      ratio=8,
+                      space=kwargs.get('JointGrid_space', 0.5),
+                      ratio=kwargs.get('JointGrid_ratio', 4),
                      )
 
     if draw_marginals:
@@ -263,24 +271,23 @@ def outcome(outcome,
                 ax=marg_axs[fraction_key],
                 vertical=vertical[fraction_key],
                 legend=False,
-                linewidth=2,
+                linewidth=0,
                 shade=True,
             )
+
             sns.kdeplot(df[fraction_key], color='grey', **fraction_kwargs)
-            if draw_negative_control_marginals:
-                sns.kdeplot(df.query('variable_gene == "negative_control"')[fraction_key], color=nt_guide_color, alpha=0.4, **fraction_kwargs)
+            if draw_negative_control_marginal:
+                sns.kdeplot(df.query('variable_gene == "negative_control"')[fraction_key], color=nt_guide_color, alpha=0.5, **fraction_kwargs)
 
             num_cells_kwargs = dict(
                 ax=marg_axs['num_cells'],
                 vertical=vertical['num_cells'],
                 legend=False,
-                linewidth=1.5,
+                linewidth=0,
                 shade=True,
             )
 
             sns.kdeplot(df['num_cells'], color='grey', **num_cells_kwargs)
-            if draw_negative_control_marginals:
-                sns.kdeplot(df.query('varible_gene == "negative_control"')['num_cells'], color=nt_guide_color, **num_cells_kwargs)
 
         elif draw_marginals == 'hist':
             orientation = {k: 'horizontal' if axis == 'y' else 'vertical' for k, axis in quantity_to_axis.items()}
@@ -288,44 +295,43 @@ def outcome(outcome,
             bins = np.linspace(fraction_min, fraction_max, 100)
             hist_kwargs = dict(orientation=orientation[fraction_key], alpha=0.5, density=True, bins=bins, linewidth=2)
             marg_axs[fraction_key].hist(fraction_key, data=df, color='silver', **hist_kwargs)
-            if draw_negative_control_marginals:
+            if draw_negative_control_marginal:
                 marg_axs[fraction_key].hist(fraction_key, data=df.query('variable_gene == "negative_control"'), color=nt_guide_color, **hist_kwargs)
 
             bins = np.linspace(0, max_cells, 30)
             hist_kwargs = dict(orientation=orientation['num_cells'], alpha=0.5, density=True, bins=bins, linewidth=2)
             marg_axs['num_cells'].hist('num_cells', data=df, color='silver', **hist_kwargs)
-            if draw_negative_control_marginals:
-                marg_axs['num_cells'].hist('num_cells', data=df.query('variable_gene == "negative_control"'), color=nt_guide_color, **hist_kwargs)
 
-        median_UMIs = int(df['num_cells'].median())
+        if label_median_UMIs:
+            median_UMIs = int(df['num_cells'].median())
 
-        if quantity_to_axis['num_cells'] == 'x':
-            line_func = marg_axs['num_cells'].axvline
-            annotate_kwargs = dict(
-                text=f'median = {median_UMIs:,} cells / guide',
-                xy=(median_UMIs, 1.1),
-                xycoords=('data', 'axes fraction'),
-                xytext=(3, 0),
-                va='top',
-                ha='left',
-            )
+            if quantity_to_axis['num_cells'] == 'x':
+                line_func = marg_axs['num_cells'].axvline
+                annotate_kwargs = dict(
+                    text=f'median = {median_UMIs:,} UMIs / guide',
+                    xy=(median_UMIs, 1.1),
+                    xycoords=('data', 'axes fraction'),
+                    xytext=(3, 0),
+                    va='top',
+                    ha='left',
+                )
 
-        else:
-            line_func = marg_axs['num_cells'].axhline
-            annotate_kwargs = dict(
-                text=f'median = {median_UMIs:,}\ncells / guide',
-                xy=(1, median_UMIs),
-                xycoords=('axes fraction', 'data'),
-                xytext=(-5, 5),
-                va='bottom',
-                ha='center',
-            )
+            else:
+                line_func = marg_axs['num_cells'].axhline
+                annotate_kwargs = dict(
+                    text=f'median = {median_UMIs:,}\nUMIs / guide',
+                    xy=(0, median_UMIs),
+                    xycoords=('axes fraction', 'data'),
+                    xytext=(5, 5),
+                    va='bottom',
+                    ha='left',
+                )
 
-        line_func(median_UMIs, color='black', linestyle='--', alpha=0.7)
-        marg_axs['num_cells'].annotate(textcoords='offset points',
-                                       size=12,
-                                       **annotate_kwargs,
-                                      )
+            line_func(median_UMIs, color='black', linestyle='--', alpha=0.7)
+            marg_axs['num_cells'].annotate(textcoords='offset points',
+                                        size=8,
+                                        **annotate_kwargs,
+                                        )
 
     #for q in [10**-p_cutoff, 1 - 10**-p_cutoff]:
     #    ys = quantiles[q] / num_cells_list
@@ -362,7 +368,8 @@ def outcome(outcome,
             # Annotate the lines with their significance level.
             x = int(np.floor(1.01 * max_cells))
 
-            cells = int(np.floor(0.8 * num_cells_max))
+            cells = int(np.floor(0.85 * num_cells_max))
+
             vals = {
                 'num_cells': cells,
                 fraction_key: boundary_upper[cells] * fraction_scaling_factor,
@@ -383,15 +390,16 @@ def outcome(outcome,
                     va='bottom',
                 )
 
-            g.ax_joint.annotate(f'p = $10^{{-{p_cutoff}}}$ significance threshold',
+            g.ax_joint.annotate(f'p = $10^{{-{p_cutoff}}}$\nsignificance\nthreshold',
                                 xy=(x, y),
                                 xycoords='data',
                                 textcoords='offset points',
                                 color='black',
-                                size=10,
+                                size=7,
                                 arrowprops={'arrowstyle': '-',
                                             'alpha': 0.5,
                                             'color': 'black',
+                                            'shrinkB': 0,
                                             },
                                 **annotate_kwargs,
                             )
@@ -401,7 +409,7 @@ def outcome(outcome,
     else:
         if non_targeting_label_location == 'floating':
             floating_labels = [
-                ('individual non-targeting guides', -50, nt_guide_color),
+                ('individual non-targeting guide', -50, nt_guide_color),
                 #('{} p-value < 1e-{}'.format(p_val_method, p_cutoff), -25, 'C1'),
             ]
             for text, offset, color in floating_labels:
@@ -428,14 +436,14 @@ def outcome(outcome,
 
             if flip_axes:
                 annotate_kwargs = dict(
-                    s='individual non-targeting guides',
-                    xytext=(-40, 0),
+                    text='individual\nnon-targeting\nguide',
+                    xytext=(-30, 0),
                     ha='right',
                     va='center',
                 )
             else:
                 annotate_kwargs = dict(
-                    s='individual\nnon-targeting guides',
+                    text='individual\nnon-targeting\nguide',
                     xytext=(0, 30),
                     ha='center',
                     va='bottom',
@@ -445,72 +453,84 @@ def outcome(outcome,
                                 xycoords='data',
                                 textcoords='offset points',
                                 color=nt_guide_color,
-                                size=10,
+                                size=7,
                                 arrowprops={'arrowstyle': '-',
-                                            'alpha': 0.5,
+                                            'alpha': 0.9,
                                             'color': nt_guide_color,
+                                            'shrinkB': 0,
+                                            #'linestyle': 'dashed',
+                                            'linewidth': 0.5,
                                             },
                                 **annotate_kwargs,
                             )
             
-            vals = {
-                'num_cells': num_cells_max * 0.9,
-                fraction_key: nt_fraction * fraction_scaling_factor,
-            }
-            x = vals[axis_to_quantity['x']]
-            y = vals[axis_to_quantity['y']]
+    vals = {
+        'num_cells': num_cells_max * 0.90,
+        fraction_key: nt_fraction * fraction_scaling_factor,
+    }
+    x = vals[axis_to_quantity['x']]
+    y = vals[axis_to_quantity['y']]
 
-            if flip_axes:
-                annotate_kwargs = dict(
-                    s='average of all non-targeting guides',
-                    xytext=(-40, 0),
-                    ha='right',
-                    va='center',
-                )
-            else:
-                annotate_kwargs = dict(
-                    s='average of all\nnon-targeting guides',
-                    xytext=(0, 30),
-                    ha='center',
-                    va='bottom',
-                )
-    
-            g.ax_joint.annotate(xy=(x, y),
-                                xycoords='data',
-                                textcoords='offset points',
-                                color='black',
-                                size=10,
-                                arrowprops={'arrowstyle': '-',
-                                            'alpha': 0.5,
-                                            'color': 'black',
-                                            },
-                                **annotate_kwargs,
-                            )
+    if flip_axes:
+        annotate_kwargs = dict(
+            text='average of all\nnon-targeting\nguides',
+            xytext=(-20, 0),
+            ha='right',
+            va='center',
+        )
+    else:
+        annotate_kwargs = dict(
+            text='average of all\nnon-targeting\nguides',
+            xytext=(0, 30),
+            ha='center',
+            va='bottom',
+        )
 
-    g.ax_joint.scatter(x=axis_to_quantity['x'],
-                       y=axis_to_quantity['y'],
-                       data=df,
-                       s=25,
-                       alpha=0.9,
-                       color='color',
-                       linewidths=(0,),
-                      )
+    g.ax_joint.annotate(xy=(x, y),
+                        xycoords='data',
+                        textcoords='offset points',
+                        color='black',
+                        size=7,
+                        arrowprops={'arrowstyle': '-',
+                                    'alpha': 0.5,
+                                    'color': 'black',
+                                    'shrinkB': 0,
+                                   },
+                        **annotate_kwargs,
+                    )
+
+    # Draw in order of color frequency from most common to least common
+    # so that rare colors are drawn on top.
+    color_order_to_plot = df.value_counts('color').index
+
+    for color_i, color in enumerate(color_order_to_plot):
+        to_plot = df.query('color == @color')
+        g.ax_joint.scatter(x=axis_to_quantity['x'],
+                        y=axis_to_quantity['y'],
+                        data=to_plot,
+                        s=marker_size,
+                        alpha=0.9,
+                        color='color',
+                        linewidths=(0,),
+                        zorder=1 if color_i == 0 else 10,
+                        clip_on=kwargs.get('clip_on', True),
+                       )
 
     if gene_to_color is not None:
         query = '(fixed_gene in @gene_to_color or variable_gene in @gene_to_color)'
         if only_best_promoter:
             query += ' and variable_guide_best_promoter'
 
-        g.ax_joint.scatter(x=axis_to_quantity['x'],
-                        y=axis_to_quantity['y'],
-                        data=df.query(query),
-                        s=25,
-                        alpha=0.9,
-                        color='color',
-                        linewidths=(0,),
-                        zorder=10,
-                        )
-
+#        g.ax_joint.scatter(x=axis_to_quantity['x'],
+#                        y=axis_to_quantity['y'],
+#                        data=df.query(query),
+#                        s=marker_size,
+#                        alpha=0.9,
+#                        color='color',
+#                        linewidths=(0,),
+#                        zorder=10,
+#                        )
+#
         legend_elements = [Line2D([0], [0], marker='o', color=color, label=f'{gene} fixed guide', linestyle='none') for gene, color in gene_to_color.items()]
         legend_elements.append(Line2D([0], [0], marker='o', color='C0', label=f'non-targeting in both positions', linestyle='none'))
         #g.ax_joint.legend(handles=legend_elements)
@@ -527,7 +547,7 @@ def outcome(outcome,
         'y': g.ax_joint.set_ylabel,     
     }
 
-    num_cells_label = 'number of cells per CRISPRi guide'
+    num_cells_label = 'number of UMIs per CRISPRi guide'
     axis_label_funcs[quantity_to_axis['num_cells']](num_cells_label, size=axis_label_size)
 
     if outcome_name is None:
@@ -585,9 +605,9 @@ def outcome(outcome,
                                           'alias',
                                           color='label_color',
                                           data=to_label,
-                                          vector=vector,
-                                          text_kwargs=dict(size=small_guide_label_size),
-                                          initial_distance=5,
+                                          vector=kwargs.get('label_vector', vector),
+                                          text_kwargs=dict(size=small_guide_label_size, weight='bold'),
+                                          initial_distance=initial_label_offset,
                                           distance_increment=5,
                                           arrow_alpha=0.2,
                                           avoid=avoid_label_overlap,
@@ -611,10 +631,10 @@ def outcome(outcome,
             vector = ['upper right' if v == 'up' else 'lower right' for v in to_label['direction']]
 
         if color_labels:
-            kwargs = dict(color='color',
+            label_kwargs = dict(color='color',
                          )
         else:
-            kwargs = dict(color=None,
+            label_kwargs = dict(color=None,
                          )
 
         hits.visualize.label_scatter_plot(g.ax_joint,
@@ -622,7 +642,7 @@ def outcome(outcome,
                                           axis_to_quantity['y'],
                                           'alias',
                                           data=to_label,
-                                          vector=vector,
+                                          vector=kwargs.get('label_vector', vector),
                                           initial_distance=initial_label_offset,
                                           distance_increment=5,
                                           arrow_alpha=0.2,
@@ -630,8 +650,8 @@ def outcome(outcome,
                                           avoid_axis_labels=True,
                                           avoid_existing=True,
                                           min_arrow_distance=10,
-                                          text_kwargs=dict(size=big_guide_label_size),
-                                          **kwargs,
+                                          text_kwargs=dict(size=big_guide_label_size, weight='bold'),
+                                          **label_kwargs,
                                          )
 
     hits.visualize.add_commas_to_ticks(g.ax_joint, which=quantity_to_axis['num_cells'])
