@@ -7,7 +7,11 @@ import pandas as pd
 correlation_cmap = copy.copy(plt.get_cmap('PuOr_r'))
 correlation_cmap.set_bad('white')
 
-fold_changes_cmap = plt.get_cmap('RdBu_r')
+fold_changes_cmap = copy.copy(plt.get_cmap('RdBu_r'))
+
+cell_cycle_cmap = copy.copy(plt.get_cmap('PiYG_r'))
+
+gamma_cmap = copy.copy(plt.get_cmap('magma'))
 
 category10 = bokeh.palettes.Category10[10]
 accent = bokeh.palettes.Accent[8]
