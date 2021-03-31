@@ -1,3 +1,7 @@
+from collections import defaultdict
+
+import numpy as np
+import pandas as pd
 import hits.utilities
 
 memoized_with_key = hits.utilities.memoized_with_key
@@ -57,7 +61,7 @@ class Bootstrapper():
         guide_fs = self.compute_guide_UMI_fractions(guide, bootstrap=True)
         self.guide_UMI_fraction_bootstraps[guide].append(guide_fs)
         
-    def add_all_bootraps(self, n):
+    def add_all_bootstraps(self, n):
         for guide in progress(self.guides):
             for i in range(n):
                 self.add_bootstrap(guide)
