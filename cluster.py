@@ -52,6 +52,11 @@ class Clusterer:
         options.setdefault('guides_method', 'HDBSCAN')
         options.setdefault('guides_kwargs', {})
 
+        options.setdefault('guides_seed', 1)
+        options.setdefault('outcomes_seed', 1)
+        options.setdefault('outcomes_min_dist', 0.2)
+        options.setdefault('guides_min_dist', 0.2)
+
         options.setdefault('outcomes_method', 'hierarchical')
         options.setdefault('outcomes_kwargs', {})
 
@@ -99,8 +104,39 @@ class Clusterer:
         return self.log2_fold_changes.index.values
 
     @memoized_property
+    def all_guide_correlations(self):
+        all_l2fcs = self.guide_log2_fold_changes(self.guide_library.guides)
+        all_corrs = all_l2fcs.corr().stack()
+
+        all_corrs.index.names = ['guide_1', 'guide_2']
+
+        all_corrs = pd.DataFrame(all_corrs)
+        all_corrs.columns = ['r']
+
+        # Make columns out of index levels.
+        for k in all_corrs.index.names:
+            all_corrs[k] = all_corrs.index.get_level_values(k)
+            
+        guide_to_gene = self.guide_library.guide_to_gene
+
+        all_corrs['gene_1'] = guide_to_gene.loc[all_corrs['guide_1']].values
+        all_corrs['gene_2'] = guide_to_gene.loc[all_corrs['guide_2']].values
+
+        for guide in ['guide_1', 'guide_2']:
+            all_corrs[f'{guide}_is_active'] = all_corrs[guide].isin(self.guides)
+
+        all_corrs['both_active'] = all_corrs[['guide_1_is_active', 'guide_2_is_active']].all(axis=1)
+
+        distinct_guides = all_corrs.query('guide_1 < guide_2')
+        return distinct_guides.sort_values('r', ascending=False)
+
+    @memoized_property
     def guide_embedding(self):
-        reducer = umap.UMAP(random_state=1, metric=self.options['guides_kwargs']['metric'], n_neighbors=10, min_dist=0.2)
+        reducer = umap.UMAP(random_state=self.options['guides_seed'],
+                            metric=self.options['guides_kwargs']['metric'],
+                            n_neighbors=10,
+                            min_dist=self.options['guides_min_dist'],
+                           )
         embedding = reducer.fit_transform(self.log2_fold_changes.T)
         embedding = pd.DataFrame(embedding,
                                  columns=['x', 'y'],
@@ -112,7 +148,11 @@ class Clusterer:
 
     @memoized_property
     def outcome_embedding(self):
-        reducer = umap.UMAP(random_state=1, metric=self.options['outcomes_kwargs']['metric'], n_neighbors=10, min_dist=0.2)
+        reducer = umap.UMAP(random_state=self.options['outcomes_seed'],
+                            metric=self.options['outcomes_kwargs']['metric'],
+                            n_neighbors=10,
+                            min_dist=self.options['outcomes_min_dist'],
+                           )
         embedding = reducer.fit_transform(self.log2_fold_changes)
         embedding = pd.DataFrame(embedding,
                                  columns=['x', 'y'],
@@ -124,9 +164,12 @@ class Clusterer:
         MH_lengths = []
         deletion_lengths = []
         directionalities = []
+        fractions = []
 
         for pn, c, s, d in embedding.index.values:
+            pool = self.pn_to_pool[pn]
             ti = self.pn_to_target_info[pn]
+
             if c == 'deletion':
                 deletion = knock_knock.outcome.DeletionOutcome.from_string(d).undo_anchor_shift(ti.anchor)
                 MH_length = len(deletion.deletion.starts_ats) - 1
@@ -141,52 +184,153 @@ class Clusterer:
             deletion_lengths.append(deletion_length)
             directionalities.append(directionality)
 
+            fraction = pool.outcome_fractions('perfect').loc[(c, s, d), ('none', 'all_non_targeting')]
+            fractions.append(fraction)
+
         embedding['MH length'] = MH_lengths
         embedding['deletion length'] = deletion_lengths
         embedding['directionality'] = directionalities
+        embedding['fraction'] = fractions
+        embedding['log10_fraction'] = np.log10(embedding['fraction'])
 
         return embedding
 
-    def plot_guide_embedding(self):
-        fig, ax = plt.subplots(figsize=(12, 12))
+    def plot_guide_embedding(self,
+                             figsize=(12, 12),
+                             color_by='cluster',
+                             label_genes=True,
+                             legend_location='lower right',
+                            ):
+        fig, ax = plt.subplots(figsize=figsize)
 
-        data = self.guide_embedding
+        data = self.guide_embedding.copy()
+
+        if color_by == 'cluster':
+            pass
+        elif color_by == 'gamma':
+            min_gamma = -0.2
+
+            values = self.guide_library.guides_df['gamma'].loc[data.index]
+            cmap = ddr.visualize.gamma_cmap
+
+            norm = matplotlib.colors.Normalize(vmin=min_gamma, vmax=0)
+            sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+
+            colors = [tuple(row) for row in sm.to_rgba(values)]
+            data['color'] = colors
+            # sort so that strongest (negative) gammas are drawn on top
+            data['sort_by'] = -values
+            data = data.sort_values(by='sort_by')
+
+            ax_p = ax.get_position()
+
+            if legend_location == 'lower right':
+                x0 = ax_p.x0 + 0.65 * ax_p.width
+                y0 = ax_p.y0 + 0.25 * ax_p.height
+            elif legend_location == 'upper right':
+                x0 = ax_p.x0 + 0.65 * ax_p.width
+                y0 = ax_p.y0 + 0.85 * ax_p.height
+            else:
+                raise NotImplementedError
+
+            cax = fig.add_axes([x0,
+                                y0,
+                                0.25 * ax_p.width,
+                                0.03 * ax_p.height,
+                                ])
+
+            colorbar = plt.colorbar(mappable=sm, cax=cax, orientation='horizontal')
+            ticks = [min_gamma, 0]
+            tick_labels = [str(t) for t in ticks]
+            tick_labels[0] = '$\leq$' + tick_labels[0]
+            colorbar.set_ticks(ticks)
+            colorbar.set_ticklabels(tick_labels)
+            colorbar.outline.set_alpha(0)
+            colorbar.set_label(f'gamma')
+
+        elif color_by in self.guide_library.cell_cycle_log2_fold_changes.index:
+            phase = color_by
+
+            values = self.guide_library.cell_cycle_log2_fold_changes.loc[phase, data.index]
+            cmap = ddr.visualize.cell_cycle_cmap
+
+            norm = matplotlib.colors.Normalize(vmin=-1, vmax=1)
+            sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+
+            colors = [tuple(row) for row in sm.to_rgba(values)]
+
+            data['color'] = colors
+
+            # sort by absolute value of fold changes so that most extreme
+            # points are drawn on top
+            data['sort_by'] = np.abs(values)
+            data = data.sort_values(by='sort_by')
+
+            ax_p = ax.get_position()
+
+            if legend_location == 'lower right':
+                x0 = ax_p.x0 + 0.65 * ax_p.width
+                y0 = ax_p.y0 + 0.25 * ax_p.height
+            elif legend_location == 'upper right':
+                x0 = ax_p.x0 + 0.65 * ax_p.width
+                y0 = ax_p.y0 + 0.85 * ax_p.height
+            else:
+                raise NotImplementedError
+
+            cax = fig.add_axes([x0,
+                                y0,
+                                0.25 * ax_p.width,
+                                0.03 * ax_p.height,
+                                ])
+
+            colorbar = plt.colorbar(mappable=sm, cax=cax, orientation='horizontal')
+            ticks = [-1, 0, 1]
+            tick_labels = [str(t) for t in ticks]
+            tick_labels[0] = '$\leq$' + tick_labels[0]
+            tick_labels[-1] = '$\geq$' + tick_labels[-1]
+            colorbar.set_ticks(ticks)
+            colorbar.set_ticklabels(tick_labels)
+            colorbar.outline.set_alpha(0)
+            colorbar.set_label(f'log$_2$ fold change\nin {phase} occupancy')
+
+        marker_size = figsize[0] * 100 / 12
 
         ax.scatter(x='x',
                    y='y',
                    color='color',
                    data=data,
-                   s=100,
+                   s=marker_size,
                    alpha=0.8,
                    linewidths=(0,),
                    #marker='s',
                   )
 
-        for gene, rows in self.guide_embedding.groupby('gene', sort=False):
-            n_rows, _ = rows.shape
-            for first_index in range(n_rows):
-                first_row = rows.iloc[first_index]
-                for second_index in range(first_index + 1, n_rows):
-                    second_row = rows.iloc[second_index]
-                    xs = [first_row['x'], second_row['x']]
-                    ys = [first_row['y'], second_row['y']]
-                    ax.plot(xs, ys, color='black', alpha=0.1)
+        if label_genes:
+            for gene, rows in self.guide_embedding.groupby('gene', sort=False):
+                n_rows, _ = rows.shape
+                for first_index in range(n_rows):
+                    first_row = rows.iloc[first_index]
+                    for second_index in range(first_index + 1, n_rows):
+                        second_row = rows.iloc[second_index]
+                        xs = [first_row['x'], second_row['x']]
+                        ys = [first_row['y'], second_row['y']]
+                        ax.plot(xs, ys, color='black', alpha=0.1)
 
-            centroid = (rows['x'].mean(), rows['y'].mean())
+                centroid = (rows['x'].mean(), rows['y'].mean())
 
-            if n_rows == 1:
-                num_guides_string = ''
-            else:
-                num_guides_string = f' ({len(rows)})'
-                
-            ax.annotate(f'{gene}{num_guides_string}',
-                        xy=centroid,
-                        xytext=(0, 0),
-                        textcoords='offset points',
-                        ha='center',
-                        va='center',
-                        size=8,
-                    )
+                if n_rows == 1:
+                    num_guides_string = ''
+                else:
+                    num_guides_string = f' ({len(rows)})'
+                    
+                ax.annotate(f'{gene}{num_guides_string}',
+                            xy=centroid,
+                            xytext=(0, 0),
+                            textcoords='offset points',
+                            ha='center',
+                            va='center',
+                            size=8,
+                        )
 
         x_min = data['x'].min()
         x_max = data['x'].max()
@@ -205,7 +349,7 @@ class Clusterer:
         ax.set_yticks([])
         plt.setp(fig.axes[0].spines.values(), alpha=0.5)
 
-        return fig
+        return fig, data
 
     def plot_outcome_embedding(self,
                                marker_size=35,
@@ -213,6 +357,8 @@ class Clusterer:
                                color_by='cluster',
                                ax=None,
                                figsize=(6, 6),
+                               draw_legend=True,
+                               legend_location='upper left',
                               ):
 
         if ax is None:
@@ -232,20 +378,32 @@ class Clusterer:
             color='color',
         )
 
-        if color_by == 'cluster':
+        needs_categorical_legend = False
+        value_to_color = None
+
+        if color_by is None:
+            data['color'] = 'grey'
+            ax.scatter(data=data,
+                       **common_kwargs,
+                      )
+
+        elif color_by == 'cluster':
+            # To prevent privileging specific clusters, don't
+            # sort by cluster assignemnt.
             ax.scatter(data=data.query('cluster_assignment == -1'),
-                    **common_kwargs,
-                    )
+                       **common_kwargs,
+                      )
             ax.scatter(data=data.query('cluster_assignment != -1'),
-                    **common_kwargs,
-                    )
+                       **common_kwargs,
+                      )  
         else:
+            data_query = None
+
             if color_by == 'sgRNA':
-                sgRNAs = data.index.get_level_values('pool_name').map(self.pn_to_sgRNA)
-                colors, value_to_color = hits.visualize.assign_categorical_colors(sgRNAs)
+                colors, value_to_color = self.sgRNA_colors()
                 data['color'] = colors
 
-                hits.visualize.draw_categorical_legend(value_to_color, ax, font_size=14)
+                needs_categorical_legend = True
 
             elif color_by == 'category':
                 categories = data.index.get_level_values('category')
@@ -265,8 +423,12 @@ class Clusterer:
                 palette = bokeh.palettes.Dark2[8]
                 colors, value_to_color = hits.visualize.assign_categorical_colors(combined_categories, palette)
                 data['color'] = colors
+                data['sort_by'] = combined_categories
 
-                hits.visualize.draw_categorical_legend(value_to_color, ax, font_size=14)
+                # Force insertions to be drawn on top.
+                data = data.sort_values(by='sort_by', key=lambda s: s == 'insertion')
+
+                needs_categorical_legend = True
 
             elif color_by == 'Cpf1 category':
                 combined_categories = []
@@ -303,48 +465,48 @@ class Clusterer:
                 palette = bokeh.palettes.Dark2[8]
                 colors, value_to_color = hits.visualize.assign_categorical_colors(combined_categories, palette)
                 data['color'] = colors
+                data['sort_by'] = combined_categories
 
-                hits.visualize.draw_categorical_legend(value_to_color, ax, font_size=14)
+                needs_categorical_legend = True
 
-            elif color_by in ['MH length', 'deletion length']:
+            elif color_by in ['MH length', 'deletion length', 'fraction', 'log10_fraction']:
                 if color_by == 'MH length':
+                    min_length = 0
                     max_length = 3
                     cmap = copy.copy(plt.get_cmap('Greens'))
+                    cmap = copy.copy(sns.color_palette('viridis_r', as_cmap=True))
                     tick_step = 1
                     label = 'nts of flanking\nmicrohomology'
+                    data_query = 'category == "deletion"'
                 elif color_by == 'deletion length':
+                    min_length = 0
                     max_length = 30
                     cmap = copy.copy(plt.get_cmap('Purples'))
                     tick_step = 10
                     label = 'deletion length'
+                    data_query = 'category == "deletion"'
+                elif color_by == 'fraction':
+                    min_length = 0
+                    max_length = 0.1
+                    cmap = copy.copy(plt.get_cmap('YlOrBr'))
+                    tick_step = 0.25
+                    label = 'fraction of outcomes'
+                    data_query = None
+                elif color_by == 'log10_fraction':
+                    min_length = -3
+                    max_length = -1
+                    cmap = copy.copy(plt.get_cmap('YlOrBr'))
+                    tick_step = 1
+                    label = 'log$_{10}$ baseline fraction\nof outcomes\nwithin screen'
+                    data_query = None
                 else:
                     raise ValueError(color_by)
 
                 cmap.set_under('white')
-                norm = matplotlib.colors.Normalize(vmin=0, vmax=max_length)
+                norm = matplotlib.colors.Normalize(vmin=min_length, vmax=max_length)
                 sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
 
-                MH_lengths = []
-                deletion_lengths = []
-
-                for pn, c, s, d in self.outcome_embedding.index.values:
-                    if c == 'deletion':
-                        deletion = knock_knock.outcome.DeletionOutcome.from_string(d)
-                        MH_length = len(deletion.deletion.starts_ats) - 1
-                        deletion_length = deletion.deletion.length
-                    else:
-                        MH_length = -1
-                        deletion_length = -1
-                        
-                    MH_lengths.append(MH_length)
-                    deletion_lengths.append(deletion_length)
-
-                if color_by == 'MH length':
-                    vs = MH_lengths
-                elif color_by == 'deletion length':
-                    vs = deletion_lengths
-                else:
-                    raise ValueError
+                vs = self.outcome_embedding[color_by]
 
                 colors = [tuple(row) for row in sm.to_rgba(vs)]
                 data['color'] = colors
@@ -353,16 +515,33 @@ class Clusterer:
                 data = data.sort_values(by='sort_by')
 
                 ax_p = ax.get_position()
-                cax = fig.add_axes([ax_p.x0 + 0.45 * ax_p.width,
-                                    ax_p.y0 + 0.65 * ax_p.height,
+
+                if 'left' in legend_location:
+                    x0 = ax_p.x0 + 0.45 * ax_p.width
+                elif 'middle' in legend_location:
+                    x0 = ax_p.x0 + 0.5 * ax_p.width
+                else:
+                    x0 = ax_p.x0 + 0.75 * ax_p.width
+
+                if 'upper' in  legend_location:
+                    y0 = ax_p.y0 + 0.65 * ax_p.height
+                elif 'middle' in legend_location:
+                    y0 = ax_p.y0 + 0.5 * ax_p.height - 0.125 * ax_p.height
+                elif 'lower' in legend_location or 'bottom' in legend_location:
+                    y0 = ax_p.y0 + 0.2 * ax_p.height - 0.125 * ax_p.height
+
+                cax = fig.add_axes([x0,
+                                    y0,
                                     0.03 * ax_p.width,
                                     0.25 * ax_p.height,
                                    ])
                 colorbar = plt.colorbar(mappable=sm, cax=cax)
 
-                ticks = np.arange(0, max_length + 1, tick_step)
+                ticks = np.arange(min_length, max_length + 1, tick_step)
                 tick_labels = [str(t) for t in ticks]
                 tick_labels[-1] = '$\geq$' + tick_labels[-1]
+                if min_length != 0:
+                    tick_labels[0] = '$\leq$' + tick_labels[0]
                 colorbar.set_ticks(ticks)
                 colorbar.set_ticklabels(tick_labels)
                 colorbar.outline.set_alpha(0)
@@ -376,14 +555,6 @@ class Clusterer:
                              ha='right',
                              size=12,
                             )
-
-
-            elif color_by == 'directionality':
-                categories = data['directionality']
-                colors, value_to_color = hits.visualize.assign_categorical_colors(categories, bokeh.palettes.Dark2[8])
-                data['color'] = colors
-
-                hits.visualize.draw_categorical_legend(value_to_color, ax, font_size=14)
 
             else:
                 # color_by is be a guide name. This might be a guide that was among
@@ -409,8 +580,23 @@ class Clusterer:
                 data = data.sort_values(by='sort_by')
 
                 ax_p = ax.get_position()
-                cax = fig.add_axes([ax_p.x0 + 0.1 * ax_p.width,
-                                    ax_p.y0 + 0.75 * ax_p.height,
+
+                if 'left' in legend_location:
+                    x0 = ax_p.x0 + 0.1 * ax_p.width
+                elif 'middle' in legend_location:
+                    x0 = ax_p.x0 + 0.4 * ax_p.width
+                else:
+                    x0 = ax_p.x0 + 0.6 * ax_p.width
+
+                if 'upper' in  legend_location:
+                    y0 = ax_p.y0 + 0.65 * ax_p.height
+                elif 'middle' in legend_location:
+                    y0 = ax_p.y0 + 0.5 * ax_p.height - 0.125 * ax_p.height
+                elif 'lower' in legend_location or 'bottom' in legend_location:
+                    y0 = ax_p.y0 + 0.3 * ax_p.height - 0.125 * ax_p.height
+
+                cax = fig.add_axes([x0,
+                                    y0,
                                     0.3 * ax_p.width,
                                     0.03 * ax_p.height,
                                    ])
@@ -434,7 +620,12 @@ class Clusterer:
                              color=self.guide_embedding['color'].get(guide, 'black')
                             )
 
-            ax.scatter(data=data,
+            if data_query is not None:
+                to_plot = data.query(data_query)
+            else:
+                to_plot = data
+
+            ax.scatter(data=to_plot,
                        **common_kwargs,
                       )
 
@@ -453,16 +644,19 @@ class Clusterer:
         ax.set_xticks([])
         ax.set_yticks([])
 
+        if draw_legend and needs_categorical_legend:
+            hits.visualize.draw_categorical_legend(value_to_color, ax, font_size=14, legend_location=legend_location)
+
         plt.setp(fig.axes[0].spines.values(), alpha=0.5)
 
-        return fig, data
+        return fig, data, value_to_color
 
 def hierarchical(l2fcs,
-                  axis,
-                  metric='correlation',
-                  method='single',
-                  **fcluster_kwargs,
-                 ):
+                 axis,
+                 metric='correlation',
+                 method='single',
+                 **fcluster_kwargs,
+                ):
 
     fcluster_kwargs.setdefault('criterion', 'maxclust')
     fcluster_kwargs.setdefault('t', 5)
@@ -639,8 +833,10 @@ def get_cluster_blocks(cluster_assignments):
 class SinglePoolClusterer(Clusterer):
     def __init__(self, pool, **options):
         self.pool = pool
+        self.guide_library = self.pool.variable_guide_library
         self.pn_to_target_info = {self.pool.short_name: self.pool.target_info}
         self.pn_to_sgRNA = {self.pool.short_name: self.pool.target_info.sgRNA}
+        self.pn_to_pool = {self.pool.short_name: self.pool}
         super().__init__(**options)
 
     @memoized_property
@@ -657,6 +853,11 @@ class SinglePoolClusterer(Clusterer):
 
         if pd.api.types.is_list_like(selection_method):
             outcomes = selection_method
+
+        elif selection_method == 'category':
+            category = self.options['outcomes_selection_kwargs']['category']
+            min_f = self.options['outcomes_selection_kwargs']['threshold']
+            outcomes = [(c, s, d) for (c, s, d), f in self.pool.non_targeting_fractions.items() if c == category and f >= min_f]
 
         elif selection_method == 'above_frequency_threshold':
             threshold = self.options['outcomes_selection_kwargs']['threshold']
@@ -707,9 +908,19 @@ class SinglePoolClusterer(Clusterer):
 class MultiplePoolClusterer(Clusterer):
     def __init__(self, pools, **options):
         self.pools = pools
+
+        # Note: assumes all pools have the same guide library.
+        self.guide_library = self.pools[0].variable_guide_library
+
+        self.pn_to_pool = {pool.short_name: pool for pool in self.pools}
         self.pn_to_target_info = {pool.short_name: pool.target_info for pool in self.pools}
         self.pn_to_sgRNA = {pool.short_name: pool.target_info.sgRNA for pool in self.pools}
         super().__init__(**options)
+
+    def sgRNA_colors(self):
+        sgRNAs = self.outcome_embedding.index.get_level_values('pool_name').map(self.pn_to_sgRNA)
+        outcome_colors, sgRNA_to_color = hits.visualize.assign_categorical_colors(sgRNAs)
+        return outcome_colors, sgRNA_to_color
 
     @memoized_property
     def common_guides(self):
@@ -761,10 +972,28 @@ class MultiplePoolClusterer(Clusterer):
 
     @memoized_property
     def pool_specific_outcomes(self):
+        selection_method = self.options['outcomes_selection_method']
+
         pool_specific_outcomes = {}
 
         for pool in self.pools:
-            pool_specific_outcomes[pool.short_name] = pool.canonical_outcomes
+            if selection_method == 'category':
+                category = self.options['outcomes_selection_kwargs']['category']
+                min_f = self.options['outcomes_selection_kwargs']['threshold']
+                outcomes = [(c, s, d) for (c, s, d), f in pool.non_targeting_fractions.items() if c == category and f >= min_f]
+
+            elif selection_method == 'above_frequency_threshold':
+                threshold = self.options['outcomes_selection_kwargs']['threshold']
+                outcomes = pool.outcomes_above_simple_threshold(threshold)
+
+            elif selection_method == 'top_n':
+                num_outcomes = self.options['outcomes_selection_kwargs']['n']
+                outcomes = pool.most_frequent_outcomes('none')[:num_outcomes]
+
+            else:
+                outcomes = pool.canonical_outcomes
+
+            pool_specific_outcomes[pool.short_name] = outcomes
 
         return pool_specific_outcomes
 
