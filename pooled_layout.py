@@ -11,7 +11,7 @@ from hits.utilities import memoized_property
 from knock_knock.target_info import DegenerateDeletion, DegenerateInsertion, SNV, SNVs
 from knock_knock import layout
 
-from ddr.outcome import *
+from knock_knock.outcome import *
 
 side_categories = [
     'intended',
@@ -60,15 +60,28 @@ class Layout(layout.Categorizer):
             ),
         ),
         ('deletion',
-            ('clean',
+            ('near cut',
+             'far from cut',
             ),
         ),
         ('deletion + adjacent mismatch',
             ('deletion + adjacent mismatch',
             ),
         ),
+        ('deletion + mismatches',
+            ('deletion + mismatches',
+            ),
+        ),
+        ('multiple deletions',
+            ('multiple deletions',
+            ),
+        ),
         ('insertion',
             ('insertion',
+            ),
+        ),
+        ('insertion + mismatches',
+            ('insertion + mismatches',
             ),
         ),
         ('duplication',
@@ -86,6 +99,7 @@ class Layout(layout.Categorizer):
         ('genomic insertion',
             ('hg19',
              'bosTau7',
+             'e_coli',
             ),
         ),
         ('transversion',
@@ -155,17 +169,14 @@ class Layout(layout.Categorizer):
             ),
         ),
         ('bad sequence',
-            ('too many Ns',
-             'long polyG',
-             'low quality',
-             'low quality tail',
+            ('low quality',
              'no alignments detected',
              'non-overlapping',
             ),
         ), 
     ]
 
-    def __init__(self, alignments, target_info, mode='error_corrected'):
+    def __init__(self, alignments, target_info, error_corrected=True, mode='cutting'):
         self.alignments = [al for al in alignments if not al.is_unmapped]
         self.target_info = target_info
         
@@ -188,10 +199,8 @@ class Layout(layout.Categorizer):
         self.ins_size_to_split_at = 3
         self.del_size_to_split_at = 2
 
-        if mode == 'error_corrected':
-            self.error_corrected = True
-        else:
-            self.error_corrected = False
+        self.error_corrected = error_corrected
+        self.mode = mode
 
         self.inferred_amplicon_length = len(self.seq) if self.seq is not None else -1
 
@@ -421,7 +430,7 @@ class Layout(layout.Categorizer):
 
             als = sw.align_read(self.read,
                                 targets,
-                                10,
+                                5,
                                 ti.header,
                                 read_interval=extended_gap,
                                 ref_intervals=ref_intervals,
@@ -556,23 +565,15 @@ class Layout(layout.Categorizer):
             return False
         else:
             not_too_much = {
-                'start': missing_from['start'] <= 2,
-                'end': (missing_from['end'] <= 2) or self.overlaps_right_primer(self.single_target_alignment),
+                'start': (missing_from['start'] <= 2) or self.overlaps_primer(self.single_target_alignment, 'left'),
+                'end': (missing_from['end'] <= 2) or self.overlaps_primer(self.single_target_alignment, 'right'),
                 'middle': missing_from['middle'] <= 5,
             }
 
             return all(not_too_much.values())
 
-    def overlaps_right_primer(self, al):
-        primer = self.target_info.primers_by_side_of_read['right']
-        num_overlapping_bases = al.get_overlap(primer.start, primer.end + 1)
-        overlaps = num_overlapping_bases > 0
-        correct_strand = sam.get_strand(al) == self.target_info.sequencing_direction 
-
-        return correct_strand and overlaps
-
-    def overlaps_left_primer(self, al):
-        primer = self.target_info.primers_by_side_of_read['left']
+    def overlaps_primer(self, al, side):
+        primer = self.target_info.primers_by_side_of_read[side]
         num_overlapping_bases = al.get_overlap(primer.start, primer.end + 1)
         overlaps = num_overlapping_bases > 0
         correct_strand = sam.get_strand(al) == self.target_info.sequencing_direction 
@@ -607,6 +608,7 @@ class Layout(layout.Categorizer):
     @memoized_property
     def SNVs_summary(self):
         SNPs = self.target_info.donor_SNVs
+
         if SNPs is None:
             position_to_name = {}
             donor_SNV_locii = {}
@@ -650,29 +652,20 @@ class Layout(layout.Categorizer):
         ref_seq = ti.reference_sequences[donor_al.reference_name]
         
         position_to_name = {SNPs['donor'][name]['position']: name for name in SNPs['donor']}
-
-        SNV_summary = {name: '-' for name in ti.donor_SNVs['donor']}
+        donor_SNV_locii = {name: [] for name in SNPs['donor']}
 
         for true_read_i, read_b, ref_i, ref_b, qual in sam.aligned_tuples(donor_al, ref_seq):
             # Note: read_b and ref_b are as if the read is the forward strand
-            name = position_to_name.get(ref_i)
-            if name is None:
-                continue
+            if ref_i in position_to_name:
+                name = position_to_name[ref_i]
 
-            target_base = SNPs['target'][name]['base']
+                # not confident that the logic is right here
+                if SNPs['target'][name]['strand'] != SNPs['donor'][name]['strand']:
+                    read_b = utilities.reverse_complement(read_b)
 
-            # not confident that the logic is right here
-            if SNPs['target'][name]['strand'] != SNPs['donor'][name]['strand']:
-                read_b = utilities.reverse_complement(read_b)
+                donor_SNV_locii[name].append((read_b, qual))
 
-            if read_b == target_base:
-                SNV_summary[name] = '_'
-            else:
-                SNV_summary[name] = read_b
-
-        string_summary = ''.join(SNV_summary[name] for name in sorted(SNPs['target']))
-                
-        return string_summary
+        return donor_SNV_locii
 
     def specific_to_donor(self, al):
         ''' Does al contain a donor SNV? '''
@@ -700,19 +693,31 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def donor_SNV_locii_summary(self):
-        SNPs = self.target_info.donor_SNVs
         donor_SNV_locii, _ = self.SNVs_summary
-        
+        return self.process_locii_summaries([donor_SNV_locii])
+
+    def process_locii_summaries(self, locii_summaries):
+        SNPs = self.target_info.donor_SNVs
+
+        all_summaries = defaultdict(list)
+        for locii_summary in locii_summaries:
+            for k, v in locii_summary.items():
+                all_summaries[k].extend(v)
+
         genotype = {}
 
         has_donor_SNV = False
+        has_nondonor_SNV_at_donor_position = False
 
         for name in sorted(SNPs['target']):
             bs = defaultdict(list)
 
-            for b, q in donor_SNV_locii[name]:
+            for b, q in all_summaries[name]:
                 bs[b].append(q)
 
+            # If only '-' was seen, its fine to remove it. If a non-deletion was seen, favor it.
+            bs.pop('-', None)
+            
             if len(bs) == 0:
                 genotype[name] = '-'
             elif len(bs) != 1:
@@ -727,15 +732,22 @@ class Layout(layout.Categorizer):
                 
                     if b == SNPs['donor'][name]['base']:
                         has_donor_SNV = True
+                    else:
+                        has_nondonor_SNV_at_donor_position = True
 
         string_summary = ''.join(genotype[name] for name in sorted(SNPs['target']))
 
-        return has_donor_SNV, string_summary
+        return has_donor_SNV, has_nondonor_SNV_at_donor_position, string_summary
 
     @memoized_property
     def has_donor_SNV(self):
-        has_donor_SNV, _ = self.donor_SNV_locii_summary
+        has_donor_SNV, _, _ = self.donor_SNV_locii_summary
         return has_donor_SNV
+
+    @memoized_property
+    def has_nondonor_SNV_at_donor_position(self):
+        _, has_nondonor_SNV_at_donor_position, _ = self.donor_SNV_locii_summary
+        return has_nondonor_SNV_at_donor_position
 
     @memoized_property
     def has_any_SNV(self):
@@ -743,7 +755,7 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def donor_SNV_string(self):
-        _, string_summary = self.donor_SNV_locii_summary
+        _, _, string_summary = self.donor_SNV_locii_summary
         return string_summary
 
     def extract_indels_from_alignments(self, als):
@@ -1238,7 +1250,11 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def is_valid_SD_MMEJ(self):
-        return 'failed' not in self.SD_MMEJ
+        if self.mode == 'base_editing':
+            # Mismatches in base editing data lead to overly permissive calling of SD-MMEJ.
+            return False
+        else:
+            return 'failed' not in self.SD_MMEJ
 
     @memoized_property
     def realigned_target_alignments(self):
@@ -1352,6 +1368,7 @@ class Layout(layout.Categorizer):
 
     def register_donor_insertion(self):
         details = self.donor_insertion
+        self.relevant_alignments = details['full_alignments'] + details['concatamer_alignments']
 
         if 'left' in details['shared_HAs']:
             left_category = 'intended'
@@ -1371,14 +1388,38 @@ class Layout(layout.Categorizer):
         else:
             right_category = 'unintended'
 
-        strand = details['strand']
+        from_target_SNV_locii, _ = self.SNVs_summary
+        from_donor_SNV_locii = self.donor_al_SNV_summary(details['candidate_alignment'])
+
+        # 2020.10.16:  don't remember why target was added here. Removing it.
+        _, _, donor_SNV_summary_string = self.process_locii_summaries([from_donor_SNV_locii])
+
+        # Short deletions, especially next to a donor SNV, can cause outcomes that we want
+        # to be considered (donor, synthesis error) outcomes to end up here. Triage them here. 
+        if left_category == 'intended' and right_category == 'intended':
+            al = details['candidate_alignment']
+            indels = self.extract_indels_from_alignments([al])
+            indels_besides_one_base_deletions = [indel for indel, _ in indels if not (indel.kind == 'D' and indel.length == 1)]
+
+            if len(indels_besides_one_base_deletions) == 0:
+                self.category = 'donor'
+
+                if len(indels) > 0:
+                    self.subcategory = 'synthesis errors'
+                else:
+                    self.subcategory = 'clean'
+
+                self.outcome = HDROutcome(donor_SNV_summary_string, self.donor_deletions_seen)
+                self.details = str(self.outcome)
+
+                return
+
+        # If we make it past the return above, this read was not triaged. 
 
         subcategory = f'left {left_category}, right {right_category}'
 
         if not details['has_donor_SNV']['insertion']:
             subcategory += ' (no SNVs)'
-
-        donor_SNV_summary_string = self.donor_al_SNV_summary(details['candidate_alignment'])
 
         outcome = LongTemplatedInsertionOutcome('donor',
                                                 self.target_info.donor,
@@ -1399,11 +1440,8 @@ class Layout(layout.Categorizer):
         self.outcome = outcome
         self.details = str(outcome)
         
-        relevant_alignments = details['full_alignments'] + details['concatamer_alignments']
-
         self.category = 'donor misintegration'
         self.subcategory = subcategory
-        self.relevant_alignments = relevant_alignments
         self.special_alignment = details['candidate_alignment']
 
     def register_SD_MMEJ(self):
@@ -1425,6 +1463,52 @@ class Layout(layout.Categorizer):
 
         self.relevant_alignments = self.SD_MMEJ['alignments']
 
+    def register_deletion(self):
+        if len(self.indels) > 1:
+            raise ValueError
+
+        indel, near_cut = self.indels[0]
+
+        self.category = 'deletion'
+        if near_cut:
+            self.subcategory = 'near cut'
+        else:
+            self.subcategory = 'far from cut'
+
+        self.details = self.indels_string
+        self.outcome = DeletionOutcome(indel)
+        self.relevant_alignments = [self.single_target_alignment]
+
+    def register_deletion_plus_mismatches(self):
+        self.category = 'deletion + mismatches'
+        self.subcategory = 'deletion + mismatches'
+
+        indel, near_cut = self.indels[0]
+        if indel.kind != 'D':
+            raise ValueError
+
+        deletion_outcome = DeletionOutcome(indel)
+        mismatch_outcome = MismatchOutcome(self.non_donor_SNVs)
+        self.outcome = DeletionPlusMismatchOutcome(deletion_outcome, mismatch_outcome)
+        self.details = str(self.outcome)
+
+        self.relevant_alignments = self.parsimonious_target_alignments
+
+    def register_insertion_plus_mismatches(self):
+        self.category = 'insertion + mismatches'
+        self.subcategory = 'insertion + mismatches'
+
+        indel, near_cut = self.indels[0]
+        if indel.kind != 'I':
+            raise ValueError
+
+        insertion_outcome = InsertionOutcome(indel)
+        mismatch_outcome = MismatchOutcome(self.non_donor_SNVs)
+        self.outcome = InsertionPlusMismatchOutcome(insertion_outcome, mismatch_outcome)
+        self.details = str(self.outcome)
+
+        self.relevant_alignments = self.parsimonious_target_alignments
+
     @memoized_property
     def donor_deletions_seen(self):
         seen = [d for d, _ in self.indels if d.kind == 'D' and d in self.target_info.donor_deletions]
@@ -1434,7 +1518,7 @@ class Layout(layout.Categorizer):
         q_to_HA_offsets = defaultdict(lambda: defaultdict(set))
 
         if self.target_info.homology_arms is None:
-            return None
+            return set()
 
         for side in ['left', 'right']:
             # Only register the left-most occurence of the left HA in the left target edge alignment
@@ -1907,7 +1991,7 @@ class Layout(layout.Categorizer):
                 if self.overlaps_primer(al, 'left'):
                     covered.start = 0
             covereds.append(covered)
-    
+
         covered = interval.DisjointIntervals(interval.make_disjoint(covereds))
 
         uncovered = self.whole_read_minus_edges(2) - covered
@@ -1916,13 +2000,6 @@ class Layout(layout.Categorizer):
             return None
         
         ref_junctions = []
-
-        if ti.sequencing_direction == '+':
-            get_left_end = lambda al: al.reference_end - 1 
-            get_right_end = lambda al: al.reference_start
-        else:
-            get_left_end = lambda al: al.reference_start
-            get_right_end = lambda al: al.reference_end - 1 
 
         indels = []
 
@@ -1933,24 +2010,10 @@ class Layout(layout.Categorizer):
         for junction_i, (left_al, right_al) in enumerate(zip(merged_als, merged_als[1:])):
             switch_results = sam.find_best_query_switch_after(left_al, right_al, ti.target_sequence, ti.target_sequence, max)
 
-            left_switch_after = max(switch_results['best_switch_points'])
-            right_switch_after = min(switch_results['best_switch_points'])
+            lefts = tuple(sam.closest_ref_position(q, left_al) for q in switch_results['best_switch_points'])
+            rights = tuple(sam.closest_ref_position(q + 1, right_al) for q in switch_results['best_switch_points'])
 
-            left_al_cropped = sam.crop_al_to_query_int(left_al, 0, left_switch_after)
-            right_al_cropped = sam.crop_al_to_query_int(right_al, right_switch_after + 1, len(self.seq))
-
-            # TODO: look into when None happens here
-            if left_al_cropped is None:
-                left = -1
-            else:
-                left = get_left_end(left_al_cropped)
-
-            if right_al_cropped is None:
-                right = -1
-            else:
-                right = get_right_end(right_al_cropped)
-
-            ref_junction = (left, right)
+            ref_junction = (lefts, rights)
             ref_junctions.append(ref_junction)
 
         if len(ref_junctions) == 1:
@@ -1983,7 +2046,12 @@ class Layout(layout.Categorizer):
                 if len(self.non_donor_SNVs) == 0:
                     if self.has_donor_SNV:
                         self.category = 'donor'
-                        self.subcategory = 'clean'
+
+                        if self.has_nondonor_SNV_at_donor_position:
+                            self.subcategory = 'other'
+                        else:
+                            self.subcategory = 'clean'
+
                         self.outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
                         self.details = str(self.outcome)
                         self.relevant_alignments = [self.single_target_alignment] + self.donor_alignments
@@ -2010,15 +2078,14 @@ class Layout(layout.Categorizer):
                 else: # no indels but mismatches
                     if self.has_donor_SNV and not self.error_corrected:
                         self.category = 'donor'
-                        self.subcategory = 'clean'
+                        if self.has_nondonor_SNV_at_donor_position:
+                            self.subcategory = 'other'
+                        else:
+                            self.subcategory = 'clean'
                         self.outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
                         self.details = str(self.outcome)
                         self.relevant_alignments = [self.single_target_alignment] + self.donor_alignments
-                    elif self.error_corrected and self.is_valid_SD_MMEJ:
-                        # If extra bases synthesized during SD-MMEJ are the same length
-                        # as the total resections, there will not be an indel, so check if
-                        # the mismatches can be explained by SD-MMEJ.
-                        self.register_SD_MMEJ()
+
                     else:
                         if self.starts_at_expected_location:
                             if self.error_corrected:
@@ -2051,9 +2118,9 @@ class Layout(layout.Categorizer):
                 if len(self.donor_deletions_seen) == 1:
                     if len(self.non_donor_SNVs) == 0:
                         self.category = 'donor'
-                        self.subcategory = 'clean'
                         self.outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
                         self.details = str(self.outcome)
+                        self.relevant_alignments = [self.single_target_alignment] + self.donor_alignments
 
                     else: # has non-donor SNVs
                         if self.is_valid_SD_MMEJ:
@@ -2074,6 +2141,8 @@ class Layout(layout.Categorizer):
                                 self.subcategory = 'synthesis errors'
                                 self.outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
                                 self.details = str(self.outcome)
+
+                                self.relevant_alignments = [self.single_target_alignment] + self.donor_alignments
 
                                 #if len(self.donor_alignments) != 1:
                                 #    raise ValueError
@@ -2119,82 +2188,87 @@ class Layout(layout.Categorizer):
                                     if near_cut:
                                         mismatch_before = any(SNV_position == s - 1 for s in deletion.starts_ats)
                                         mismatch_after = any(SNV_position == e + 1 for e in deletion.ends_ats)
+
                                         if mismatch_before or mismatch_after:
+                                            self.register_deletion_plus_mismatches()
+                                            # Note: reset category and subcategory set in register function.
                                             self.category = 'deletion + adjacent mismatch'
                                             self.subcategory = 'deletion + adjacent mismatch'
-                                            deletion_outcome = DeletionOutcome(indel)
-                                            mismatch_outcome = MismatchOutcome(self.non_donor_SNVs)
-                                            self.outcome = DeletionPlusMismatchOutcome(deletion_outcome, mismatch_outcome)
-                                            self.details = str(self.outcome)
-                                            self.relevant_alignments = self.uncategorized_relevant_alignments
                                         else:
                                             if self.error_corrected:
-                                                self.category = 'uncategorized'
-                                                self.subcategory = 'deletion plus non-adjacent mismatch'
-                                                self.details = 'n/a'
-                                                self.relevant_alignments = self.uncategorized_relevant_alignments
+                                                self.register_deletion_plus_mismatches()
                                             else:
-                                                self.category = 'deletion'
-                                                self.subcategory = 'clean'
-                                                self.details = self.indels_string
-                                                self.outcome = DeletionOutcome(indel)
-                                                self.relevant_alignments = [self.single_target_alignment]
-                                    else:
+                                                self.register_deletion()
+
+                                    else: # far from cut
                                         if self.donor_insertion is not None:
                                             self.register_donor_insertion()
                                         else:
-                                            self.category = 'uncategorized'
-                                            self.subcategory = 'deletion far from cut plus mismatch'
-                                            self.details = 'n/a'
-                                            self.relevant_alignments = self.uncategorized_relevant_alignments
-                                else:
+                                            self.register_deletion_plus_mismatches()
+
+                                elif indel.kind == 'I':
                                     if self.error_corrected:
-                                        self.category = 'uncategorized'
-                                        self.subcategory = 'insertion plus one mismatch'
-                                        self.details = 'n/a'
-                                        self.relevant_alignments = self.uncategorized_relevant_alignments
+                                        self.register_insertion_plus_mismatches()
                                     else:
                                         self.category = 'insertion'
                                         self.subcategory = 'insertion'
                                         self.details = self.indels_string
                                         self.outcome = InsertionOutcome(indel)
-                            else:
-                                self.category = 'uncategorized'
-                                self.subcategory = 'one indel plus more than one mismatch'
+                                        self.relevant_alignments = [self.single_target_alignment]
+                                else:
+                                    raise ValueError('bad indel kind', indel.kind)
+
+                            else: # one indel, more than 1 non-donor SNV
+                                if self.error_corrected:
+                                    if indel.kind == 'D':
+                                        self.register_deletion_plus_mismatches()
+
+                                    elif indel.kind == 'I':
+                                        self.register_insertion_plus_mismatches()
+
+                                    else:
+                                        raise ValueError('bad indel kind', indel.kind)
+
+                                else:
+                                    if indel.kind == 'D':
+                                        self.register_deletion()
+
+                                    elif indel.kind == 'I':
+                                        self.category = 'insertion'
+                                        self.subcategory = 'insertion'
+                                        self.details = self.indels_string
+                                        self.outcome = InsertionOutcome(indel)
+                                        self.relevant_alignments = [self.single_target_alignment]
+                                    else:
+                                        raise ValueError('bad indel kind', indel.kind)
+
+                    else: # one indel, no SNVs
+                        if indel.kind == 'D':
+                            if self.non_primer_nts <= 10:
+                                self.category = 'nonspecific amplification'
+                                self.subcategory = 'primer dimer'
                                 self.details = 'n/a'
                                 self.relevant_alignments = self.uncategorized_relevant_alignments
+                            else:
+                                self.register_deletion()
 
-                    else: # no SNVs
-                        if len(self.indels_near_cut) == 1:
-                            if indel.kind == 'D':
-                                if self.non_primer_nts <= 10:
-                                    self.category = 'nonspecific amplification'
-                                    self.subcategory = 'primer dimer'
-                                    self.details = 'n/a'
-                                    self.relevant_alignments = self.uncategorized_relevant_alignments
-                                else:
-                                    self.category = 'deletion'
-                                    self.subcategory = 'clean'
-                                    self.details = self.indels_string
-                                    self.outcome = DeletionOutcome(indel)
-
-                            elif indel.kind == 'I':
+                        elif indel.kind == 'I':
+                            if len(self.indels_near_cut) == 1:
                                 self.category = 'insertion'
                                 self.subcategory = 'insertion'
                                 self.details = self.indels_string
                                 self.outcome = InsertionOutcome(indel)
-
-                        else:
-                            if indel.length <= 3 and not self.error_corrected:
-                                self.category = 'wild type'
-                                self.subcategory = 'indels'
-                                self.details = 'n/a'
-                            
                             else:
-                                self.category = 'uncategorized'
-                                self.subcategory = 'indel far from cut'
-                                self.details = 'n/a'
-                                self.relevant_alignments = self.uncategorized_relevant_alignments
+                                if indel.length <= 3 and not self.error_corrected:
+                                    self.category = 'wild type'
+                                    self.subcategory = 'indels'
+                                    self.details = 'n/a'
+                                
+                                else:
+                                    self.category = 'uncategorized'
+                                    self.subcategory = 'indel far from cut'
+                                    self.details = 'n/a'
+                                    self.relevant_alignments = self.uncategorized_relevant_alignments
 
                         self.relevant_alignments = [self.single_target_alignment]
 
@@ -2256,10 +2330,18 @@ class Layout(layout.Categorizer):
                         if self.is_valid_SD_MMEJ:
                             self.register_SD_MMEJ()
                         else:
-                            self.category = 'uncategorized'
-                            self.subcategory = 'multiple indels'
-                            self.details = 'n/a'
-                            self.relevant_alignments = self.uncategorized_relevant_alignments
+                            if set(indel.kind for indel, near_cut in self.indels) == {'D'}:
+                                self.category = 'multiple deletions'
+                                self.subcategory = 'multiple deletions'
+                                deletion_outcomes = sorted([DeletionOutcome(indel) for indel, near_cut in self.indels], key=str)
+                                self.outcome = MultipleDeletionOutcome(deletion_outcomes)
+                                self.details = str(self.outcome)
+                                self.relevant_alignments = self.parsimonious_target_alignments
+                            else:
+                                self.category = 'uncategorized'
+                                self.subcategory = 'multiple indels'
+                                self.details = 'n/a'
+                                self.relevant_alignments = self.uncategorized_relevant_alignments
 
         elif self.is_valid_SD_MMEJ:
             #TODO: if gap length is zero, classify as deletion
@@ -2311,25 +2393,23 @@ class Layout(layout.Categorizer):
 
             if num_Ns > 10:
                 self.category = 'bad sequence'
-                self.subcategory = 'too many Ns'
-                self.details = str(num_Ns)
+                self.subcategory = 'low quality'
+                self.details = 'n/a'
 
             elif self.Q30_fractions['all'] < 0.5:
                 self.category = 'bad sequence'
                 self.subcategory = 'low quality'
-                fraction = self.Q30_fractions['all']
-                self.details = f'{fraction:0.2f}'
+                self.details = 'n/a'
 
             elif self.Q30_fractions['second_half'] < 0.5:
                 self.category = 'bad sequence'
-                self.subcategory = 'low quality tail'
-                fraction = self.Q30_fractions['second_half']
-                self.details = f'{fraction:0.2f}'
+                self.subcategory = 'low quality'
+                self.details = 'n/a'
                 
             elif self.longest_polyG >= 20:
                 self.category = 'bad sequence'
-                self.subcategory = 'long polyG'
-                self.details = str(self.longest_polyG)
+                self.subcategory = 'low quality'
+                self.details = 'n/a'
 
             else:
                 self.category = 'uncategorized'
@@ -2358,4 +2438,4 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def uncategorized_relevant_alignments(self):
-        return self.target_alignments + self.donor_alignments + interval.make_parsimonious(self.nonredundant_supplemental_alignments)
+        return self.target_alignments + self.donor_alignments + interval.make_parsimonious(self.nonredundant_supplemental_alignments) + self.gap_sw_realignments
