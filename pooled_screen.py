@@ -1,14 +1,17 @@
-import shutil
-import sys
 import bisect
-import pickle
-import subprocess
-import resource
-import heapq
+import datetime
 import gzip
+import heapq
 import itertools
+import os
+import pickle
+import resource
+import shutil
+import subprocess
+import sys
 import time
 import warnings
+
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -24,7 +27,7 @@ import tqdm
 from hits import utilities, sam, fastq, fasta, mapping_tools, interval
 from knock_knock import experiment, target_info, visualize, ranges
 
-from . import pooled_layout, collapse, coherence, guide_library, prime_editing_layout
+from . import pooled_layout, collapse, coherence, guide_library, prime_editing_layout, statistics
 
 memoized_property = utilities.memoized_property
 memoized_with_key = utilities.memoized_with_key
@@ -59,6 +62,7 @@ class SingleGuideExperiment(experiment.Experiment):
             'filtered_duplication_details': self.results_dir / 'filtered_duplication_details.hdf5',
 
             'deletion_ranges': self.results_dir / 'deletion_ranges.hdf5',
+            'duplication_ranges': self.results_dir / 'duplication_ranges.hdf5',
 
             'collapsed_UMI_outcomes': self.results_dir / 'collapsed_UMI_outcomes.txt',
             'cell_outcomes': self.results_dir / 'cell_outcomes.txt',
@@ -88,6 +92,8 @@ class SingleGuideExperiment(experiment.Experiment):
         self.min_reads_per_UMI = self.pool.min_reads_per_UMI
 
         self.outcome_fn_keys = ['filtered_cell_outcomes']
+
+        self.diagram_kwargs.update(self.pool.diagram_kwargs)
 
     @property
     def final_Outcome(self):
@@ -375,14 +381,14 @@ class SingleGuideExperiment(experiment.Experiment):
                             details = '{},{}_{}'.format(details, annotation['UMI'], annotation['num_reads'])
 
                     outcome = coherence.Pooled_UMI_Outcome(annotation['UMI'],
-                                                        annotation['mismatch'],
-                                                        annotation['cluster_id'],
-                                                        annotation['num_reads'],
-                                                        category,
-                                                        subcategory,
-                                                        details,
-                                                        read.name,
-                                                        )
+                                                           annotation['mismatch'],
+                                                           annotation['cluster_id'],
+                                                           annotation['num_reads'],
+                                                           category,
+                                                           subcategory,
+                                                           details,
+                                                           read.name,
+                                                          )
                 else:
                     outcome = coherence.gDNA_Outcome(read.name,
                                                      category,
@@ -589,7 +595,12 @@ class SingleGuideExperiment(experiment.Experiment):
             als = self.get_read_alignments(read_id, outcome=outcome)
         else:
             als = qname_to_als[read_id]
-        layout = self.categorizer(als, self.target_info, mode=self.layout_mode, error_corrected=self.pool.error_corrected)
+
+        layout = self.categorizer(als, self.target_info,
+                                  mode=self.layout_mode,
+                                  error_corrected=self.pool.error_corrected,
+                                 )
+
         return layout
 
     def get_read_diagram(self, read_id, only_relevant=True, qname_to_als=None, outcome=None, **diagram_kwargs):
@@ -762,7 +773,7 @@ class SingleGuideExperiment(experiment.Experiment):
         return outcomes
 
     def extract_deletion_ranges(self):
-        deletion_ranges = ranges.Ranges.deletion_ranges([self], with_edit=True, without_edit=True)
+        deletion_ranges = ranges.Ranges.deletion_ranges([self], with_edit=True, without_edit=True, exclude_buffer_around_primers=10)
 
         with h5py.File(self.fns['deletion_ranges'], mode='w') as h5_file:
             h5_file.create_dataset('starts', data=np.array(deletion_ranges.starts))
@@ -772,6 +783,25 @@ class SingleGuideExperiment(experiment.Experiment):
     @memoized_property
     def deletion_ranges(self):
         with h5py.File(self.fns['deletion_ranges'], mode='r') as h5_file:
+            starts = h5_file['starts'][()]
+            ends = h5_file['ends'][()]
+            total_reads = h5_file.attrs['total_reads']
+
+        empty_read_info = ('', '', '')
+        range_iter = ((empty_read_info, start, end) for start, end in zip(starts, ends))
+        return ranges.Ranges(self.target_info, self.target_info.target, range_iter, total_reads, exps=[self])
+
+    def extract_duplication_ranges(self):
+        duplication_ranges = ranges.Ranges.duplication_ranges([self])
+
+        with h5py.File(self.fns['duplication_ranges'], mode='w') as h5_file:
+            h5_file.create_dataset('starts', data=np.array(duplication_ranges.starts))
+            h5_file.create_dataset('ends', data=np.array(duplication_ranges.ends))
+            h5_file.attrs['total_reads'] = duplication_ranges.total_reads
+
+    @memoized_property
+    def duplication_ranges(self):
+        with h5py.File(self.fns['duplication_ranges'], mode='r') as h5_file:
             starts = h5_file['starts'][()]
             ends = h5_file['ends'][()]
             total_reads = h5_file.attrs['total_reads']
@@ -800,12 +830,14 @@ class SingleGuideExperiment(experiment.Experiment):
                 self.categorize_outcomes()
                 self.collapse_UMI_outcomes()
                 self.record_sanitized_category_names()
+
                 #self.make_reads_per_UMI()
                 #self.make_filtered_cell_bams()
                 #self.extract_truncation_positions()
-                self.extract_templated_insertion_info()
-                self.extract_duplication_info()
-                self.extract_genomic_insertion_info()
+                #self.extract_templated_insertion_info()
+                #self.extract_duplication_info()
+                #self.extract_genomic_insertion_info()
+                self.extract_deletion_ranges()
                 #self.make_outcome_plots(num_examples=3)
             else:
                 raise ValueError(stage)
@@ -893,8 +925,6 @@ def collapse_categories(df):
     possibly_collapse = [
         'genomic insertion',
         'donor misintegration',
-        'unintended donor integration',
-        'complex duplication',
     ]
     to_collapse = [cat for cat in possibly_collapse if cat in df.index.levels[0]]
 
@@ -920,11 +950,13 @@ def collapse_categories(df):
     return pd.concat((df, new_rows))
 
 class PooledScreen:
-    def __init__(self, base_dir, group, progress=None):
+    def __init__(self, base_dir, group, category_groupings=None, progress=None):
         self.base_dir = Path(base_dir)
         self.group = group
 
         self.group_dir = self.base_dir / 'results' / group
+
+        self.category_groupings = category_groupings
 
         if progress is None:
             silent = True
@@ -1026,10 +1058,13 @@ class PooledScreen:
             'filtered_duplication_details': self.group_dir / 'filtered_duplication_details.hdf5',
             
             'deletion_ranges': self.group_dir / 'deletion_ranges.hdf5',
+            'duplication_ranges': self.group_dir / 'duplication_ranges.hdf5',
 
             'genomic_insertion_length_distributions': self.group_dir / 'genomic_insertion_length_distribution.txt',
 
             'highest_guide_correlations': self.group_dir / 'highest_guide_correlations.txt',
+
+            'gene_level_category_statistics': self.group_dir / 'gene_level_category_statistics.txt',
         }
 
         label_offsets = {}
@@ -1041,7 +1076,8 @@ class PooledScreen:
             elif feature_name.startswith('HA_RT'):
                 label_offsets[feature_name] = 1
 
-        label_offsets[f'{self.target_info.primary_sgRNA}_PAM'] = 2
+        label_offsets[f'{self.target_info.primary_sgRNA}_PAM'] = 1
+
         for sgRNA in self.target_info.sgRNAs:
             if sgRNA != self.target_info.primary_sgRNA:
                 label_offsets[f'{sgRNA}_PAM'] = 1
@@ -1359,7 +1395,7 @@ class PooledScreen:
 
         outcome_to_deletion_slice = {}
 
-        for c, s, d in deletion_fractions.index.values:
+        for c, s, d in self.progress(deletion_fractions.index.values):
             # Undo anchor shift to make coordinates relative to full target sequence.
             deletion = pooled_layout.DeletionOutcome.from_string(d).perform_anchor_shift(-ti.anchor).deletion
             start = min(deletion.starts_ats)
@@ -1395,7 +1431,7 @@ class PooledScreen:
 
         with warnings.catch_warnings():
             warnings.filterwarnings('ignore', message='divide by zero encountered in log2', category=RuntimeWarning)
-            log2_fold_changes = np.log2(fraction_removed.div(fraction_removed['all_non_targeting', 'all_non_targeting'], axis=0))
+            log2_fold_changes = np.log2(fraction_removed.div(fraction_removed[ALL_NON_TARGETING, ALL_NON_TARGETING], axis=0))
 
         return log2_fold_changes
             
@@ -1448,13 +1484,28 @@ class PooledScreen:
         nt_guides = self.variable_guide_library.non_targeting_guides
         category_counts = self.outcome_counts('perfect')['none'].sum(level='category')
         category_counts = category_counts.drop('malformed layout', errors='ignore')
-        category_counts['all_non_targeting'] = category_counts[nt_guides].sum(axis=1)
+        category_counts[ALL_NON_TARGETING] = category_counts[nt_guides].sum(axis=1)
         category_counts.to_csv(self.fns['category_counts'])
 
         subcategory_counts = self.outcome_counts('perfect')['none'].sum(level=['category', 'subcategory'])
         subcategory_counts = subcategory_counts.drop('malformed layout', errors='ignore')
-        subcategory_counts['all_non_targeting'] = subcategory_counts[nt_guides].sum(axis=1)
+        subcategory_counts[ALL_NON_TARGETING] = subcategory_counts[nt_guides].sum(axis=1)
         subcategory_counts.to_csv(self.fns['subcategory_counts'])
+
+    def compute_gene_level_category_statistics(self):
+        genes_dfs = {}
+
+        for category in self.category_counts.index:
+            guides_df, _ = statistics.compute_outcome_guide_statistics(self, [category])
+            genes_df = statistics.convert_to_gene_statistics(guides_df)
+            genes_dfs[category] = genes_df
+
+        combined_df = pd.concat(genes_dfs, axis=1)
+        combined_df.to_csv(self.fns['gene_level_category_statistics'])
+
+    @memoized_property
+    def gene_level_category_statistics(self):
+        return pd.read_csv(self.fns['gene_level_category_statistics'], header=[0, 1], index_col=0)
 
     @memoized_property
     def category_counts(self):
@@ -1470,20 +1521,37 @@ class PooledScreen:
 
     @memoized_property
     def category_fractions(self):
-        return self.category_counts / self.category_counts.sum(axis=0)
+        fs =  self.category_counts / self.category_counts.sum(axis=0)
+
+        if self.category_groupings is not None:
+            only_relevant_cats = pd.Index.difference(fs.index, self.category_groupings['not_relevant'])
+            relevant_but_not_specific_cats = pd.Index.difference(only_relevant_cats, self.category_groupings['specific'])
+
+            only_relevant = fs.loc[only_relevant_cats]
+
+            only_relevant_normalized = only_relevant / only_relevant.sum()
+
+            relevant_but_not_specific = only_relevant_normalized.loc[relevant_but_not_specific_cats].sum()
+
+            grouped = only_relevant_normalized.loc[self.category_groupings['specific']]
+            grouped.loc['all others'] = relevant_but_not_specific
+
+            fs = grouped
+
+        return fs
 
     @memoized_property
     def categories_by_baseline_frequency(self):
-        return self.category_fractions['all_non_targeting'].sort_values(ascending=False).index.values
+        return self.category_fractions[ALL_NON_TARGETING].sort_values(ascending=False).index.values
 
     @memoized_property
     def category_log2_fold_changes(self):
-        fold_changes = self.category_fractions.div(self.category_fractions['all_non_targeting'], axis=0)
+        fold_changes = self.category_fractions.div(self.category_fractions[ALL_NON_TARGETING], axis=0)
         return np.log2(fold_changes)
 
     @memoized_property
     def category_fraction_differences(self):
-        return self.category_fractions.sub(self.category_fractions['all_non_targeting'], axis=0)
+        return self.category_fractions.sub(self.category_fractions[ALL_NON_TARGETING], axis=0)
 
     @memoized_property
     def subcategory_fractions(self):
@@ -1491,16 +1559,16 @@ class PooledScreen:
 
     @memoized_property
     def subcategories_by_baseline_frequency(self):
-        return self.subcategory_fractions['all_non_targeting'].sort_values(ascending=False).index.values
+        return self.subcategory_fractions[ALL_NON_TARGETING].sort_values(ascending=False).index.values
 
     @memoized_property
     def subcategory_log2_fold_changes(self):
-        fold_changes = self.subcategory_fractions.div(self.subcategory_fractions['all_non_targeting'], axis=0)
+        fold_changes = self.subcategory_fractions.div(self.subcategory_fractions[ALL_NON_TARGETING], axis=0)
         return np.log2(fold_changes)
 
     @memoized_property
     def subcategory_fraction_differences(self):
-        return self.subcategory_fractions.sub(self.subcategory_fractions['all_non_targeting'], axis=0)
+        return self.subcategory_fractions.sub(self.subcategory_fractions[ALL_NON_TARGETING], axis=0)
 
     @memoized_with_key
     def non_targeting_counts(self, guide_status, fixed_guide):
@@ -1587,7 +1655,7 @@ class PooledScreen:
         ti = self.target_info
         SNV_index = sorted(ti.donor_SNVs['target']).index(SNV_name)
         donor_base = ti.donor_SNVs['donor'][SNV_name]['base']
-        nt_fracs = self.non_targeting_fractions('perfect', 'none')
+        nt_fracs = self.non_targeting_fractions_full_arguments('perfect', 'none')
         outcomes = [(c, s, d) for c, s, d in nt_fracs.index.values if c == 'donor' and d[SNV_index] == donor_base]
         return outcomes
 
@@ -1611,7 +1679,7 @@ class PooledScreen:
     @memoized_property
     def conversion_log2_fold_changes(self):
         fractions = self.conversion_fractions
-        fold_changes = fractions.div(fractions['all_non_targeting'], axis='index').drop(columns=['all_non_targeting'])
+        fold_changes = fractions.div(fractions[ALL_NON_TARGETING], axis='index').drop(columns=[ALL_NON_TARGETING])
         log2_fold_changes = np.log2(fold_changes)
         return log2_fold_changes
 
@@ -1676,7 +1744,7 @@ class PooledScreen:
     def total_mismatch_rates(self):
         return self.mismatch_rates.sum(level='offset')
                     
-    def sort_outcomes_by_gene_phenotype(self, outcomes, gene, top_n=None):
+    def sort_outcomes_by_gene_phenotype(self, outcomes, gene, top_n=None, ascending=False):
         if top_n is None:
             guides = self.variable_guide_library.gene_guides(gene)
         else:
@@ -1684,7 +1752,7 @@ class PooledScreen:
 
         fcs = self.log2_fold_changes_full_arguments('perfect', 'none')['none'].loc[outcomes, guides]
         average_fcs = fcs.mean(axis=1)
-        sorted_outcomes = average_fcs.sort_values().index.values
+        sorted_outcomes = average_fcs.sort_values(ascending=ascending).index.values
         return sorted_outcomes
 
     def gene_guides_by_activity(self):
@@ -1909,7 +1977,7 @@ class PooledScreen:
                 for l, c in zip(lengths, counts):
                     lengths_array[l] = c
             
-                UMIs = self.UMI_counts('perfect').loc[guide_combos].sum()
+                UMIs = self.UMI_counts_full_arguments('perfect').loc[guide_combos].sum()
             
                 key = tuple([organism] + list(guide_name))
                 length_distributions[key] = lengths_array / UMIs
@@ -1923,6 +1991,7 @@ class PooledScreen:
         df = pd.read_csv(self.fns['genomic_insertion_length_distributions'], index_col=[0, 1, 2])
         df.columns = [int(c) for c in df.columns]
         df.index.names = ['organism', 'fixed_guide', 'variable_guide']
+        df.drop('eGFP_NT2', level='variable_guide', inplace=True, errors='ignore')
         return df
         
     def templated_insertion_details(self, guide_pairs, category, subcategories, field, fn_key='filtered_templated_insertion_details'):
@@ -1976,6 +2045,25 @@ class PooledScreen:
     def deletion_ranges(self):
         deletion_ranges = {key: pd.read_hdf(self.fns['deletion_ranges'], key=key) for key in ['start', 'end', 'total_reads']}
         return deletion_ranges
+
+    def merge_duplication_ranges(self):
+        ranges = {}
+        for guide in self.progress(self.variable_guide_library.guides):
+            ranges[guide] = self.single_guide_experiment('none', guide).duplication_ranges
+
+        for side in ['start', 'end']:
+            edge_counts = {guide: ranges[guide].edge_counts['start'] for guide in ranges}
+            df = pd.DataFrame(edge_counts, dtype=int).T
+            df.to_hdf(self.fns['duplication_ranges'], key=side)
+
+        total_reads = {guide: ranges[guide].total_reads for guide in ranges}
+        series = pd.Series(total_reads)
+        series.to_hdf(self.fns['duplication_ranges'], key='total_reads')
+
+    @memoized_property
+    def duplication_ranges(self):
+        duplication_ranges = {key: pd.read_hdf(self.fns['duplication_ranges'], key=key) for key in ['start', 'end', 'total_reads']}
+        return duplication_ranges
 
     @memoized_property
     def reads_per_UMI(self):
@@ -2083,6 +2171,11 @@ class PooledScreen:
 
         return name_to_outcome
 
+    def common_names_for_category(self, category):
+        for common_name, outcome in self.common_name_to_outcome.items():
+            if outcome[0] == category:
+                yield common_name
+
     @memoized_property
     def outcome_to_common_names(self):
         outcome_to_common_names = defaultdict(list)
@@ -2142,7 +2235,11 @@ class PooledScreen:
 
     def get_read_layout(self, name, **kwargs):
         als = self.get_read_alignments(name)
-        l = self.categorizer(als, self.target_info, mode=self.layout_mode, error_corrected=self.error_corrected, **kwargs)
+        l = self.categorizer(als, self.target_info,
+                             mode=self.layout_mode,
+                             error_corrected=self.error_corrected,
+                             **kwargs,
+                            )
         return l
 
     def get_read_diagram(self, read_id, only_relevant=True, **diagram_kwargs):
@@ -2252,6 +2349,8 @@ class PooledScreenNoUMI(PooledScreen):
             splitter.update_counts(seqs)
 
         splitter.write_files()
+
+    read_counts = PooledScreen.UMI_counts
 
 class CommonSequenceSplitter:
     def __init__(self, pool, reads_per_chunk=1000):
@@ -2381,7 +2480,7 @@ def explore(base_dir, group,
         exp = pool.single_guide_experiment(fixed_guide, guide)
         return exp
 
-    @output.capture()
+    #@output.capture(clear_output=clear_output)
     def populate_outcomes(change):
         previous_value = widgets['outcome'].value
 
@@ -2399,7 +2498,7 @@ def explore(base_dir, group,
         else:
             widgets['outcome'].value = None
 
-    @output.capture()
+    #@output.capture(clear_output=clear_output)
     def populate_read_ids(change):
         exp = get_exp()
 
@@ -2443,7 +2542,7 @@ def explore(base_dir, group,
     else:
         widgets['guide'].observe(populate_read_ids, names='value')
 
-    @output.capture(clear_output=clear_output)
+    #@output.capture(clear_output=clear_output)
     def plot(guide, read_id, **plot_kwargs):
         exp = get_exp()
 
@@ -2492,7 +2591,7 @@ def explore(base_dir, group,
     else:
         top_row_keys = ['guide', 'read_id']
 
-    @output.capture(clear_output=False)
+    #@output.capture(clear_output=clear_output)
     def save(change):
         fig = interactive.result
         fn = non_widgets['file_name'].value
@@ -2512,11 +2611,11 @@ def explore(base_dir, group,
     return layout
 
 class MergedPools(PooledScreen):
-    def __init__(self, base_dir, name, groups, progress=None):
+    def __init__(self, base_dir, name, groups, category_groupings=None, progress=None):
         super().__init__(base_dir, name, progress=progress)
 
         self.groups = groups
-        self.pools = {group: PooledScreen(base_dir, group, progress) for group in groups}
+        self.pools = {group: PooledScreen(base_dir, group, category_groupings, progress) for group in groups}
 
     @memoized_property
     def R2_read_length(self):
@@ -2560,33 +2659,36 @@ class MergedPools(PooledScreen):
                 merged_f.create_dataset(f'{key}/values', data=values)
                 merged_f.create_dataset(f'{key}/counts', data=counts)
 
-def get_pool(base_dir, group, progress=None):
+def get_pool(base_dir, group, category_groupings=None, progress=None):
     pool = None
 
     group_dir = Path(base_dir) / 'results' / group
     sample_sheet_fn = group_dir / 'sample_sheet.yaml'
+
+    args = (base_dir, group)
+    kwargs = dict(category_groupings=category_groupings, progress=progress)
 
     if sample_sheet_fn.exists():
         sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
         pooled = sample_sheet.get('pooled', False)
         if pooled:
             if not sample_sheet.get('has_UMIs', True):
-                pool = PooledScreenNoUMI(base_dir, group, progress=progress)
+                pool = PooledScreenNoUMI(*args, **kwargs)
             elif 'pools_to_merge' in sample_sheet:
-                pool = MergedPools(base_dir, group, groups=sample_sheet['pools_to_merge'], progress=progress)
+                pool = MergedPools(*args, groups=sample_sheet['pools_to_merge'], **kwargs)
             else:
-                pool = PooledScreen(base_dir, group, progress=progress)
+                pool = PooledScreen(*args, **kwargs)
 
     return pool
 
-def get_all_pools(base_dir=Path.home() / 'projects' / 'ddr', progress=None):
+def get_all_pools(base_dir=Path.home() / 'projects' / 'ddr', category_groupings=None, progress=None):
     group_dirs = [p for p in (Path(base_dir) / 'results').iterdir() if p.is_dir()]
 
     pools = {}
 
     for group_dir in group_dirs:
         name = group_dir.name
-        pool = get_pool(base_dir, name, progress=progress)
+        pool = get_pool(base_dir, name, category_groupings=category_groupings, progress=progress)
         if pool is not None:
             pools[name] = pool
 

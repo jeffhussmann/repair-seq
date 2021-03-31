@@ -16,8 +16,8 @@ from ddr import prime_editing_layout, pooled_layout
 from hits.utilities import memoized_property
 
 class PrimeEditingExperiment(experiment.Experiment):
-    def __init__(self, base_dir, group, name, **kwargs):
-        super().__init__(base_dir, group, name, **kwargs)
+    def __init__(self, base_dir, group, sample_name, **kwargs):
+        super().__init__(base_dir, group, sample_name, **kwargs)
 
         self.read_types = [
             'trimmed',
@@ -30,7 +30,6 @@ class PrimeEditingExperiment(experiment.Experiment):
 
         self.outcome_fn_keys = ['outcome_list']
 
-        self.length_to_store_unknown = None
         self.length_plot_smooth_window = 0
         self.x_tick_multiple = 50
 
@@ -38,14 +37,17 @@ class PrimeEditingExperiment(experiment.Experiment):
         for (seq_name, feature_name), feature in self.target_info.features.items():
             if feature.feature.startswith('donor_insertion'):
                 label_offsets[feature_name] = 2
-                self.target_info.features_to_show.add((seq_name, feature_name))
+                #self.target_info.features_to_show.add((seq_name, feature_name))
             elif feature.feature.startswith('donor_deletion'):
                 label_offsets[feature_name] = 3
-                self.target_info.features_to_show.add((seq_name, feature_name))
+                #self.target_info.features_to_show.add((seq_name, feature_name))
             elif feature_name.startswith('HA_RT'):
                 label_offsets[feature_name] = 1
 
         label_offsets[f'{self.target_info.primary_sgRNA}_PAM'] = 2
+        other_sgRNAs = [sgRNA for sgRNA in self.target_info.sgRNAs if sgRNA != self.target_info.primary_sgRNA]
+        for sgRNA in other_sgRNAs:
+            label_offsets[f'{sgRNA}_PAM'] = 1
 
         self.target_info.features_to_show.update(set(self.target_info.PAM_features))
         
@@ -65,6 +67,9 @@ class PrimeEditingExperiment(experiment.Experiment):
             'nonredundant',
         ]
 
+    def __repr__(self):
+        return f'PrimeEditingExperiment: sample_name={self.sample_name}, group={self.group}, base_dir={self.base_dir}'
+
     @property
     def default_read_type(self):
         return 'trimmed_by_name'
@@ -75,7 +80,7 @@ class PrimeEditingExperiment(experiment.Experiment):
 
     @property
     def read_types_to_align(self):
-        return ['trimmed_by_name']
+        return ['nonredundant']
 
     @memoized_property
     def categorizer(self):
@@ -90,12 +95,12 @@ class PrimeEditingExperiment(experiment.Experiment):
         pass
                
     def trim_reads(self):
-        # Trim a random length barcode from the beginning by searching for the expected starting sequence.
-
+        ''' Trim a random length barcode from the beginning by searching for the expected starting sequence.
+        '''
         fastq_fn = self.data_dir / self.description['fastq_fn']
 
         # Standardizing names is important for sorting.
-        reads = fastq.reads(fastq_fn, up_to_space=True, standardize_names=True)
+        reads = fastq.reads(fastq_fn, standardize_names=True)
 
         ti = self.target_info
 
@@ -134,6 +139,7 @@ class PrimeEditingExperiment(experiment.Experiment):
         try:
             if stage == 'preprocess':
                 self.preprocess()
+
             elif stage == 'align':
                 self.make_nonredundant_sequence_fastq()
 
@@ -166,18 +172,19 @@ class PrimeEditingExperiment(experiment.Experiment):
     def qname_to_inferred_length(self):
         qname_to_inferred_length = {}
         for outcome in self.outcome_iter():
-            qname_to_inferred_length[outcome.query_name] = outcome.length
+            qname_to_inferred_length[outcome.query_name] = outcome.inferred_amplicon_length
 
         return qname_to_inferred_length
 
     def generate_length_range_figures(self, outcome=None, num_examples=1):
         by_length = defaultdict(lambda: utilities.ReservoirSampler(num_examples))
 
-        al_groups = self.alignment_groups(outcome=outcome, read_type='trimmed')
+        #al_groups = self.alignment_groups(outcome=outcome, read_type='trimmed')
+        al_groups = self.alignment_groups(outcome=outcome)
         for name, als in al_groups:
             length = self.qname_to_inferred_length[name]
             by_length[length].add((name, als))
-        
+
         if outcome is None:
             fns = self.fns
         else:

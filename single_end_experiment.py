@@ -82,7 +82,11 @@ class SingleEndExperiment(knock_knock.experiment.Experiment):
         except KeyError:
             fastq_fn = self.data_dir / self.description['R1']
 
-        reads = fastq.reads(fastq_fn, standardize_names=True)
+        try:
+            reads = fastq.reads(fastq_fn, standardize_names=True)
+        except OSError:
+            print('error with', fastq_fn)
+            raise
 
         with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
             for read in self.progress(reads, desc='Trimming reads'):

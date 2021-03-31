@@ -14,7 +14,10 @@ class PairedEndExperiment(knock_knock.illumina_experiment.IlluminaExperiment):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.outcome_fn_keys = ['outcome_list', 'no_overlap_outcome_list']
+        self.outcome_fn_keys = [
+            'outcome_list',
+            #'no_overlap_outcome_list',
+        ]
 
         self.diagram_kwargs.update(draw_sequence=True,
                                    flip_target=self.target_info.sequencing_direction == '-',
@@ -31,6 +34,9 @@ class PairedEndExperiment(knock_knock.illumina_experiment.IlluminaExperiment):
             'R2_no_overlap',
         ]
 
+        self.error_corrected = False
+        self.layout_mode = 'amplicon'
+
     @property
     def preprocessed_read_type(self):
         return 'stitched_by_name'
@@ -41,11 +47,16 @@ class PairedEndExperiment(knock_knock.illumina_experiment.IlluminaExperiment):
 
     @property
     def read_types_to_align(self):
-        return ['nonredundant', 'R1_no_overlap', 'R2_no_overlap']
+        return [
+            'nonredundant',
+            #'R1_no_overlap',
+            #'R2_no_overlap',
+            ]
 
     @memoized_property
     def categorizer(self):
-        return ddr.pooled_layout.Layout
+        #return ddr.pooled_layout.Layout
+        return ddr.prime_editing_layout.Layout
 
     @memoized_property
     def max_relevant_length(self):
@@ -53,7 +64,7 @@ class PairedEndExperiment(knock_knock.illumina_experiment.IlluminaExperiment):
 
     @property
     def read_pairs(self):
-        read_pairs = fastq.read_pairs(self.fns['R1'], self.fns['R2'], up_to_space=True, standardize_names=True)
+        read_pairs = fastq.read_pairs(self.fns['R1'], self.fns['R2'], standardize_names=True)
         return read_pairs
 
     def sort_stitched_read_pairs(self):

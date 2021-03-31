@@ -1,8 +1,8 @@
 import bisect
 import multiprocessing
-from pathlib import Path
 
 import pandas as pd
+import pysam
 import scipy.sparse
 
 from hits import utilities

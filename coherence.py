@@ -16,7 +16,7 @@ Pooled_UMI_Outcome = outcome_record.OutcomeRecord_factory(
         'category',
         'subcategory',
         'details',
-        'original_name',
+        'query_name',
     ],
     converters_arg={
         'num_reads': int,
