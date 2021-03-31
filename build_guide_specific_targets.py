@@ -151,7 +151,7 @@ def build_all_singles(base_dir, original_target_name, original_genbank_name, gui
     #for args in args_list:
     #    build_guide_specific_target(*args)
 
-def build_all_doubles(base_dir, fixed_guide_library_name, variable_guide_library_name):
+def build_all_doubles(base_dir, fixed_guide_library_name, variable_guide_library_name, test=False, num_processes=18):
     warnings.simplefilter('ignore')
 
     original_target = target_info.TargetInfo(base_dir, 'doubles_vector')
@@ -172,26 +172,35 @@ def build_all_doubles(base_dir, fixed_guide_library_name, variable_guide_library
             args = (original_target, fixed_guide_library, variable_guide_library, fixed_guide, variable_guide, tasks_done_queue)
             args_list.append(args)
 
-    #args_list = args_list[:10]
-    #for args in tqdm.tqdm(args_list):
-    #    build_doubles_guide_specific_target(*args)
+    if test:
+        args_list = args_list[:10]
+        for args in tqdm.tqdm(args_list):
+            build_doubles_guide_specific_target(*args)
+    else:
+        progress = tqdm.tqdm(desc='Making doubles_vector targets', total=len(args_list))
+        pool = multiprocessing.Pool(processes=num_processes)
+        pool.starmap_async(build_doubles_guide_specific_target, args_list)
 
-    progress = tqdm.tqdm(desc='Making doubles_vector targets', total=len(args_list))
-    pool = multiprocessing.Pool(processes=18)
-    pool.starmap_async(build_doubles_guide_specific_target, args_list)
-
-    while progress.n != len(args_list):
-        tasks_done_queue.get()
-        progress.update()
+        while progress.n != len(args_list):
+            tasks_done_queue.get()
+            progress.update()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--base_dir', type=Path, default=Path.home() / 'projects' / 'ddr')
+    parser.add_argument('--test', action='store_true', help='run the first 10 without parallelization')
+    parser.add_argument('--num_processes', type=int, default=18, help='number of processes')
     parser.add_argument('vector')
 
     args = parser.parse_args()
 
-    if args.vector == 'PE_singles':
+    if args.vector == 'PE_singles_sub':
+        original_target = 'pPC1000_G6C_15'
+        original_genbank_name = 'ppc1000'
+        guide_library_names = ['DDR_library']
+        build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)
+
+    if args.vector == 'PE_singles_ins':
         original_target = 'pPC1000_1044'
         original_genbank_name = 'ppc1000'
         guide_library_names = ['DDR_library']
@@ -209,4 +218,5 @@ if __name__ == '__main__':
         build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)
 
     elif args.vector == 'doubles':
-        build_all_doubles(args.base_dir, 'MRN_MMR_fixed', 'MRN_MMR_variable')
+        #build_all_doubles(args.base_dir, 'MRN_MMR_fixed', 'MRN_MMR_variable')
+        build_all_doubles(args.base_dir, 'DDR_skinny', 'DDR_sublibrary', test=args.test, num_processes=args.num_processes)
