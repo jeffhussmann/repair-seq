@@ -802,11 +802,11 @@ class Layout(layout.Categorizer):
                 entirely_in_polyT = indel_interval in polyT_interval
 
                 indel = self.target_info.expand_degenerate_indel(indel)
-                indels.append((indel, near_cut, entirely_in_primer))
+                indels.append((indel, near_cut, entirely_in_primer, entirely_in_polyT))
 
         # Ignore any indels entirely contained in primers.
 
-        indels = [(indel, near_cut) for indel, near_cut, entirely_in_primer in indels if not entirely_in_primer and not entirely_in_polyT]
+        indels = [(indel, near_cut) for indel, near_cut, entirely_in_primer, entirely_in_polyT in indels if not entirely_in_primer and not entirely_in_polyT]
 
         return indels
 
