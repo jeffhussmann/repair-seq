@@ -1,5 +1,7 @@
 import warnings
 
+from collections import defaultdict
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -112,7 +114,12 @@ def plot(outcome_order,
             else:
                 ys = [-0.5, num_outcomes - 0.5]
 
-            ax.plot([x, x], ys, color=cut_color, linestyle='--', clip_on=False, linewidth=line_widths)
+            ax.plot([x, x], ys,
+                    color=cut_color,
+                    linestyle='--',
+                    clip_on=False,
+                    linewidth=line_widths,
+                   )
     
     if flip:
         window_left, window_right = -window_right, -window_left
@@ -425,6 +432,13 @@ def plot(outcome_order,
 
             if draw_all_sequence:
                 draw_sequence(y, alpha=sequence_alpha)
+
+        elif category == 'insertion with deletion':
+            outcome = InsertionWithDeletionOutcome.from_string(details).undo_anchor_shift(target_info.anchor)
+            insertion = outcome.insertion_outcome.insertion
+            deletion = outcome.deletion_outcome.deletion
+            draw_insertion(y, insertion)
+            draw_deletion(y, deletion)
                 
         elif category == 'mismatches' or (category == 'wild type' and subcategory == 'mismatches'):
             SNV_xs = set()
@@ -723,7 +737,7 @@ class DiagramGrid:
 
         self.plot_diagrams()
 
-    def plot_diagrams(self, **diagram_kwargs):
+    def plot_diagrams(self):
         if isinstance(self.outcomes[0], tuple) and len(self.outcomes[0]) == 3:
             self.fig, ax = plot(self.outcomes,
                                 self.target_info,
@@ -734,7 +748,10 @@ class DiagramGrid:
                                 **self.diagram_kwargs,
                                )
         else:
-            self.fig, ax = plt.subplots(figsize=(self.outcome_ax_width, len(self.outcomes) * self.inches_per_outcome))
+            self.fig, ax = plt.subplots(figsize=(self.outcome_ax_width,
+                                                 len(self.outcomes) * self.inches_per_outcome,
+                                                ),
+                                       )
 
             for i, outcome in enumerate(self.outcomes):
                 if isinstance(outcome, tuple):
@@ -746,7 +763,7 @@ class DiagramGrid:
                             xycoords=('axes fraction', 'data'),
                             ha='right',
                             va='center',
-                            size=8,
+                            size=self.diagram_kwargs.get('label_size', 8),
                 )
 
             ax.set_ylim(-0.5, len(self.outcomes) - 0.5)
@@ -915,7 +932,7 @@ class DiagramGrid:
         for side in ['left', 'right']:
             ax.spines[side].set_visible(False)
 
-    def style_fold_change_ax(self, name):
+    def style_fold_change_ax(self, name, label_size=8):
         # To simplify logic of excluding panels, do nothing if name is not an existing ax.
         ax = self.axs_by_name.get(name)
         if ax is None:
@@ -926,7 +943,7 @@ class DiagramGrid:
 
         ax.axvline(0, color='black', alpha=0.5, clip_on=False)
 
-        plt.setp(ax.get_xticklabels(), size=8)
+        plt.setp(ax.get_xticklabels(), size=label_size)
 
     @property
     def width_per_heatmap_cell(self):
@@ -1038,6 +1055,7 @@ class DiagramGrid:
                     size=12,
                     linewidth=5,
                    ):
+
         ax = self.add_ax(side=side, name='subset', width_multiple=width_multiple, gap_multiple=gap_multiple)
         outcomes = list(self.outcomes)
         outcomes_to_mark = [outcome for outcome in outcomes_to_mark if outcome in outcomes]
@@ -1063,6 +1081,57 @@ class DiagramGrid:
                     color=color,
                     size=size,
                    )
+
+    def draw_outcome_categories(self, effector='Cas9'):
+        ax = self.add_ax(side='left', name='outcome_categories', width_multiple=1, gap_multiple=0.5)
+
+        full_categories = defaultdict(list)
+
+        for c, s, d in self.outcomes:
+            if c == 'deletion':
+                deletion = DeletionOutcome.from_string(d).undo_anchor_shift(self.target_info.anchor)
+                directionality = deletion.classify_directionality(self.target_info)
+                full_category = f'{c}, {directionality}'
+            else:
+                full_category = c
+                
+            full_categories[full_category].append((c, s, d))
+
+        x = 0
+
+        for cat in ddr.visualize.Cas9_category_display_order:
+            cat_outcomes = full_categories[cat]
+            if len(cat_outcomes) > 0:
+                indices = sorted([len(self.outcomes) - 1 - self.outcomes.index(outcome) for outcome in cat_outcomes])
+                connected_blocks = []
+                current_block_start = indices[0]
+                current_idx = indices[0]
+
+                for next_idx in indices[1:]:
+                    if next_idx - current_idx > 1:
+                        block = (current_block_start, current_idx)
+                        connected_blocks.append(block)
+                        current_block_start = next_idx
+                        
+                    current_idx = next_idx
+
+                # Close off last block
+                block = (current_block_start, current_idx)
+                connected_blocks.append(block) 
+
+                for first, last in connected_blocks:
+                    ax.plot([x, x], [first - 0.4, last + 0.4],
+                            linewidth=2,
+                            color=ddr.visualize.Cas9_category_colors[cat],
+                            clip_on=False,
+                            solid_capstyle='butt',
+                           )
+
+                x -= 1
+
+        ax.set_xlim(x - 1, 1)
+        #ax.set_ylim(-0.5, len(outcomes) - 0.5)
+        ax.axis('off')
 
     def set_xlim(self, ax_name, lims):
         if lims is not None:
