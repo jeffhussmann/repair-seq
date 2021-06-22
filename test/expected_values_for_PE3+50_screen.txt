@@ -1,0 +1,10 @@
+01:01101:001325:033786	duplication	simple	duplication of part of 3' overhang with mismatches
+01:01101:002682:016908	duplication	simple	duplication of part of 3' overhang with 1 mismatch toward beginning
+01:01101:004580:021668	duplication	iterated	iterated duplication, no mismatches
+01:01101:007057:025394	duplication	iterated	iterated duplication, no mismatches
+01:01101:006912:025394	duplication	complex	complex duplication, no mismatches
+01:01101:004661:030483	deletion	clean	deletion, 4 nts between nicks
+01:01101:001633:026960	deletion	mismatches	deletion, 34 nts with multiple mismatches
+01:01101:009417:014481	deletion + duplication	simple	deletion spanning -50 nick
+01:01104:026087:007216	deletion + duplication	iterated	long deletion
+01:01101:023131:013119	edit + duplication	simple	duplication of part of 3' overhang with intended edit

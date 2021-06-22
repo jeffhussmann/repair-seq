@@ -1,0 +1,13 @@
+01:01101:001280:016266	wild type	clean	wild type, no errors
+01:01101:001099:018897	wild type	mismatches	wild type with 3 mismatches towards end
+01:01101:002600:012477	wild type	mismatches	wild type with 1 mismatch towards middle
+01:01102:005819:022216	wild type	short indel far from cut	wild type with 1 nt deletion towards middle
+01:01112:030020:002190	wild type	short indel far from cut	wild type with 1 nt deletion towards end
+01:01101:001515:027383	intended edit	SNV	intended SNV, no errors
+01:01102:026106:033082	intended edit	SNV + mismatches	intended SNV plus 1 mismatch towards middle
+01:01103:011333:025222	intended edit	SNV + mismatches	intended SNV plus 1 mismatch towards end
+01:01106:007346:030937	extension from intended annealing	n/a	dominant extension from intended annealing product from screen
+01:01115:024261:032205	deletion	clean	deletion, 15 nts near nick
+01:01117:014922:022200	deletion	clean	deletion, 16 nts near nick
+01:01101:019153:036417	deletion	mismatches	deletion, 93 nts spanning nick plus 1 mismatch towards end
+01:01153:022173:033724	deletion	mismatches	deletion, 15 nts spanning nick plus 1 mismatch towards end

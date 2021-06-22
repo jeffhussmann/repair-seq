@@ -1,0 +1,13 @@
+01:01101:001217:035916	wild type	clean	wild type, no errors
+01:01101:023547:034507	unintended annealing of RT'ed sequence	includes scaffold	unintended rejoining, small amount of scaffold rejoins with partially duplicated HA_RT
+01:01105:012093:004178	unintended annealing of RT'ed sequence	includes scaffold	unintended rejoining, medium amount of scaffold rejoins with midway between nicks
+01:01105:012192:030968	unintended annealing of RT'ed sequence	includes scaffold	unintended rejoining, medium amount of scaffold with 3 mismatches
+01:01105:012364:004022	unintended annealing of RT'ed sequence	includes scaffold	unintended rejoining, medium amount of scaffold rejoins well past +50 nick
+01:01105:016206:031125	unintended annealing of RT'ed sequence	includes scaffold	unintended rejoining, medium amount of scaffold with mismatches in scaffold and target
+01:01101:003667:009283	duplication	simple	duplication of entire 5' overhang
+01:01101:023511:010739	duplication	simple	duplication of part of 5' overhang
+01:01102:006316:026428	duplication	simple	duplication of part of 5' overhang with a mismatch
+01:01101:017806:036714	edit + duplication	simple	duplication with edit, no errors
+01:01103:013078:005603	edit + duplication	simple	duplication with edit with 1 mismatch
+01:01101:022779:005055	deletion	clean	deletion, 17 nts between nicks
+01:01101:022779:005055	deletion	clean	deletion, 17 nts between nicks
