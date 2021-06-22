@@ -10,6 +10,8 @@ import numpy as np
 import pandas as pd
 import pysam
 
+from ipywidgets import Layout, Select
+
 import ddr.experiment_group
 
 import ddr.prime_editing_experiment
@@ -18,6 +20,7 @@ import ddr.paired_end_experiment
 import ddr.single_end_experiment
 
 from hits import utilities, sam
+import knock_knock.explore
 
 memoized_property = utilities.memoized_property
 
@@ -569,6 +572,10 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
         
         return conversion_fractions
 
+    def explore(self, **kwargs):
+        explorer = ArrayedGroupExplorer(self, **kwargs)
+        return explorer.layout
+
 class ArrayedExperiment:
     def __init__(self, base_dir, batch, group, sample_name, experiment_group=None):
         if experiment_group is None:
@@ -781,3 +788,58 @@ def arrayed_specialized_experiment_factory(experiment_kind):
             SpecializedExperiment.__init__(self, base_dir, (batch, group), sample_name, **kwargs)
     
     return ArrayedSpecializedExperiment, ArrayedSpecializedCommonSequencesExperiment
+
+class ArrayedGroupExplorer(knock_knock.explore.Explorer):
+    def __init__(self,
+                 group,
+                 initial_condition=None,
+                 by_outcome=True,
+                 **plot_kwargs,
+                ):
+        self.group = group
+
+        if initial_condition is None:
+            initial_condition = self.group.conditions[0]
+        self.initial_condition = initial_condition
+
+        self.experiments = {}
+
+        super().__init__(by_outcome, **plot_kwargs)
+
+    def populate_replicates(self, change):
+        with self.output:
+            condition = self.widgets['condition'].value
+            exps = self.group.condition_replicates(condition)
+
+            self.widgets['replicate'].options = [(exp.description['replicate'], exp) for exp in exps]
+            self.widgets['replicate'].index = 0
+
+    def get_current_experiment(self):
+        experiment = self.widgets['replicate'].value
+        return experiment
+
+    def set_up_read_selection_widgets(self):
+        condition_options = [(', '.join(c), c) for c in self.group.conditions] 
+        self.widgets.update({
+            'condition': Select(options=condition_options, value=self.initial_condition, layout=Layout(height='200px', width='300px')),
+            'replicate': Select(options=[], layout=Layout(height='200px', width='150px')),
+        })
+
+        self.populate_replicates({'name': 'initial'})
+        self.widgets['condition'].observe(self.populate_replicates, names='value')
+
+        if self.by_outcome:
+            self.populate_categories({'name': 'initial'})
+            self.populate_subcategories({'name': 'initial'})
+
+            self.widgets['replicate'].observe(self.populate_categories, names='value')
+            self.widgets['category'].observe(self.populate_subcategories, names='value')
+            self.widgets['subcategory'].observe(self.populate_read_ids, names='value')
+            selection_widget_keys = ['condition', 'replicate', 'category', 'subcategory', 'read_id']
+        else:
+            self.widgets['replicate'].observe(self.populate_read_ids, names='value')
+            selection_widget_keys = ['condition', 'replicate', 'read_id']
+
+        self.populate_read_ids({'name': 'initial'})
+
+        return selection_widget_keys

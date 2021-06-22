@@ -15,17 +15,17 @@ import warnings
 from collections import Counter, defaultdict
 from pathlib import Path
 
-import scipy.sparse
-import pandas as pd
-import numpy as np
-import yaml
-import ipywidgets
-import pysam
 import h5py
+import ipywidgets
+import numpy as np
+import pandas as pd
+import pysam
+import scipy.sparse
 import tqdm
+import yaml
 
 from hits import utilities, sam, fastq, fasta, mapping_tools, interval
-from knock_knock import experiment, target_info, visualize, ranges
+from knock_knock import experiment, target_info, visualize, ranges, explore
 
 from . import pooled_layout, collapse, coherence, guide_library, prime_editing_layout, statistics
 
@@ -94,6 +94,10 @@ class SingleGuideExperiment(experiment.Experiment):
         self.outcome_fn_keys = ['filtered_cell_outcomes']
 
         self.diagram_kwargs.update(self.pool.diagram_kwargs)
+
+    @property
+    def default_read_type(self):
+        return 'collapsed_R2'
 
     @property
     def final_Outcome(self):
@@ -276,7 +280,7 @@ class SingleGuideExperiment(experiment.Experiment):
         if no_progress:
             return reads
         else:
-            return self.progress(reads)
+            return self.progress(reads, desc='Iterating over collapsed reads:')
 
     def make_uncommon_sequence_fastq(self):
         fn = self.fns_by_read_type['fastq']['collapsed_uncommon_R2']
@@ -467,12 +471,6 @@ class SingleGuideExperiment(experiment.Experiment):
         return counts
 
     @memoized_property
-    def outcomes(self):
-        ''' (category, subcategory) tuples in descending order by total count '''
-        totals = self.outcome_counts[True].groupby(by=['category', 'subcategory']).sum().sort_values(ascending=False)
-        return totals.index.values
-    
-    @memoized_property
     def perfect_guide_outcome_counts(self):
         return self.outcome_counts.xs(True)
 
@@ -582,14 +580,6 @@ class SingleGuideExperiment(experiment.Experiment):
     def length_distribution_figure(self, *args, **kwargs):
         return None
 
-    def get_category_subcategory_pairs(self):
-        pairs = self.filtered_cell_outcomes.groupby(by=['category', 'subcategory']).size().sort_values(ascending=False).index.values
-        return pairs
-
-    def make_all_diagram_notebooks(self):
-        for category, subcategory in self.progress(self.get_category_subcategory_pairs()):
-            self.make_diagram_notebook(category, subcategory)
-
     def get_read_layout(self, read_id, qname_to_als=None, outcome=None):
         if qname_to_als is None:
             als = self.get_read_alignments(read_id, outcome=outcome)
@@ -651,11 +641,17 @@ class SingleGuideExperiment(experiment.Experiment):
         
         lists = defaultdict(list)
 
+        relevant_categories = [
+            'donor insertion',
+            'genomic insertion',
+            'unintended donor integration',
+        ]
+
         with open(self.fns['filtered_cell_outcomes']) as outcomes_fh:
             for line in outcomes_fh:
                 outcome = self.final_Outcome.from_line(line)
             
-                if outcome.category in ['donor insertion', 'genomic insertion', 'unintended donor integration'] and getattr(outcome, 'guide_mismatch', -1):
+                if outcome.category in relevant_categories and getattr(outcome, 'guide_mismatch', -1) == -1:
                     insertion_outcome = pooled_layout.LongTemplatedInsertionOutcome.from_string(outcome.details)
                     
                     for field in fields: 
@@ -834,10 +830,10 @@ class SingleGuideExperiment(experiment.Experiment):
                 #self.make_reads_per_UMI()
                 #self.make_filtered_cell_bams()
                 #self.extract_truncation_positions()
-                #self.extract_templated_insertion_info()
+                self.extract_templated_insertion_info()
                 #self.extract_duplication_info()
                 #self.extract_genomic_insertion_info()
-                self.extract_deletion_ranges()
+                #self.extract_deletion_ranges()
                 #self.make_outcome_plots(num_examples=3)
             else:
                 raise ValueError(stage)
@@ -1049,7 +1045,7 @@ class PooledScreen:
             'common_sequence_outcomes': self.group_dir / 'common_sequences' / 'common_sequence_to_outcome.txt',
             'common_name_to_outcome': self.group_dir / 'common_sequences' / 'common_name_to_outcome.txt',
 
-            'fraction_removed': self.group_dir / 'fraction_removed.hdf5',
+            'deletion_boundaries': self.group_dir / 'deletion_boundaries.hdf5',
 
             'common_sequence_special_alignments': self.group_dir / 'common_sequences' / 'all_special_alignments.bam',
             'special_alignments_dir': self.group_dir / 'special_alignments',
@@ -1060,7 +1056,8 @@ class PooledScreen:
             'deletion_ranges': self.group_dir / 'deletion_ranges.hdf5',
             'duplication_ranges': self.group_dir / 'duplication_ranges.hdf5',
 
-            'genomic_insertion_length_distributions': self.group_dir / 'genomic_insertion_length_distribution.txt',
+            'genomic_insertion_length_counts': self.group_dir / 'genomic_insertion_length_counts.txt',
+            'genomic_insertion_length_fractions': self.group_dir / 'genomic_insertion_length_fractions.txt',
 
             'highest_guide_correlations': self.group_dir / 'highest_guide_correlations.txt',
 
@@ -1269,7 +1266,9 @@ class PooledScreen:
         return df
 
     @memoized_with_key
-    def outcome_counts(self, guide_status):
+    def outcome_counts_raw(self, guide_status):
+        ''' Necessary to avoid a depenency cycle in outcome_counts and UMI_counts '''
+
         if guide_status == 'all':
             outcome_counts = self.outcome_counts_df(True).sum(level=[1, 2, 3])
         elif guide_status == 'perfect':
@@ -1278,6 +1277,35 @@ class PooledScreen:
             perfect_guide = guide_status == 'perfect'
             outcome_counts = self.outcome_counts_df(True).loc[perfect_guide]
 
+        return outcome_counts
+
+    @memoized_with_key
+    def outcome_counts(self, guide_status):
+        outcome_counts = self.outcome_counts_raw(guide_status)
+
+        # Note: this doesn't handle "all" correctly because only "perfect" genomic insertions are counted.
+        # Split genomic insertions into short and long.
+
+        length_cutoff = 75
+
+        gi_length_counts = self.genomic_insertion_length_counts.loc['hg19'].drop('all_non_targeting', level=1)
+
+        # Note weirdness with column slices here - no + 1 in :length_cutoff.
+        short_gis = gi_length_counts.loc[:, :length_cutoff].sum(axis=1)
+        long_gis = gi_length_counts.loc[:, length_cutoff + 1:].sum(axis=1)
+
+        short_and_long = short_gis + long_gis
+
+        if guide_status == 'perfect':
+            if not np.allclose(short_and_long, outcome_counts.loc['genomic insertion', 'hg19', 'collapsed']):
+                print('temp suppressed')
+                #raise ValueError
+
+        outcome_counts.drop(('genomic insertion', 'hg19', 'collapsed'), inplace=True)
+
+        outcome_counts.loc['genomic insertion', 'hg19', f'<={length_cutoff} nts'] = short_gis
+        outcome_counts.loc['genomic insertion', 'hg19', f'>{length_cutoff} nts'] = long_gis
+        
         return outcome_counts
 
     def make_high_frequency_outcome_counts(self):
@@ -1389,41 +1417,54 @@ class PooledScreen:
         }
         return pd.concat(intervals, axis=1)
 
-    def compute_fraction_removed(self):
+    def compute_deletion_boundaries(self):
         ti = self.target_info
         deletion_fractions = self.outcome_fractions('perfect').xs('deletion', drop_level=False)
-
-        outcome_to_deletion_slice = {}
-
-        for c, s, d in self.progress(deletion_fractions.index.values):
-            # Undo anchor shift to make coordinates relative to full target sequence.
-            deletion = pooled_layout.DeletionOutcome.from_string(d).perform_anchor_shift(-ti.anchor).deletion
-            start = min(deletion.starts_ats)
-            stop = max(deletion.ends_ats) + 1
-            deletion_slice = slice(start, stop)
-            outcome_to_deletion_slice[c, s, d] = deletion_slice
 
         index = np.arange(len(ti.target_sequence))
         columns = deletion_fractions.columns
 
         fraction_removed = np.zeros((len(index), len(columns)))
+        starts = np.zeros((len(index), len(columns)))
+        stops = np.zeros((len(index), len(columns)))
 
-        for outcome, deletion_slice in self.progress(outcome_to_deletion_slice.items()):
-            fraction_removed[deletion_slice] += deletion_fractions.loc[outcome]  
+        for (c, s, d), row in self.progress(deletion_fractions.iterrows()):
+            # Undo anchor shift to make coordinates relative to full target sequence.
+            deletion = pooled_layout.DeletionOutcome.from_string(d).perform_anchor_shift(-ti.anchor).deletion
+            start = min(deletion.starts_ats)
+            stop = max(deletion.ends_ats)
+            deletion_slice = slice(start, stop + 1)
+
+            fraction_removed[deletion_slice] += row
+            starts[start] += row
+            stops[stop] += row
 
         fraction_removed = pd.DataFrame(fraction_removed, index=index, columns=columns)
+        starts = pd.DataFrame(starts, index=index, columns=columns)
+        stops = pd.DataFrame(stops, index=index, columns=columns)
 
-        left_edge = ti.features[ti.target, 'polyT-track'].end
+        deletion_boundaries = pd.concat({'fraction_removed': fraction_removed,
+                                         'starts': starts,
+                                         'stops': stops,
+                                        },
+                                        axis=1,
+                                       ) 
+
+        left_edge = ti.features[ti.target, 'protospacer'].end + 1
         right_edge = ti.features[ti.target, 'sequencing_start'].start
 
-        relevant_window = fraction_removed.loc[left_edge:right_edge]
-        relevant_window.index = relevant_window.index - ti.cut_after
+        deletion_boundaries = deletion_boundaries.loc[left_edge:right_edge]
+        deletion_boundaries.index = deletion_boundaries.index - ti.cut_after
 
-        relevant_window.to_hdf(self.fns['fraction_removed'], 'fraction_removed')
+        deletion_boundaries.to_hdf(self.fns['deletion_boundaries'], 'deletion_boundaries')
+
+    @memoized_property
+    def deletion_boundaries(self):
+        return pd.read_hdf(self.fns['deletion_boundaries'])
 
     @memoized_property
     def fraction_removed(self):
-        return pd.read_hdf(self.fns['fraction_removed'])
+        return self.deletion_boundaries['fraction_removed']
 
     @memoized_property
     def fraction_removed_log2_fold_changes(self):
@@ -1445,7 +1486,7 @@ class PooledScreen:
 
     @memoized_with_key
     def UMI_counts_full_arguments(self, guide_status):
-        return self.outcome_counts(guide_status).sum()
+        return self.outcome_counts_raw(guide_status).sum()
 
     @memoized_property
     def UMI_counts(self):
@@ -1937,9 +1978,9 @@ class PooledScreen:
                         if array_type == 'list':
                             return
 
-                        new_key = f'{category}/{subcategory}/{field}/{exp.name}/{array_type}'
+                        new_key = f'{category}/{subcategory}/{field}/{exp.sample_name}/{array_type}'
 
-                        merged_f.create_dataset(new_key, data=dataset.value)
+                        merged_f.create_dataset(new_key, data=dataset[()])
 
                 with h5py.File(exp.fns[fn_key]) as exp_f:
                     exp_f.visititems(add_to_merged)
@@ -1961,7 +2002,8 @@ class PooledScreen:
         for fg in self.fixed_guides:
             all_guide_combos[(fg, ALL_NON_TARGETING)] = self.guide_plus_non_targeting(fg)
 
-        length_distributions = {}
+        length_counts = {}
+        length_fractions = {}
 
         read_length = self.R2_read_length
         
@@ -1969,29 +2011,40 @@ class PooledScreen:
             for organism in ['hg19', 'bosTau7']:
                 lengths, counts = self.templated_insertion_details(guide_combos, 'genomic insertion', organism, 'insertion_length')
             
-                if len(lengths) == 0:
-                    continue
-                    
                 lengths_array = np.zeros(read_length + 1)
             
                 for l, c in zip(lengths, counts):
                     lengths_array[l] = c
             
-                UMIs = self.UMI_counts_full_arguments('perfect').loc[guide_combos].sum()
-            
                 key = tuple([organism] + list(guide_name))
-                length_distributions[key] = lengths_array / UMIs
 
-        length_distributions_df = pd.DataFrame(length_distributions).T
+                length_counts[key] = lengths_array
 
-        length_distributions_df.to_csv(self.fns['genomic_insertion_length_distributions'])
+                UMIs = self.UMI_counts_full_arguments('perfect').loc[guide_combos].sum()
+                length_fractions[key] = lengths_array / UMIs
+
+        length_counts_df = pd.DataFrame(length_counts).T
+        length_fractions_df = pd.DataFrame(length_fractions).T
+
+        length_counts_df.to_csv(self.fns['genomic_insertion_length_counts'])
+        length_fractions_df.to_csv(self.fns['genomic_insertion_length_fractions'])
 
     @memoized_property
-    def genomic_insertion_length_distributions(self):
-        df = pd.read_csv(self.fns['genomic_insertion_length_distributions'], index_col=[0, 1, 2])
+    def genomic_insertion_length_counts(self):
+        df = pd.read_csv(self.fns['genomic_insertion_length_counts'], index_col=[0, 1, 2]).astype(int)
         df.columns = [int(c) for c in df.columns]
         df.index.names = ['organism', 'fixed_guide', 'variable_guide']
         df.drop('eGFP_NT2', level='variable_guide', inplace=True, errors='ignore')
+
+        return df
+
+    @memoized_property
+    def genomic_insertion_length_distributions(self):
+        df = pd.read_csv(self.fns['genomic_insertion_length_fractions'], index_col=[0, 1, 2])
+        df.columns = [int(c) for c in df.columns]
+        df.index.names = ['organism', 'fixed_guide', 'variable_guide']
+        df.drop('eGFP_NT2', level='variable_guide', inplace=True, errors='ignore')
+
         return df
         
     def templated_insertion_details(self, guide_pairs, category, subcategories, field, fn_key='filtered_templated_insertion_details'):
@@ -2111,7 +2164,8 @@ class PooledScreen:
         return chi_squared.sort_values(ascending=False)
 
     def explore(self, **kwargs):
-        return explore(self.base_dir, self.group, **kwargs)
+        explorer = PooledScreenExplorer(self, **kwargs)
+        return explorer.layout
 
     def make_common_sequences(self):
         splitter = CommonSequenceSplitter(self)
@@ -2428,188 +2482,6 @@ class CommonSequenceSplitter:
                 if name is not None:
                     name_to_seq_fh.write(f'{name}\t{seq}\n')
 
-def explore(base_dir, group,
-            initial_guide=None,
-            by_outcome=True,
-            fixed_guide='none',
-            clear_output=True,
-            **kwargs):
-    pool = get_pool(base_dir, group)
-
-    guides = pool.variable_guide_library.guides
-    if initial_guide is None:
-        initial_guide = guides[0]
-
-    Select = ipywidgets.Select
-    Layout = ipywidgets.Layout
-
-    widgets = {
-        'guide': Select(options=guides, value=initial_guide, layout=Layout(height='200px', width='300px')),
-        'read_id': Select(options=[], layout=Layout(height='200px', width='600px')),
-        'outcome': Select(options=[], continuous_update=False, layout=Layout(height='200px', width='450px')),
-    }
-    
-    non_widgets = {
-        'file_name': ipywidgets.Text(value=str(Path(base_dir) / 'figures')),
-        'save': ipywidgets.Button(description='Save snapshot'),
-    }
-
-    toggles = [
-        ('parsimonious', False),
-        ('relevant', True),
-        ('ref_centric', True),
-        ('draw_sequence', False),
-        ('draw_qualities', False),
-        ('draw_mismatches', True),
-        ('draw_read_pair', False),
-        ('force_left_aligned', False),
-        ('split_at_indels', False),
-        ('highlight_SNPs', True),
-    ]
-    for key, default_value in toggles:
-        widgets[key] = ipywidgets.ToggleButton(value=kwargs.pop(key, default_value))
-
-    # For some reason, the target widget doesn't get a label without this.
-    for k, v in widgets.items():
-        v.description = k
-
-    output = ipywidgets.Output()
-
-    def get_exp():
-        guide = widgets['guide'].value
-        exp = pool.single_guide_experiment(fixed_guide, guide)
-        return exp
-
-    #@output.capture(clear_output=clear_output)
-    def populate_outcomes(change):
-        previous_value = widgets['outcome'].value
-
-        exp = get_exp()
-
-        outcomes = exp.outcomes
-
-        widgets['outcome'].options = [('_'.join(outcome), outcome) for outcome in outcomes]
-        if len(outcomes) > 0:
-            if previous_value in outcomes:
-                widgets['outcome'].value = previous_value
-                populate_read_ids(None)
-            else:
-                widgets['outcome'].value = widgets['outcome'].options[0][1]
-        else:
-            widgets['outcome'].value = None
-
-    #@output.capture(clear_output=clear_output)
-    def populate_read_ids(change):
-        exp = get_exp()
-
-        df = exp.filtered_cell_outcomes
-
-        if exp is None:
-            return
-
-        if by_outcome:
-            outcome = widgets['outcome'].value
-            if outcome is None:
-                qnames = []
-            else:
-                category, subcategory = outcome
-                query = 'category == @category and subcategory == @subcategory'
-                if 'guide_mismatch' in df.columns:
-                    query += ' and guide_mismatch == -1'
-                right_outcome = df.query(query)
-
-                qnames = right_outcome['query_name'].values[:200]
-
-        else:
-            qnames = df['original_name'].values[:200]
-
-        widgets['read_id'].options = qnames
-
-        if len(qnames) > 0:
-            widgets['read_id'].value = qnames[0]
-            widgets['read_id'].index = 0
-        else:
-            widgets['read_id'].value = None
-            
-    if by_outcome:
-        populate_outcomes({'name': 'initial'})
-
-    populate_read_ids({'name': 'initial'})
-
-    if by_outcome:
-        widgets['outcome'].observe(populate_read_ids, names='value')
-        widgets['guide'].observe(populate_outcomes, names='value')
-    else:
-        widgets['guide'].observe(populate_read_ids, names='value')
-
-    #@output.capture(clear_output=clear_output)
-    def plot(guide, read_id, **plot_kwargs):
-        exp = get_exp()
-
-        if exp is None:
-            return
-
-        if by_outcome:
-            als = exp.get_read_alignments(read_id, fn_key='filtered_cell_bam_by_name', outcome=plot_kwargs['outcome'])
-        else:
-            als = exp.get_read_alignments(read_id)
-
-        if als is None:
-            return None
-
-        l = pool.categorizer(als, exp.target_info, pool.error_corrected, mode=pool.layout_mode)
-        category, subcategory, details, outcome = l.categorize()
-        if widgets['relevant'].value:
-            als = l.relevant_alignments
-
-        diagram = visualize.ReadDiagram(als, exp.target_info,
-                                        max_qual=exp.max_qual,
-                                        **plot_kwargs,
-                                       )
-        fig = diagram.fig
-
-        title = f'{l.query_name} {category} {subcategory} {details}'
-        fig.axes[0].set_title(title)
-
-        if widgets['draw_sequence'].value:
-            print(exp.group, exp.sample_name)
-            print(als[0].query_name)
-            print(als[0].get_forward_sequence())
-
-        return fig
-
-    all_kwargs = {**{k: ipywidgets.fixed(v) for k, v in kwargs.items()}, **widgets}
-
-    interactive = ipywidgets.interactive(plot, **all_kwargs)
-    interactive.update()
-
-    def make_row(keys):
-        return ipywidgets.HBox([widgets[k] if k in widgets else non_widgets[k] for k in keys])
-
-    if by_outcome:
-        top_row_keys = ['guide', 'outcome', 'read_id']
-    else:
-        top_row_keys = ['guide', 'read_id']
-
-    #@output.capture(clear_output=clear_output)
-    def save(change):
-        fig = interactive.result
-        fn = non_widgets['file_name'].value
-        fig.savefig(fn, bbox_inches='tight')
-
-    non_widgets['save'].on_click(save)
-
-    layout = ipywidgets.VBox(
-        [make_row(top_row_keys),
-         make_row([k for k, d in toggles]),
-         make_row(['save', 'file_name']),
-         interactive.children[-1],
-         output,
-        ],
-    )
-
-    return layout
-
 class MergedPools(PooledScreen):
     def __init__(self, base_dir, name, groups, category_groupings=None, progress=None):
         super().__init__(base_dir, name, progress=progress)
@@ -2708,7 +2580,7 @@ def parallel(base_dir, pool_name, max_procs, show_progress_bars=False, preload_i
 
     if preload_indices:
         for organism in pool.supplemental_indices:
-            index_dir = pool.supplemental_indices[org]['STAR']
+            index_dir = pool.supplemental_indices[organism]['STAR']
             print(f'Loading {organism} index at {index_dir}...')
             mapping_tools.load_STAR_index(index_dir)
 
@@ -2743,23 +2615,23 @@ def parallel(base_dir, pool_name, max_procs, show_progress_bars=False, preload_i
             print('error in parallel')
             sys.exit(1)
         
-    #process_stage('preprocess')
-    #pool.make_common_sequences()
+    process_stage('preprocess')
+    pool.make_common_sequences()
     parallel_common_sequences(pool, max_procs, show_progress_bars)
-    pool.write_common_outcome_files()
 
-    pool.merge_common_sequence_special_alignments()
+    #pool.merge_common_sequence_special_alignments()
 
-    #process_stage('align')
+    process_stage('align')
     process_stage('categorize')
 
     pool.make_outcome_counts()
+    pool.merge_templated_insertion_details()
+    pool.extract_genomic_insertion_length_distributions()
     pool.extract_category_counts()
+    pool.compute_deletion_boundaries()
     #pool.merge_deletion_ranges()
-    #pool.merge_templated_insertion_details()
     #pool.merge_templated_insertion_details(fn_key='filtered_duplication_details')
     #pool.make_high_frequency_outcome_counts()
-    #pool.compute_fraction_removed()
     #pool.merge_special_alignments()
 
 def parallel_common_sequences(pool, max_procs, show_progress_bars=False):
@@ -2790,6 +2662,8 @@ def parallel_common_sequences(pool, max_procs, show_progress_bars=False):
         print('error in parallel')
         sys.exit(1)
 
+    pool.write_common_outcome_files()
+
 def timestamp():
     return f'{datetime.datetime.now():%Y-%m-%d %H:%M:%S}'
 
@@ -2814,3 +2688,55 @@ def process_common_sequences(base_dir, pool_name, chunk, progress=None):
     exp.process()
 
     print(f'{timestamp()} Finished {chunk}')
+
+class PooledScreenExplorer(explore.Explorer):
+    def __init__(self,
+                 pool,
+                 initial_guide=None,
+                 by_outcome=True,
+                 **plot_kwargs,
+                ):
+        self.pool = pool
+        self.guides = self.pool.variable_guide_library.guides
+
+        if initial_guide is None:
+            initial_guide = self.guides[0]
+        self.initial_guide = initial_guide
+
+        self.experiments = {}
+
+        super().__init__(by_outcome, **plot_kwargs)
+
+    @classmethod
+    def from_base_dir_and_group(self, base_dir, group, **kwargs):
+        pool = get_pool(base_dir, group)
+        return PooledScreenExplorer(pool, **kwargs)
+
+    def get_current_experiment(self):
+        guide = self.widgets['guide'].value
+        if guide not in self.experiments:
+            self.experiments[guide] = self.pool.single_guide_experiment('none', guide)
+
+        experiment = self.experiments[guide]
+        return experiment
+
+    def set_up_read_selection_widgets(self):
+        self.widgets.update({
+            'guide': ipywidgets.Select(options=self.guides, value=self.initial_guide, layout=ipywidgets.Layout(height='200px', width='300px')),
+        })
+
+        if self.by_outcome:
+            self.populate_categories({'name': 'initial'})
+            self.populate_subcategories({'name': 'initial'})
+
+            self.widgets['guide'].observe(self.populate_categories, names='value')
+            self.widgets['category'].observe(self.populate_subcategories, names='value')
+            self.widgets['subcategory'].observe(self.populate_read_ids, names='value')
+            selection_widget_keys = ['guide', 'category', 'subcategory', 'read_id']
+        else:
+            self.widgets['guide'].observe(self.populate_read_ids, names='value')
+            selection_widget_keys = ['guide', 'read_id']
+
+        self.populate_read_ids({'name': 'initial'})
+
+        return selection_widget_keys

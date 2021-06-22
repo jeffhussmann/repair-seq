@@ -260,18 +260,19 @@ def get_resolvers(base_dir, group):
             guide_seqs['fixed_guide_barcode'][fg].add(expected_R2)
         
     for which in ['fixed_guide_barcode', 'variable_guide']:
-        dictionary = guide_seqs[which]
-        
-        for g in sorted(dictionary):
-            seqs = dictionary[g]
-            if len(seqs) != 1:
-                raise ValueError(which, g, seqs)
-            else:
-                seq = seqs.pop()
-                dictionary[g] = seq
-                
-        # convert from defaultdict to dict
-        guide_seqs[which] = dict(dictionary)
+        if which in guide_seqs:
+            dictionary = guide_seqs[which]
+            
+            for g in sorted(dictionary):
+                seqs = dictionary[g]
+                if len(seqs) != 1:
+                    raise ValueError(which, g, seqs)
+                else:
+                    seq = seqs.pop()
+                    dictionary[g] = seq
+                    
+            # convert from defaultdict to dict
+            guide_seqs[which] = dict(dictionary)
 
     if has_fixed_barcode:
         fixed_lengths = {len(s) for s in guide_seqs['fixed_guide_barcode'].values()}
@@ -295,7 +296,7 @@ def get_resolvers(base_dir, group):
         resolvers['fixed_guide_barcode'] = fixed_guide_barcode_resolver
         expected_seqs['fixed_guide_barcode'] = set()
 
-        guide_barcode_slice = None
+        guide_barcode_slice = slice(None)
         after_guide_barcode_slice = idx[:]
 
     resolvers['variable_guide'] = utilities.get_one_mismatch_resolver(guide_seqs['variable_guide']).get

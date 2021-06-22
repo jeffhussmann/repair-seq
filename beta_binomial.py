@@ -47,29 +47,6 @@ def p_k_of_n_less(n, k, sorted_ps):
         
         return total
 
-def extract_numerator_and_denominator_counts(pool, numerator_outcomes, denominator_outcomes=None):
-    if all(outcome in pool.category_counts.index for outcome in list(numerator_outcomes)):
-        count_source = pool.category_counts
-    elif all(outcome in pool.subcategory_counts.index for outcome in list(numerator_outcomes)):
-        count_source = pool.subcategory_counts
-    else:
-        count_source = pool.outcome_counts('perfect')['none']
-        
-    numerator_counts = count_source.loc[numerator_outcomes].sum(axis='index')
-        
-    if denominator_outcomes is None:
-        denominator_counts = pool.UMI_counts
-    else:
-        if not all(outcome in count_source.index for outcome in denominator_outcomes):
-            raise ValueError(denominator_outcomes)
-        denominator_counts = count_source.loc[denominator_outcomes].sum(axis='index')
-        
-    # Make sure neither counts has 'all_non_targeting' in index.
-    numerator_counts = numerator_counts.drop('all_non_targeting', errors='ignore')
-    denominator_counts = denominator_counts.drop('all_non_targeting', errors='ignore')
-        
-    return numerator_counts, denominator_counts
-
 def compute_outcome_guide_statistics(pool, numerator_outcomes, denominator_outcomes=None):
     numerator_counts, denominator_counts = extract_numerator_and_denominator_counts(pool, numerator_outcomes, denominator_outcomes)
 

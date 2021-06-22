@@ -1,3 +1,4 @@
+import bisect
 from collections import defaultdict
 
 import bokeh.palettes
@@ -162,7 +163,7 @@ class ReplicatePair:
 
         return pd.Series(rs, index=guides, name='r').sort_values(ascending=False)
 
-    def plot_outcome_diagrams_with_correlations(self, threshold=5e-3, n_guides=100, window=(-20, 20)):
+    def plot_outcome_diagrams_with_correlations(self, threshold=5e-3, n_guides=100, window=(-20, 20), draw_heatmap=False):
         outcomes = self.outcomes_above_simple_threshold(threshold)
         guides = self.union_of_top_n_guides(outcomes, n_guides)
 
@@ -183,14 +184,14 @@ class ReplicatePair:
                                                        text_size=text_size * scale,
                                                        inches_per_outcome=inches_per_outcome * scale,
                                                        line_widths=0.75,
-                                                       title=self.target_info.sgRNA,
-                                                       title_size=10,
+                                                       title=None,
                                                       )
 
         g.add_ax('frequency',
                  width_multiple=10,
-                 title='percentage of\noutcomes for\nnon-targeting\nguides',
+                 title='percentage of\noutcomes for\nnon-targeting\nsgRNAs',
                  title_size=7,
+                 gap_multiple=2,
                 )
         g.plot_on_ax('frequency', self.average_nt_fractions,
                      transform=lambda f: f * 100,
@@ -204,11 +205,30 @@ class ReplicatePair:
         plt.setp(g.axs_by_name['frequency'].get_xticklabels(), size=6)
         g.axs_by_name['frequency'].tick_params(axis='x', which='both', pad=2)
 
-        #g.axs_by_name['frequency'].set_xlim(np.log10(0.49e-2), np.log10(40e-2))
-        #g.style_log10_frequency_ax('frequency')
+        g.add_ax('cumulative_frequency',
+                 width_multiple=10,
+                 title='cumulative\npercentage of\noutcomes for\nnon-targeting\nsgRNAs',
+                 title_size=7,
+                 gap_multiple=3,
+                )
+        g.plot_on_ax('cumulative_frequency', np.cumsum(self.average_nt_fractions),
+                     transform=lambda f: f * 100,
+                     marker='o',
+                     color='black',
+                     clip_on=False,
+                     markersize=1,
+                     line_alpha=0.5,
+                    )
 
-        g.add_ax('correlation', gap_multiple=2, width_multiple=10,
-                 title='correlation between\nreplicates in outcome\nredistribution\n across guides',
+        plt.setp(g.axs_by_name['cumulative_frequency'].get_xticklabels(), size=6)
+        g.axs_by_name['cumulative_frequency'].tick_params(axis='x', which='both', pad=2)
+        g.set_xlim('cumulative_frequency', (0, 100))
+        g.axs_by_name['cumulative_frequency'].set_xticks([0, 25, 50, 75, 100])
+
+        g.add_ax('correlation',
+                 gap_multiple=3,
+                 width_multiple=10,
+                 title='correlation between\nreplicates in outcome\nsignature\n across sgRNAs',
                  title_size=7,
                 )
 
@@ -227,7 +247,10 @@ class ReplicatePair:
         rs = r_series.loc[outcomes][::-1]
         colors = [tuple(row) for row in sm.to_rgba(rs)]
         g.axs_by_name['correlation'].scatter(rs, np.arange(len(rs)),
-                                             color=colors, linewidths=(0,), s=8, clip_on=False,
+                                             color=colors,
+                                             linewidths=(0,),
+                                             s=6,
+                                             clip_on=False,
                                              zorder=10,
                                             )
 
@@ -236,30 +259,20 @@ class ReplicatePair:
         g.axs_by_name['correlation'].set_xticks([-0.75, -0.25, 0.25, 0.75], minor=True)
         g.axs_by_name['correlation'].tick_params(axis='x', which='both', pad=2)
         g.style_fold_change_ax('correlation')
+        g.axs_by_name['correlation'].axvline(0, color='black', alpha=0.5)
 
         plt.setp(g.axs_by_name['correlation'].get_xticklabels(), size=6)
 
-        # Note reversing of row order.
-        g.add_heatmap(r_matrix[::-1], 'r',
-                      cmap=ddr.visualize.correlation_cmap,
-                      draw_tick_labels=False,
-                      vmin=-1, vmax=1,
-                      gap_multiple=2,
-                     )
+        if draw_heatmap:
+            # Note reversing of row order.
+            g.add_heatmap(r_matrix[::-1], 'r',
+                        cmap=ddr.visualize.correlation_cmap,
+                        draw_tick_labels=False,
+                        vmin=-1, vmax=1,
+                        gap_multiple=2,
+                        )
 
-        full_categories, colors, category_aliases, cat_display_order = self.full_categories(outcomes)
-
-        for cat in cat_display_order:
-            cat_outcomes = full_categories[cat]
-            if len(cat_outcomes) >= 0:
-                g.mark_subset(cat_outcomes,
-                              color=colors[cat],
-                              title=category_aliases.get(cat, cat),
-                              width_multiple=1.2,
-                              gap_multiple=0.1,
-                              size=7,
-                              linewidth=3,
-                             )
+        g.draw_outcome_categories()
 
         return g.fig
 
@@ -336,7 +349,7 @@ class ReplicatePair:
             k = f'outcome_{i}'
             rs[k] = rs.index.get_level_values(k)
 
-        full_categories, colors, category_aliases, cat_display_order = self.full_categories(outcomes)
+        full_categories = self.full_categories(outcomes)
 
         cat_to_highlight = 'deletion, bidirectional'
         relevant_indices = [outcomes.index(outcome) for outcome in full_categories[cat_to_highlight]]
@@ -344,16 +357,17 @@ class ReplicatePair:
         df = rs.query('outcome_1 < outcome_2').copy()
 
         df['color'] = 'grey'
-        df.loc[df['outcome_1'].isin(relevant_indices) & df['outcome_2'].isin(relevant_indices), 'color'] = colors[cat_to_highlight]
+        to_highlight = df['outcome_1'].isin(relevant_indices) & df['outcome_2'].isin(relevant_indices)
+        df.loc[to_highlight, 'color'] = ddr.visualize.Cas9_category_colors[cat_to_highlight]
 
         x = self.pn0
         y = self.pn1
 
-        fig, ax = plt.subplots(figsize=(1.5, 1.5))
+        fig, ax = plt.subplots(figsize=(2, 2))
 
         kwargs = dict(x=x, y=y, color='color', linewidths=(0,))
-        ax.scatter(data=df.query('color == "grey"'), label='', alpha=0.4, s=10, **kwargs)
-        ax.scatter(data=df.query('color != "grey"'), label='bidirectional deletions', s=15, **kwargs)
+        ax.scatter(data=df.query('color == "grey"'), label='', alpha=0.4, s=15, **kwargs)
+        ax.scatter(data=df.query('color != "grey"'), label='bidirectional deletions', s=20, **kwargs)
         
         ax.annotate('pairs of\nbidirectional\ndeletions',
                     xy=(0, 1),
@@ -362,7 +376,7 @@ class ReplicatePair:
                     textcoords='offset points',
                     ha='left',
                     va='top',
-                    color=colors[cat_to_highlight],
+                    color=ddr.visualize.Cas9_category_colors[cat_to_highlight],
                     size=6,
                    )
 
@@ -386,7 +400,8 @@ class ReplicatePair:
         ax.set_xticks(ticks)
         ax.set_yticks(ticks)
         
-        plt.setp(ax.get_xticklabels() + ax.get_yticklabels(), size=6)
+        plt.setp(ax.spines.values(), linewidth=0.5)
+        ax.tick_params(labelsize=6, width=0.5, length=2)
 
         ax.set_ylabel('correlation between distinct\noutcomes in replicate 2', size=6)
         ax.set_xlabel('correlation between distinct\noutcomes in replicate 1', size=6)
@@ -448,15 +463,23 @@ class ReplicatePair:
 
         return fig
 
-    def compare_single_outcomes(self, num_outcomes=5, manual_data_lims=None, manual_ticks=None):
+    def compare_single_outcomes(self, num_outcomes=5, top_n_guides=None, manual_data_lims=None, manual_ticks=None, show_r_squared=True):
         x = self.pn0
         y = self.pn1
 
         outcomes = self.outcomes_above_simple_threshold(1e-3)
 
-        log2_fold_changes = self.log2_fold_changes(outcomes, self.common_guides).stack().sort_index()
+        if top_n_guides is not None:
+            relevant_guides = list(self.union_of_top_n_guides(outcomes, top_n_guides))
+            guides = relevant_guides + list(self.common_non_targeting_guides)
+        else:
+            guides = self.common_guides
+            relevant_guides = guides
 
-        fig, axs = plt.subplots(1, num_outcomes, figsize=(4 * num_outcomes, 2), gridspec_kw=dict(wspace=1))
+
+        log2_fold_changes = self.log2_fold_changes(outcomes, guides).stack().sort_index()
+
+        fig, axs = plt.subplots(1, num_outcomes, figsize=(2 * num_outcomes, 1), gridspec_kw=dict(wspace=1))
 
         for outcome_i, ax in enumerate(axs):
             outcome = outcomes[outcome_i]
@@ -467,41 +490,47 @@ class ReplicatePair:
             else:
                 data_lims = (np.floor(df.min().min() - 0.1), np.ceil(df.max().max() + 0.1))
 
-            df['color'] = 'grey'
+            df['color'] = bokeh.palettes.Greys9[4]
 
-            df.loc[self.common_non_targeting_guides, 'color'] = 'C0'
+            df.loc[self.common_non_targeting_guides, 'color'] = bokeh.palettes.Greys9[1]
 
             df = df.dropna()
 
-            #enough_UMIs = pools[x].UMI_counts('perfect')['none'] >= 0
+            r, p = scipy.stats.pearsonr(df.loc[relevant_guides, x], df.loc[relevant_guides, y])
 
-            r, p = scipy.stats.pearsonr(df[x], df[y])
-
-            ax.scatter(x=x, y=y, data=df, color='color', linewidth=(0,), s=25, alpha=0.75)
+            ax.scatter(x=x, y=y, data=df, color='color', linewidth=(0,), s=10, alpha=0.9, clip_on=False)
 
             ax.set_xlim(*data_lims)
             ax.set_ylim(*data_lims)
 
-            ax.set_xlabel(f'replicate 1')
-            ax.set_ylabel(f'replicate 2')
+            ax.set_xlabel(f'replicate 1', size=6)
+            ax.set_ylabel(f'replicate 2', size=6)
 
-            ax.set_title(f'{outcome_i}\n{outcome}')
+            outcome_string = '\n'.join(outcome)
+            ax.set_title(f'{outcome_i}\n{outcome_string}', size=6)
 
             hits.visualize.draw_diagonal(ax, alpha=0.2)
             ax.axhline(0, color='black', alpha=0.2)
             ax.axvline(0, color='black', alpha=0.2)
 
-            ax.annotate(f'r$^2$ = {r**2:0.2f}',
+            if show_r_squared:
+                label = f'r$^2$ = {r**2:0.2f}'
+            else:
+                label = f'r = {r:0.2f}'
+
+            ax.annotate(label,
                         xy=(0, 1),
                         xycoords='axes fraction',
-                        xytext=(10, -10),
+                        xytext=(3, -3),
                         textcoords='offset points',
                         ha='left',
                         va='top',
-                        size=10,
+                        size=6,
                        )
 
             ax.set_aspect('equal')
+
+            ax.tick_params(labelsize=6)
 
             if manual_ticks is not None:
                 ax.set_xticks(manual_ticks)
@@ -521,7 +550,7 @@ class ReplicatePair:
 
         num_guides = 5
 
-        fig, axs = plt.subplots(1, num_guides, figsize=(4 * num_guides, 2), gridspec_kw=dict(wspace=1))
+        fig, axs = plt.subplots(1, num_guides, figsize=(2 * num_guides, 1), gridspec_kw=dict(wspace=1))
 
         for guide_i, ax in enumerate(axs):
             guide = r_series.index[guide_i]
@@ -535,33 +564,32 @@ class ReplicatePair:
 
             df['color'] = 'black'
 
-            #enough_UMIs = pools[x].UMI_counts('perfect')['none'] >= 0
-
             r, p = scipy.stats.pearsonr(df[x], df[y])
-            #f = pools[x].non_targeting_fractions('perfect', 'none').loc[outcome]
 
-            ax.scatter(x=x, y=y, data=df, color='color', linewidth=(0,), s=25, alpha=0.5, marker='D')
+            ax.scatter(x=x, y=y, data=df, color='color', linewidth=(0,), s=10, alpha=0.5, marker='D', clip_on=False)
 
             ax.set_xlim(*data_lims)
             ax.set_ylim(*data_lims)
 
-            ax.set_xlabel(f'replicate 1', size=12)
-            ax.set_ylabel(f'replicate 2', size=12)
+            ax.set_xlabel(f'replicate 1', size=6)
+            ax.set_ylabel(f'replicate 2', size=6)
 
-            ax.set_title(f'log2 fold-changes in\noutcome frequencies for {guide}')
+            ax.set_title(f'log$_2$ fold-changes in\noutcome frequencies for {guide}', size=6)
 
             hits.visualize.draw_diagonal(ax, alpha=0.2)
             ax.axhline(0, color='black', alpha=0.2)
             ax.axvline(0, color='black', alpha=0.2)
 
+            ax.tick_params(labelsize=6)
+
             ax.annotate(f'r$^2$ = {r**2:0.2f}',
                         xy=(0, 1),
                         xycoords='axes fraction',
-                        xytext=(10, -10),
+                        xytext=(2, -2),
                         textcoords='offset points',
                         ha='left',
                         va='top',
-                        size=10,
+                        size=6,
                        )
 
             ax.set_aspect('equal')
@@ -633,7 +661,7 @@ class ReplicatePair:
 
         active_rs.loc[active_rs['gene_1'] == active_rs['gene_2'], 'color'] = 'tab:red'
 
-        g = sns.JointGrid(height=4)
+        g = sns.JointGrid(height=2.2, space=0.5, xlim=(-1.02, 1.02), ylim=(-1.02, 1.02))
 
         ax = g.ax_joint
 
@@ -644,51 +672,56 @@ class ReplicatePair:
         y = self.pn1
 
         kwargs = dict(x=x, y=y, color='color', linewidths=(0,))
-        ax.scatter(data=distinct, s=10, label='different target genes', alpha=0.3, **kwargs)
-        ax.scatter(data=same, s=20, label='same target gene', alpha=0.8, **kwargs)
+        ax.scatter(data=distinct, s=5, label='different target genes', alpha=0.3, **kwargs)
+        ax.scatter(data=same, s=10, label='same target gene', alpha=0.8, **kwargs)
 
-        ax.set_xlim(-1.02, 1.02)
-        ax.set_ylim(-1.02, 1.02)
+        plt.setp(ax.spines.values(), linewidth=0.5)
 
         ax.annotate('same target gene',
                     xy=(0, 1),
                     xycoords='axes fraction',
-                    xytext=(3, -10),
+                    xytext=(3, 0),
                     textcoords='offset points',
                     ha='left',
                     va='top',
                     color='tab:red',
-                    size=10,
+                    size=6,
                    )
 
         ax.annotate('different target genes',
                     xy=(0, 1),
                     xycoords='axes fraction',
-                    xytext=(3, -23),
+                    xytext=(3, -8),
                     textcoords='offset points',
                     ha='left',
                     va='top',
                     color='grey',
-                    size=10,
+                    size=6,
                    )
 
         hits.visualize.draw_diagonal(ax, alpha=0.2)
         ax.axhline(0, color='black', alpha=0.2)
         ax.axvline(0, color='black', alpha=0.2)
 
-        ax.set_xlabel('correlation between\ndistinct CRISPRi guides,\nreplicate 1', size=12)
-        ax.set_ylabel('correlation between\ndistinct CRISPRi guides,\nreplicate 2', size=12)
+        ax.set_xlabel('correlation between\ndistinct CRISPRi guides,\nreplicate 1', size=6)
+        ax.set_ylabel('correlation between\ndistinct CRISPRi guides,\nreplicate 2', size=6)
+
+        ax.tick_params(labelsize=6, width=0.5, length=2)
+        ticks = [-1, -0.5, 0, 0.5, 1]
+        ax.set_xticks(ticks)
+        ax.set_yticks(ticks)
 
         for ax, pn, orientation in [(g.ax_marg_x, x, 'vertical'), (g.ax_marg_y, y, 'horizontal')]:
             bins = np.linspace(-1, 1, 30)
-            kwargs = dict(histtype='step', bins=bins, density=True, orientation=orientation)
+            kwargs = dict(histtype='step', density=True, orientation=orientation)
 
             max_n = 0
     
-            n, *rest = ax.hist(distinct[pn], color='grey', **kwargs)
+            n, *rest = ax.hist(distinct[pn], color='grey', bins=bins, **kwargs)
             max_n = max(max_n, max(n))
             
-            n, *rest = ax.hist(same[pn], color='red', **kwargs)
+            focused_bins = bins[bisect.bisect_right(bins, min(same[pn])) - 1:]
+            n, *rest = ax.hist(same[pn], color='red', bins=focused_bins, **kwargs)
             max_n = max(max_n, max(n))
             
             if orientation == 'vertical':
@@ -697,6 +730,9 @@ class ReplicatePair:
                 set_lim = ax.set_xlim
                 
             set_lim(0, max_n * 1.05)
+
+            plt.setp(ax.spines.values(), linewidth=0.5)
+            ax.tick_params(labelsize=6, width=0.5, length=2)
 
         return g.fig, active_rs
 
@@ -714,39 +750,7 @@ class ReplicatePair:
                 
             full_categories[full_category].append((c, s, d))
 
-        cat_color_order = [
-            'SD-MMEJ',
-            'deletion, PAM-distal',
-            'deletion, PAM-proximal',
-            'deletion, ambiguous',
-            'deletion, bidirectional',
-            'genomic insertion',
-            'insertion',
-            'wild type',
-        ]
-
-        palette = bokeh.palettes.Dark2[8]
-        colors = dict(zip(cat_color_order, palette))
-
-        category_aliases = {
-            'wild type': 'unedited',
-            'deletion, PAM-distal': 'deletion on PAM-distal side',
-            'deletion, bidirectional': 'bidirectional deletion',
-            'deletion, PAM-proximal': 'deletion on PAM-proximal side',
-            'SD-MMEJ': 'insertion and deletion',
-        }
-
-        cat_display_order = [
-            'wild type',
-            'insertion',
-            'deletion, bidirectional',
-            'deletion, PAM-distal',
-            'deletion, PAM-proximal',
-            'deletion, ambiguous',
-            'SD-MMEJ',
-        ]
-
-        return full_categories, colors, category_aliases, cat_display_order
+        return full_categories
 
     def get_bidirectional_deletions(self, threshold=5e-3):
         ti = self.pool0.target_info

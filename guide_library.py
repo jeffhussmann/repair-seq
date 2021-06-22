@@ -115,6 +115,11 @@ class GuideLibrary:
     def genes(self):
         return sorted(set(self.guides_df['gene']))
 
+    @memoized_property
+    def genes_with_non_targeting_guide_sets(self):
+        genes = self.genes + sorted(self.non_targeting_guide_sets)
+        return genes
+
     def gene_guides(self, gene, only_best_promoter=False):
         if isinstance(gene, str):
             genes = [gene]
@@ -127,7 +132,13 @@ class GuideLibrary:
 
         gene_guides = self.guides_df.query(query).sort_values(['gene', 'promoter', 'rank'])
 
-        return gene_guides.index
+        nt_guides = []
+        for gene in genes:
+            nt_guides.extend(self.non_targeting_guide_sets.get(gene, []))
+
+        all_guides = list(gene_guides.index) + nt_guides
+
+        return all_guides
 
     @memoized_property
     def guide_to_gene(self):

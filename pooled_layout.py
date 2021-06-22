@@ -1327,21 +1327,32 @@ class Layout(layout.Categorizer):
 
         strand = self.target_info.sequencing_direction
 
-        if strand == '-':
-            if len(covered_by_both) == 0:
+        if len(covered_by_both) == 0:
+            crop_interval = {
+                'leftmost': {
+                    'left': (0, np.inf),
+                    'right': (0, np.inf),
+                },
+                'rightmost': {
+                    'left': (0, np.inf),
+                    'right': (0, np.inf),
+                },
+            }
+        else:
+            # If the edge alignments overlap on the reference, crop back 
+            # so that each ref base is only assigned to one.
+            if strand == '+':
                 crop_interval = {
                     'leftmost': {
-                        'left': (0, np.inf),
-                        'right': (0, np.inf),
+                        'left': (0, covered_by_both.end),
+                        'right': (covered_by_both.end + 1, np.inf),
                     },
                     'rightmost': {
-                        'left': (0, np.inf),
-                        'right': (0, np.inf),
+                        'left': (0, covered_by_both.start - 1),
+                        'right': (covered_by_both.start, np.inf),
                     },
                 }
             else:
-                # If the edge alignments overlap on the reference, crop back 
-                # so that each ref base is only assigned to one.
                 crop_interval = {
                     'leftmost': {
                         'left': (covered_by_both.end + 1, np.inf),
@@ -1352,85 +1363,88 @@ class Layout(layout.Categorizer):
                         'right': (0, covered_by_both.start - 1),
                     },
                 }
-            
-            cropped = {
-                extremity: {
-                    side: sam.crop_al_to_ref_int(edge_als[side], *crop_interval[extremity][side])
-                    for side in ['left', 'right']
-                }
-                for extremity in ['leftmost', 'rightmost']
+        
+        cropped = {
+            extremity: {
+                side: sam.crop_al_to_ref_int(edge_als[side], *crop_interval[extremity][side])
+                for side in ['left', 'right']
             }
+            for extremity in ['leftmost', 'rightmost']
+        }
 
-            if cropped['leftmost']['left'] is None or cropped['leftmost']['right'] is None:
-                results = {
-                    'kind': 'unknown',
-                }
-                return results
-            
+        if cropped['leftmost']['left'] is None or cropped['leftmost']['right'] is None:
+            results = {
+                'kind': 'unknown',
+            }
+            return results
+        
+        if strand == '+':
+            deletion_starts_at = cropped['leftmost']['left'].reference_end
+            deletion_length = cropped['leftmost']['right'].reference_start - deletion_starts_at
+        else:
             deletion_starts_at = cropped['leftmost']['right'].reference_end
             deletion_length = cropped['leftmost']['left'].reference_start - deletion_starts_at
 
-            covered_on_read = {side: interval.get_covered(cropped['leftmost'][side]) for side in ['left', 'right']}
-            uncovered = self.whole_read - covered_on_read['left'] - covered_on_read['right']
-            insertion = self.read.seq[uncovered.start:uncovered.end + 1]
+        covered_on_read = {side: interval.get_covered(cropped['leftmost'][side]) for side in ['left', 'right']}
+        uncovered = self.whole_read - covered_on_read['left'] - covered_on_read['right']
+        insertion = self.read.seq[uncovered.start:uncovered.end + 1]
 
-            # flip because opposite strand
+        if strand == '+':
+            insertion_seq = insertion
+        else:
             insertion_seq = utilities.reverse_complement(insertion)
 
-            insertion_starts_after = deletion_starts_at - 1
+        insertion_starts_after = deletion_starts_at - 1
 
-            if deletion_length > 0:
-                deletion = DegenerateDeletion([deletion_starts_at], deletion_length)
-            else:
-                deletion = None
+        if deletion_length > 0:
+            deletion = DegenerateDeletion([deletion_starts_at], deletion_length)
+        else:
+            deletion = None
 
-            if len(insertion_seq) > 0:
-                insertion = DegenerateInsertion([insertion_starts_after], [insertion_seq])
-            else:
-                insertion = None
+        if len(insertion_seq) > 0:
+            insertion = DegenerateInsertion([insertion_starts_after], [insertion_seq])
+        else:
+            insertion = None
 
-            if deletion is not None and insertion is None:
-                deletion = self.target_info.expand_degenerate_indel(deletion)
-                deletion_interval = interval.Interval(min(deletion.starts_ats), max(deletion.ends_ats))
+        if deletion is not None and insertion is None:
+            deletion = self.target_info.expand_degenerate_indel(deletion)
+            deletion_interval = interval.Interval(min(deletion.starts_ats), max(deletion.ends_ats))
 
-                around_cut_interval = self.target_info.around_cuts(5)
-                near_cut = len(deletion_interval & around_cut_interval) > 0
+            around_cut_interval = self.target_info.around_cuts(5)
+            near_cut = len(deletion_interval & around_cut_interval) > 0
 
-                results = {
-                    'kind': 'deletion',
-                    'indel': deletion,
-                    'near_cut': near_cut,
-                    'relevant_alignments': [cropped['leftmost']['left'], cropped['leftmost']['right']],
-                }
+            results = {
+                'kind': 'deletion',
+                'indel': deletion,
+                'near_cut': near_cut,
+                'relevant_alignments': [cropped['leftmost']['left'], cropped['leftmost']['right']],
+            }
 
-            elif deletion is None and insertion is not None:
-                insertion = self.target_info.expand_degenerate_indel(insertion)
-                insertion_interval = interval.Interval(min(insertion.starts_afters), max(insertion.starts_afters))
+        elif deletion is None and insertion is not None:
+            insertion = self.target_info.expand_degenerate_indel(insertion)
+            insertion_interval = interval.Interval(min(insertion.starts_afters), max(insertion.starts_afters))
 
-                around_cut_interval = self.target_info.around_cuts(5)
-                near_cut = len(insertion_interval & around_cut_interval) > 0
+            around_cut_interval = self.target_info.around_cuts(5)
+            near_cut = len(insertion_interval & around_cut_interval) > 0
 
-                results = {
-                    'kind': 'insertion',
-                    'indel': insertion,
-                    'near_cut': near_cut,
-                    'relevant_alignments': [cropped['leftmost']['left'], cropped['leftmost']['right']],
-                }
+            results = {
+                'kind': 'insertion',
+                'indel': insertion,
+                'near_cut': near_cut,
+                'relevant_alignments': [cropped['leftmost']['left'], cropped['leftmost']['right']],
+            }
 
-            elif deletion is not None and insertion is not None:
-                results = {
-                    'kind': 'insertion with deletion',
-                    'indel': (insertion, deletion),
-                    'relevant_alignments': [cropped['leftmost']['left'], cropped['leftmost']['right']],
-                }
-
-            else:
-                results = {
-                    'kind': 'unknown',
-                }
+        elif deletion is not None and insertion is not None:
+            results = {
+                'kind': 'insertion with deletion',
+                'indel': (insertion, deletion),
+                'relevant_alignments': [cropped['leftmost']['left'], cropped['leftmost']['right']],
+            }
 
         else:
-            raise NotImplementedError('strand == \'+\'')
+            results = {
+                'kind': 'unknown',
+            }
 
         return results
 

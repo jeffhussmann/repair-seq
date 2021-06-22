@@ -120,7 +120,10 @@ def build_doubles_guide_specific_target(original_target,
     if tasks_queue is not None:
         tasks_queue.put((fixed_guide, variable_guide))
 
-def build_all_singles(base_dir, original_target_name, original_genbank_name, guide_library_names):
+def build_all_singles(base_dir, original_target_name, original_genbank_name, guide_library_names,
+                      test=False,
+                      num_processes=18,
+                     ):
     warnings.simplefilter('ignore')
 
     original_target = target_info.TargetInfo(base_dir, original_target_name)
@@ -138,20 +141,23 @@ def build_all_singles(base_dir, original_target_name, original_genbank_name, gui
         for guide in guide_library.guides:
             args_list.append((original_target, original_genbank_name, guide_library, guide, tasks_done_queue))
 
-    progress = tqdm.tqdm(desc='Making targets', total=len(args_list))
+    if test:
+        args_list = args_list[:10]
+        for args in tqdm.tqdm(args_list):
+            build_guide_specific_target(*args)
+    else:
+        progress = tqdm.tqdm(desc='Making targets', total=len(args_list))
+        with multiprocessing.Pool(processes=num_processes) as pool:
+            pool.starmap_async(build_guide_specific_target, args_list)
 
-    with multiprocessing.Pool(processes=18) as pool:
-        pool.starmap_async(build_guide_specific_target, args_list)
+            while progress.n != len(args_list):
+                tasks_done_queue.get()
+                progress.update()
 
-        while progress.n != len(args_list):
-            tasks_done_queue.get()
-            progress.update()
-
-    #args_list = args_list[:10]
-    #for args in args_list:
-    #    build_guide_specific_target(*args)
-
-def build_all_doubles(base_dir, fixed_guide_library_name, variable_guide_library_name, test=False, num_processes=18):
+def build_all_doubles(base_dir, fixed_guide_library_name, variable_guide_library_name,
+                      test=False,
+                      num_processes=18,
+                     ):
     warnings.simplefilter('ignore')
 
     original_target = target_info.TargetInfo(base_dir, 'doubles_vector')
@@ -210,13 +216,20 @@ if __name__ == '__main__':
         original_target = 'pooled_vector'
         original_genbank_name = 'pooled_vector'
         guide_library_names = [
-            'DDR_library',
-            'DDR_sublibrary',
-            'DDR_microlibrary',
-            'MRE11_pool',
+            #'DDR_library',
+            #'DDR_sublibrary',
+            #'DDR_microlibrary',
+            #'MRE11_pool',
+            'MRE11+01332',
         ]
-        build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)
+        build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names,
+                          test=args.test,
+                          num_processes=args.num_processes,
+                         )
 
     elif args.vector == 'doubles':
         #build_all_doubles(args.base_dir, 'MRN_MMR_fixed', 'MRN_MMR_variable')
-        build_all_doubles(args.base_dir, 'DDR_skinny', 'DDR_sublibrary', test=args.test, num_processes=args.num_processes)
+        build_all_doubles(args.base_dir, 'DDR_skinny', 'DDR_sublibrary',
+                          test=args.test,
+                          num_processes=args.num_processes,
+                         )

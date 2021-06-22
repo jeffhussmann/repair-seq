@@ -60,7 +60,7 @@ def convert_outcomes(outcomes, source_target_info, dest_target_info):
     
     return converted
 
-def compare_pool_to_endogenous(pools, groups, destination_target_info=None, guide=None, condition=None):
+def compare_pool_to_endogenous(pools, groups, destination_target_info=None, guide=None):
     ''' '''
     if destination_target_info is None:
         destination_target_info = pools[0].target_info
@@ -69,7 +69,12 @@ def compare_pool_to_endogenous(pools, groups, destination_target_info=None, guid
     all_fs = []
     all_l2fcs = {}
 
-    for group in groups:
+    baseline_column_names = []
+
+    if not any(isinstance(group, tuple) for group in groups):
+        groups = [(group, None) for group in groups]
+
+    for group, condition in groups:
         endogenous_outcomes = [(c, s, d) for c, s, d in group.outcomes_by_baseline_frequency if c != 'uncategorized' and s != 'far from cut' and s != 'mismatches']
         endogenous_outcomes_converted = convert_outcomes(endogenous_outcomes, destination_target_info, group.target_info)
 
@@ -86,6 +91,8 @@ def compare_pool_to_endogenous(pools, groups, destination_target_info=None, guid
         group_fs_with_means = pd.concat([group_fs, means], axis=1).sort_index(axis=1)
         group_fs_with_means.columns = [f'{group.batch} {group.group} ' + ' '.join(map(str, v)) for v in group_fs_with_means.columns.values]
 
+        baseline_column_names.append(f'{group.batch} {group.group} ' + ' '.join(map(str, group.baseline_condition)) + ' mean')
+
         all_fs.append(group_fs_with_means)
 
         all_outcomes |= set(endogenous_outcomes_converted)
@@ -98,7 +105,11 @@ def compare_pool_to_endogenous(pools, groups, destination_target_info=None, guid
 
     for pool in pools:
         all_outcomes |= set(pool.non_targeting_fractions.index.values)
-        all_fs[pool.group] = pool.non_targeting_fractions
+        df = pd.DataFrame(pool.non_targeting_fractions)
+        df.columns = [pool.group]
+        all_fs.append(df)
+
+        baseline_column_names.append(pool.group)
 
         if guide is not None:
             all_l2fcs[pool.group] = pool.log2_fold_changes[guide]
@@ -125,7 +136,7 @@ def compare_pool_to_endogenous(pools, groups, destination_target_info=None, guid
     for subcategory, row in genomic_insertion_collapsed.iterrows():
         fs_df.loc['genomic insertion', subcategory, 'collapsed'] = row
 
-    return fs_df, l2fcs_df
+    return fs_df, l2fcs_df, baseline_column_names
 
 def compare_cut_sites(groups):
     ''' '''

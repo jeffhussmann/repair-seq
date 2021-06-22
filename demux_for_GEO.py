@@ -1,4 +1,5 @@
 import argparse
+from collections import defaultdict
 import itertools
 import gzip
 
@@ -16,6 +17,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('base_dir', type=Path)
 parser.add_argument('batch')
 parser.add_argument('--has_UMIs', action='store_true')
+parser.add_argument('--debug', action='store_true')
 
 args = parser.parse_args()
 
@@ -33,16 +35,33 @@ systematic_name_fields = [
 systematic_names = set()
 
 if args.has_UMIs:
-    pool_details = pd.read_csv(batch_dir / 'pool_details.csv', dtype={'guide_library': str, 'replicate': str})
+    pool_details = pd.read_csv(batch_dir / 'pool_details.csv',
+                               dtype={'guide_library': str, 'replicate': str},
+                               index_col='pool_name',
+                              )
+    # Samples that had multiple indices are given as a semi-colon separated list.
+    pool_details['index'] = [s.split(';') for s in pool_details['index']]
+
+    # Report any sytematic_name_fields missing from any sample.
+    missing_fields = defaultdict(set)
+
     sample_sheet_fn = batch_dir / 'sample_sheet.yaml'
 
     systematic_name_to_index = {}
 
-    for _, row in pool_details.iterrows():
-        if not row[systematic_name_fields].isna().any():
+    for pool_name, row in pool_details.iterrows():
+        for name_field in systematic_name_fields:
+            if name_field not in row or pd.isna(row[name_field]):
+                missing_fields[pool_name].add(name_field)
+
+        if len(missing_fields[pool_name]) == 0:
             systematic_name = '_'.join(map(str, row[systematic_name_fields]))
             systematic_names.add(systematic_name)
             systematic_name_to_index[systematic_name] = row['index']
+        else:
+            print(f'Warning: {pool_name} is missing fields.')
+            for name_field in missing_fields[pool_name]:
+                print(f'\t{name_field}')
 
     sample_resolver = hits.utilities.get_one_mismatch_resolver(systematic_name_to_index).get
 
@@ -103,7 +122,10 @@ with ExitStack() as stack:
     for lane, lane_info in all_lane_info.items():
         fastq_fns = [batch_dir / (lane_info[which] + '.fastq.gz') for which in hits.fastq.quartet_order]
         quartets = hits.fastq.read_quartets(fastq_fns, standardize_names=True)
-        #quartets = itertools.islice(quartets, 100000)
+
+        # In debug mode, only process the first 1e5 reads.
+        if args.debug:
+            quartets = itertools.islice(quartets, 100000)
 
         for quartet in tqdm.tqdm(quartets, total=lane_info['num_reads']):
             sample = quartet_to_systematic_name(quartet)

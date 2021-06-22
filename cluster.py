@@ -71,6 +71,8 @@ class Clusterer:
             func = hierarchical
         elif method == 'HDBSCAN':
             func = HDBSCAN
+        elif method == 'precomputed':
+            func = process_precomputed
         else:
             raise ValueError(method)
 
@@ -199,7 +201,12 @@ class Clusterer:
                              figsize=(12, 12),
                              color_by='cluster',
                              label_genes=True,
+                             label_alpha=1,
                              legend_location='lower right',
+                             label_size=8,
+                             marker_size=None,
+                             circle_edge_width=0,
+                             gene_line_width=1,
                             ):
         fig, ax = plt.subplots(figsize=figsize)
 
@@ -208,7 +215,7 @@ class Clusterer:
         if color_by == 'cluster':
             pass
         elif color_by == 'gamma':
-            min_gamma = -0.2
+            min_gamma = -0.3
 
             values = self.guide_library.guides_df['gamma'].loc[data.index]
             cmap = ddr.visualize.gamma_cmap
@@ -228,8 +235,8 @@ class Clusterer:
                 x0 = ax_p.x0 + 0.65 * ax_p.width
                 y0 = ax_p.y0 + 0.25 * ax_p.height
             elif legend_location == 'upper right':
-                x0 = ax_p.x0 + 0.65 * ax_p.width
-                y0 = ax_p.y0 + 0.85 * ax_p.height
+                x0 = ax_p.x0 + 0.70 * ax_p.width
+                y0 = ax_p.y0 + 0.95 * ax_p.height
             else:
                 raise NotImplementedError
 
@@ -246,7 +253,8 @@ class Clusterer:
             colorbar.set_ticks(ticks)
             colorbar.set_ticklabels(tick_labels)
             colorbar.outline.set_alpha(0)
-            colorbar.set_label(f'gamma')
+            colorbar.set_label(f'gamma', size=6)
+            cax.tick_params(labelsize=6, width=0.5)
 
         elif color_by in self.guide_library.cell_cycle_log2_fold_changes.index:
             phase = color_by
@@ -272,8 +280,8 @@ class Clusterer:
                 x0 = ax_p.x0 + 0.65 * ax_p.width
                 y0 = ax_p.y0 + 0.25 * ax_p.height
             elif legend_location == 'upper right':
-                x0 = ax_p.x0 + 0.65 * ax_p.width
-                y0 = ax_p.y0 + 0.85 * ax_p.height
+                x0 = ax_p.x0 + 0.70 * ax_p.width
+                y0 = ax_p.y0 + 0.95 * ax_p.height
             else:
                 raise NotImplementedError
 
@@ -291,9 +299,11 @@ class Clusterer:
             colorbar.set_ticks(ticks)
             colorbar.set_ticklabels(tick_labels)
             colorbar.outline.set_alpha(0)
-            colorbar.set_label(f'log$_2$ fold change\nin {phase} occupancy')
+            colorbar.set_label(f'log$_2$ fold change\nin {phase} occupancy', size=6)
+            cax.tick_params(labelsize=6, width=0.5)
 
-        marker_size = figsize[0] * 100 / 12
+        if marker_size is None:
+            marker_size = figsize[0] * 100 / 12
 
         ax.scatter(x='x',
                    y='y',
@@ -301,11 +311,24 @@ class Clusterer:
                    data=data,
                    s=marker_size,
                    alpha=0.8,
-                   linewidths=(0,),
+                   edgecolors='black',
+                   linewidths=(circle_edge_width,),
                    #marker='s',
                   )
 
-        if label_genes:
+        if label_genes == 'all':
+            for guide, row in self.guide_embedding.iterrows():
+                ax.annotate(row['gene'],
+                            xy=(row['x'], row['y']),
+                            xytext=(2, 0),
+                            textcoords='offset points',
+                            ha='left',
+                            va='center',
+                            size=label_size,
+                            alpha=label_alpha,
+                        )
+
+        elif label_genes:
             for gene, rows in self.guide_embedding.groupby('gene', sort=False):
                 n_rows, _ = rows.shape
                 for first_index in range(n_rows):
@@ -314,7 +337,8 @@ class Clusterer:
                         second_row = rows.iloc[second_index]
                         xs = [first_row['x'], second_row['x']]
                         ys = [first_row['y'], second_row['y']]
-                        ax.plot(xs, ys, color='black', alpha=0.1)
+                        if gene_line_width > 0:
+                            ax.plot(xs, ys, linewidth=gene_line_width, color='black', alpha=0.1)
 
                 centroid = (rows['x'].mean(), rows['y'].mean())
 
@@ -329,7 +353,8 @@ class Clusterer:
                             textcoords='offset points',
                             ha='center',
                             va='center',
-                            size=8,
+                            size=label_size,
+                            alpha=label_alpha,
                         )
 
         x_min = data['x'].min()
@@ -343,7 +368,6 @@ class Clusterer:
         y_range = y_max - y_min
         buffer = 0.05 * y_range
         ax.set_ylim(y_min - buffer, y_max + buffer)
-
 
         ax.set_xticks([])
         ax.set_yticks([])
@@ -359,6 +383,8 @@ class Clusterer:
                                figsize=(6, 6),
                                draw_legend=True,
                                legend_location='upper left',
+                               legend_text_size=12,
+                               marker='o',
                               ):
 
         if ax is None:
@@ -376,6 +402,7 @@ class Clusterer:
             linewidths=(0,),
             clip_on=False,
             color='color',
+            marker=marker,
         )
 
         needs_categorical_legend = False
@@ -389,7 +416,8 @@ class Clusterer:
 
         elif color_by == 'cluster':
             # To prevent privileging specific clusters, don't
-            # sort by cluster assignemnt.
+            # sort by cluster assignment, but do plot assigned
+            # points after unasigned ones.
             ax.scatter(data=data.query('cluster_assignment == -1'),
                        **common_kwargs,
                       )
@@ -403,9 +431,14 @@ class Clusterer:
                 colors, value_to_color = self.sgRNA_colors()
                 data['color'] = colors
 
+                # Shuffle to randomize z-order.
+                data = data.sample(frac=1)
+
                 needs_categorical_legend = True
 
             elif color_by == 'category':
+                effector = self.target_info.effector.name
+
                 categories = data.index.get_level_values('category')
 
                 combined_categories = []
@@ -419,53 +452,16 @@ class Clusterer:
                     combined_categories.append(combined_category)
 
                 combined_categories = pd.Series(combined_categories, index=data.index)
+                categories_aliased = combined_categories.map(ddr.visualize.category_aliases[effector])
 
-                palette = bokeh.palettes.Dark2[8]
-                colors, value_to_color = hits.visualize.assign_categorical_colors(combined_categories, palette)
+                value_to_color = ddr.visualize.category_alias_colors[effector]
+                colors = categories_aliased.map(value_to_color)
+
                 data['color'] = colors
-                data['sort_by'] = combined_categories
+                data['sort_by'] = categories_aliased
 
                 # Force insertions to be drawn on top.
                 data = data.sort_values(by='sort_by', key=lambda s: s == 'insertion')
-
-                needs_categorical_legend = True
-
-            elif color_by == 'Cpf1 category':
-                combined_categories = []
-
-                for pn, category, subcategory, details in data.index.values:
-                    if category != 'deletion':
-                        combined_category = category
-                    else:
-                        outcome = knock_knock.outcome.DeletionOutcome.from_string(details).undo_anchor_shift(self.pool.target_info.anchor)
-                        start = min(outcome.deletion.starts_ats)
-                        end = max(outcome.deletion.ends_ats)
-                        first_nick, second_nick = sorted(self.pool.target_info.cut_afters.values())
-                        # Empirical adjustment for apparent nick locations for this protospacer.
-                        first_nick += 2 
-                        second_nick += 2
-                        includes_first_nick = start - 0.5 <= first_nick + 0.5 <= end + 0.5
-                        includes_second_nick = start - 0.5 <= second_nick + 0.5 <= end + 0.5
-
-                        if not includes_first_nick and not includes_second_nick:
-                            includes = 'spans neither'
-                        elif includes_first_nick and not includes_second_nick:
-                            includes = 'spans PAM-distal nick'
-                        elif not includes_first_nick and includes_second_nick:
-                            includes = 'spans PAM-proximal nick'
-                        else:
-                            includes = 'spans both nicks'
-
-                        combined_category = f'deletion, {includes}'
-
-                    combined_categories.append(combined_category)
-
-                combined_categories = pd.Series(combined_categories, index=data.index)
-
-                palette = bokeh.palettes.Dark2[8]
-                colors, value_to_color = hits.visualize.assign_categorical_colors(combined_categories, palette)
-                data['color'] = colors
-                data['sort_by'] = combined_categories
 
                 needs_categorical_legend = True
 
@@ -473,8 +469,7 @@ class Clusterer:
                 if color_by == 'MH length':
                     min_length = 0
                     max_length = 3
-                    cmap = copy.copy(plt.get_cmap('Greens'))
-                    cmap = copy.copy(sns.color_palette('viridis_r', as_cmap=True))
+                    cmap = copy.copy(plt.get_cmap('viridis_r'))
                     tick_step = 1
                     label = 'nts of flanking\nmicrohomology'
                     data_query = 'category == "deletion"'
@@ -497,14 +492,22 @@ class Clusterer:
                     max_length = -1
                     cmap = copy.copy(plt.get_cmap('YlOrBr'))
                     tick_step = 1
-                    label = 'log$_{10}$ baseline fraction\nof outcomes\nwithin screen'
+                    label = 'log$_{10}$ baseline\nfraction\nof outcomes\nwithin screen'
                     data_query = None
                 else:
                     raise ValueError(color_by)
 
-                cmap.set_under('white')
-                norm = matplotlib.colors.Normalize(vmin=min_length, vmax=max_length)
-                sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+                if color_by == 'MH length':
+                    norm = matplotlib.colors.Normalize(vmin=min_length, vmax=max_length)
+                    sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+                    colors = sm.to_rgba(np.arange(min_length, max_length + 1))
+                    cmap = matplotlib.colors.ListedColormap(colors)
+                    norm = matplotlib.colors.BoundaryNorm(np.arange(-0.5, max_length + 1), cmap.N) 
+                    sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+                else:
+                    cmap.set_under('white')
+                    norm = matplotlib.colors.Normalize(vmin=min_length, vmax=max_length)
+                    sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
 
                 vs = self.outcome_embedding[color_by]
 
@@ -546,6 +549,8 @@ class Clusterer:
                 colorbar.set_ticklabels(tick_labels)
                 colorbar.outline.set_alpha(0)
 
+                cax.tick_params(labelsize=6, width=0.5, length=2)
+
                 cax.annotate(label,
                              xy=(0, 0.5),
                              xycoords='axes fraction',
@@ -553,7 +558,7 @@ class Clusterer:
                              textcoords='offset points',
                              va='center',
                              ha='right',
-                             size=12,
+                             size=legend_text_size,
                             )
 
             else:
@@ -589,7 +594,7 @@ class Clusterer:
                     x0 = ax_p.x0 + 0.6 * ax_p.width
 
                 if 'upper' in  legend_location:
-                    y0 = ax_p.y0 + 0.65 * ax_p.height
+                    y0 = ax_p.y0 + 0.75 * ax_p.height
                 elif 'middle' in legend_location:
                     y0 = ax_p.y0 + 0.5 * ax_p.height - 0.125 * ax_p.height
                 elif 'lower' in legend_location or 'bottom' in legend_location:
@@ -608,15 +613,17 @@ class Clusterer:
                 colorbar.set_ticks(ticks)
                 colorbar.set_ticklabels(tick_labels)
                 colorbar.outline.set_alpha(0)
-                colorbar.set_label('log$_2$ fold change')
+                colorbar.set_label('log$_2$\nfold-change', size=legend_text_size)
+                cax.tick_params(labelsize=6, width=0.5, length=2)
+
                 cax.annotate(guide,
                              xy=(0.5, 1),
                              xycoords='axes fraction',
-                             xytext=(0, 10),
+                             xytext=(0, legend_text_size / 2),
                              textcoords='offset points',
                              va='bottom',
                              ha='center',
-                             size=16,
+                             size=legend_text_size,
                              color=self.guide_embedding['color'].get(guide, 'black')
                             )
 
@@ -645,7 +652,7 @@ class Clusterer:
         ax.set_yticks([])
 
         if draw_legend and needs_categorical_legend:
-            hits.visualize.draw_categorical_legend(value_to_color, ax, font_size=14, legend_location=legend_location)
+            hits.visualize.draw_categorical_legend(value_to_color, ax, font_size=legend_text_size, legend_location=legend_location)
 
         plt.setp(fig.axes[0].spines.values(), alpha=0.5)
 
@@ -792,6 +799,42 @@ def HDBSCAN(l2fcs,
         'original_order': labels,
 
         'clusterer': clusterer,
+    }
+
+    return results
+
+def process_precomputed(l2fcs,
+                        axis,
+                        metric='cosine',
+                        **fcluster_kwargs,
+                ):
+
+    if axis == 'guides':
+        to_cluster = l2fcs.T
+    elif axis == 'outcomes':
+        to_cluster = l2fcs
+    else:
+        raise ValueError(axis)
+
+    if axis == 'guides':
+        l2fcs_reordered = l2fcs
+    elif axis == 'outcomes':
+        l2fcs_reordered = l2fcs.T
+
+    labels = list(to_cluster.index.values)
+
+    if metric == 'correlation':
+        similarities = l2fcs_reordered.corr()
+    elif metric == 'cosine':
+        similarities = sklearn.metrics.pairwise.cosine_similarity(l2fcs_reordered.T)
+    elif metric == 'euclidean':
+        similarities = 1 / (1 + ssd.squareform(ssd.pdist(l2fcs_reordered.T)))
+    else:
+        similarities = None
+
+    results = {
+        'clustered_order': labels,
+        'similarities': similarities,
     }
 
     return results
@@ -1041,18 +1084,19 @@ def get_cluster_genes(results, guide_to_gene):
     return cluster_genes
 
 def assign_palette(results, axis):
-    num_clusters = len(set(results['cluster_assignments']))
+    if 'cluster_assignments' in results:
+        num_clusters = len(set(results['cluster_assignments']))
 
-    if axis == 'guides':
-        palette = sns.husl_palette(num_clusters)
-    elif axis == 'outcomes':
-        palette = sns.color_palette('muted', n_colors=num_clusters)
-    else:
-        raise ValueError(axis)
+        if axis == 'guides':
+            palette = sns.husl_palette(num_clusters)
+        elif axis == 'outcomes':
+            palette = sns.color_palette('muted', n_colors=num_clusters)
+        else:
+            raise ValueError(axis)
 
-    results['palette'] = palette
-    grey = matplotlib.colors.to_rgb('silver')
-    cluster_colors = {i: palette[i] for i in range(num_clusters)}
-    results['cluster_colors'] = cluster_colors
+        results['palette'] = palette
+        grey = matplotlib.colors.to_rgb('silver')
+        cluster_colors = {i: palette[i] for i in range(num_clusters)}
+        results['cluster_colors'] = cluster_colors
 
-    results['colors'] = {key: cluster_colors.get(i, grey) for key, i in zip(results['clustered_order'], results['cluster_assignments'])}
+        results['colors'] = {key: cluster_colors.get(i, grey) for key, i in zip(results['clustered_order'], results['cluster_assignments'])}

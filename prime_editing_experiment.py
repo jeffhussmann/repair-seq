@@ -1,16 +1,13 @@
 import shutil
-import itertools
 import gzip
 from collections import defaultdict, Counter
 
-import pysam
-import pandas as pd
 import h5py
 import numpy as np
 
 import hits.visualize
 from hits import fastq, utilities, adapters
-from knock_knock import experiment, visualize, svg
+from knock_knock import experiment, svg
 from ddr import prime_editing_layout, pooled_layout
 
 from hits.utilities import memoized_property
