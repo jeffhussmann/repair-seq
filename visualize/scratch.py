@@ -1,4 +1,3 @@
-import itertools
 from collections import defaultdict
 
 import pandas as pd
@@ -171,7 +170,6 @@ def compare_fraction_removed(numerator_pool,
 
     return fig
 
-
 def make_color_column(guide_to_gene, genes, full_gene_list=None, default_color='silver'):
     if full_gene_list is None:
         full_gene_list = genes
@@ -213,14 +211,20 @@ def scatter_and_pc(pool,
                    gene_to_color=None,
                    guides_to_highlight=None,
                    manual_labels=None,
+                   plot_genes=False,
+                   scatter_genes_to_label=None,
+                   **kwargs,
                   ):
 
     if manual_labels is None:
         manual_labels = []
 
     data = results['full_df'].xs('log2_fold_change', axis=1, level=1).copy()
-    if column_order is not None:
-        data = data[column_order]
+
+    if column_order is None:
+        column_order = data.columns.values
+
+    data = data[column_order]
     best_promoter = pool.variable_guide_library.guides_df['best_promoter']
     guide_to_gene = results['full_df']['gene']
         
@@ -230,43 +234,70 @@ def scatter_and_pc(pool,
     if gene_to_color is None and guide_to_color is None:
         guide_to_color, gene_to_color = make_color_column(guide_to_gene, genes_to_label, full_gene_list=full_gene_list)
 
-    fig, pc_ax = plt.subplots(figsize=(0.75 * len(data.columns), 6))
+    pc_width = kwargs.get('pc_width_per_column', 0.75) * len(column_order)
+    fig, pc_ax = plt.subplots(figsize=(pc_width, kwargs.get('pc_height')))
     
-    #parallel_coordinates(data, pc_ax,
-    #                     guides_to_label,
-    #                     guide_to_gene,
-    #                     guide_to_color,
-    #                     lims=lims,
-    #                     text_labels=['right'],
-    #                     pn_to_name=pn_to_name,
-    #                     #legend=legend,
-    #                    )
+    if plot_genes:
+        gene_data = results['genes_df'][column_order]
 
-    parallel_coordinates_genes(results['genes_df'], pc_ax,
-                               gene_to_color,
-                               genes_to_label,
-                               lims=lims,
-                               text_labels=['right'],
-                               pn_to_name=pn_to_name,
-                               legend=legend,
-                              )
+        parallel_coordinates_genes(gene_data,
+                                pc_ax,
+                                gene_to_color,
+                                genes_to_label,
+                                lims=lims,
+                                text_labels=['right'],
+                                pn_to_name=pn_to_name,
+                                legend=legend,
+                                )
+    else:
+        parallel_coordinates(data, pc_ax,
+                             guides_to_label,
+                             guide_to_gene,
+                             guide_to_color,
+                             lims=lims,
+                             text_labels=['right'],
+                             pn_to_name=pn_to_name,
+                             #legend=legend,
+                            )
 
     pc_ax_p = pc_ax.get_position()
     fig_width, fig_height = fig.get_size_inches()
     scatter_height = pc_ax_p.height
     scatter_width = fig_height / fig_width * scatter_height
-    scatter_ax = fig.add_axes((pc_ax_p.x1 + 2 / fig_width, pc_ax_p.y0, scatter_width, scatter_height), sharey=pc_ax) 
+    scatter_ax = fig.add_axes((pc_ax_p.x1 + 0.3 * pc_ax_p.width,
+                               pc_ax_p.y0,
+                               scatter_width,
+                               scatter_height,
+                              ),
+                              sharey=pc_ax,
+                             ) 
 
-    scatter(data, scatter_ax,
-            x_column,
-            y_column,
-            guides_to_highlight,
-            guide_to_color,
-            avoid_overlapping_labels=avoid_overlapping_labels,
-            lims=lims,
-            pn_to_name=pn_to_name,
-            draw_labels=draw_labels,
-           )
+    if plot_genes:
+        if scatter_genes_to_label is None:
+            scatter_genes_to_label = genes_to_label
+
+        scatter_genes(gene_data,
+                scatter_ax,
+                x_column,
+                y_column,
+                scatter_genes_to_label,
+                gene_to_color,
+                avoid_overlapping_labels=avoid_overlapping_labels,
+                lims=lims,
+                pn_to_name=pn_to_name,
+                draw_labels=draw_labels,
+            )
+    else:
+        scatter(data, scatter_ax,
+                x_column,
+                y_column,
+                guides_to_highlight,
+                guide_to_color,
+                avoid_overlapping_labels=avoid_overlapping_labels,
+                lims=lims,
+                pn_to_name=pn_to_name,
+                draw_labels=draw_labels,
+            )
 
     for label, color, xy in manual_labels:
         scatter_ax.annotate(label,
@@ -284,7 +315,7 @@ def scatter_and_pc(pool,
 
     def draw_path(points, transforms):
         xs, ys = np.array([t.transform_point(p) for t, p in zip(transforms, points)]).T
-        pc_ax.plot(xs, ys, transform=fig_transform, clip_on=False, color='black')
+        pc_ax.plot(xs, ys, linewidth=0.5, transform=fig_transform, clip_on=False, color='black')
 
     def draw_bracket(x):
         draw_path([(x - 0.1, -bracket_offset + bracket_height),
@@ -360,8 +391,8 @@ def scatter(data, ax, x_column, y_column,
         x_label = x_column
         y_label = y_column
 
-    ax.set_xlabel(x_label + '\nlog2 fold change', size=12)
-    ax.set_ylabel(y_label + '\nlog2 fold change', size=12)
+    ax.set_xlabel(x_label + '\nlog$_2$ fold change', size=12)
+    ax.set_ylabel(y_label + '\nlog$_2$ fold change', size=12)
     
     if draw_labels:
         ax.annotate('non-targeting guides',
@@ -379,6 +410,78 @@ def scatter(data, ax, x_column, y_column,
                                         data=to_plot.loc[guides_to_highlight],
                                         text_kwargs={'size': 10},
                                         initial_distance=20,
+                                        color='color',
+                                        avoid=avoid_overlapping_labels,
+                                        avoid_existing=avoid_overlapping_labels,
+                                        )
+
+def scatter_genes(data, ax, x_column, y_column,
+                  genes_to_highlight,
+                  gene_to_color, 
+                  lims=(-4, 2),
+                  avoid_overlapping_labels=True,
+                  pn_to_name=None,
+                  draw_labels=True,
+                 ):
+
+    data = data.copy()
+    data.index.name = 'gene'
+
+    data['color'] = [gene_to_color.get(gene, 'grey') for gene in data.index]
+
+    data.loc[data.index.str.startswith('non-targeting'), 'color'] = 'black'
+
+    common_kwargs = dict(x=x_column,
+                         y=y_column,
+                         c='color',
+                         linewidths=(0,),
+                        )
+
+    to_plot = data[[x_column, y_column, 'color']].dropna()
+    
+    ax.scatter(data=to_plot.loc[to_plot.index.difference(genes_to_highlight)], s=10, alpha=0.5, **common_kwargs)
+    ax.scatter(data=to_plot.loc[genes_to_highlight], alpha=0.95, s=15, zorder=10, **common_kwargs)
+
+    ax.axhline(0, color='black', alpha=0.3)
+    ax.axvline(0, color='black', alpha=0.3)
+    
+    ax.set_xlim(*lims)
+    ax.set_ylim(*lims)
+    ax.set_aspect('equal') 
+
+    ticks = np.arange(int(np.ceil(lims[0])), int(np.floor(lims[1])) + 1)
+    ax.set_xticks(ticks)
+    ax.set_yticks(ticks)
+    ax.tick_params(labelsize=6)
+    
+    hits.visualize.draw_diagonal(ax, alpha=0.3)
+    
+    if pn_to_name is not None:
+        x_label = pn_to_name[x_column.rsplit('_', 1)[0]]
+        y_label = pn_to_name[y_column.rsplit('_', 1)[0]]
+    else:
+        x_label = x_column
+        y_label = y_column
+
+    ax.set_xlabel(x_label + '\nlog$_2$ fold change', size=6)
+    ax.set_ylabel(y_label + '\nlog$_2$ fold change', size=6)
+    
+    if draw_labels:
+        ax.annotate('non-targeting\nguide sets',
+                    xy=(0, 0),
+                    xycoords='data',
+                    xytext=(-20, 10),
+                    textcoords='offset points',
+                    ha='right',
+                    va='bottom',
+                    color='black',
+                    size=6,
+                )
+
+        hits.visualize.label_scatter_plot(ax, x_column, y_column, 'gene',
+                                        data=to_plot.loc[genes_to_highlight],
+                                        text_kwargs={'size': 6},
+                                        initial_distance=5,
                                         color='color',
                                         avoid=avoid_overlapping_labels,
                                         avoid_existing=avoid_overlapping_labels,
@@ -551,16 +654,16 @@ def parallel_coordinates_genes(data,
     non_targeting_sets = [g for g in data.index if g.startswith('non-targeting_set')]
     for non_targeting_set in non_targeting_sets:     
         gene_to_kwargs[non_targeting_set] = dict(color='black',
-                                        alpha=0.5,
-                                        linewidth=1,
-                                        )
+                                                 alpha=0.5,
+                                                 linewidth=1,
+                                                )
 
     for gene in genes_to_label:
         gene_to_kwargs[gene] = dict(color=gene_to_color.get(gene, 'tab:blue'),
                                     marker='.',
-                                    markersize=12,
+                                    markersize=6,
                                     alpha=0.8,
-                                    linewidth=3.5,
+                                    linewidth=1.5,
                                     label=gene,
                                     clip_on=False,
                                    )
@@ -584,7 +687,7 @@ def parallel_coordinates_genes(data,
                         color=kwargs['color'],
                         ha='left',
                         va='center',
-                        size=12,
+                        size=6,
             )
         
     if legend:
@@ -592,7 +695,7 @@ def parallel_coordinates_genes(data,
                 loc='upper right',
                 )
         
-    ax.set_ylabel('log2 fold-change from non-targeting\n(average of 2 most active guides)', size=12)
+    ax.set_ylabel('log$_2$ fold-change from non-targeting\n(average of 2 most active guides)', size=6)
 
     ax.set_xticks(np.arange(len(data.columns)))
     labels = []
@@ -600,10 +703,14 @@ def parallel_coordinates_genes(data,
         pn, outcome = n.rsplit('_', 1)
         label = f'{pn_to_name[pn]} {outcome}'
         labels.append(label)
-    ax.set_xticklabels(labels, rotation=45, ha='left')
-    ax.tick_params(labelbottom=False, labeltop=True)
+
+    ax.set_xticklabels(labels, rotation=45, ha='left', size=6)
+    ax.tick_params(labelbottom=False, labeltop=True, labelsize=6)
 
     ax.set_ylim(*lims)
+
+    for y in np.arange(-3, 2):
+        ax.axhline(y, color='black', alpha=0.2, linewidth=0.5)
 
     all_axs = [ax]
     for x in range(1, len(data.columns)):
@@ -620,19 +727,16 @@ def parallel_coordinates_genes(data,
         for side in ['right', 'top', 'bottom']:
             ax.spines[side].set_visible(False)
         ax.tick_params(axis='x', length=0)
+        ax.tick_params(axis='y', length=0)
 
 def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_labels=True):
     ax.set_autoscale_on(False)
     ax.set_xticklabels([])
 
-    sgRNA_colors = bokeh.palettes.Colorblind8[3::2]
-
-    sgRNAs = [
-        'sgRNA-5',
-        'sgRNA-3',
-    ]
-
-    sgRNA_to_color = dict(zip(sgRNAs, sgRNA_colors))
+    sgRNA_to_target_name = {
+        'sgRNA-5': '1',
+        'sgRNA-3': '2',
+    }
         
     label_y = 1.20
     donor_y = 1.14
@@ -652,9 +756,13 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
         _, _, is_reverse_complement = ti.best_donor_target_alignment
             
         if 'sODN' in pn:
-            donor_color = 'black'
-        else:
-            donor_color = 'red'
+            donor_color = bokeh.palettes.Set2[8][3]
+        elif 'all-SNVs' in pn:
+            donor_color = bokeh.palettes.Set2[8][0]
+        elif 'first-half' in pn:
+            donor_color = bokeh.palettes.Set2[8][1]
+        elif 'second-half' in pn:
+            donor_color = bokeh.palettes.Set2[8][2]
         
         double_stranded = 'dsODN' in pn
         
@@ -689,22 +797,25 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
                         ha='left',
                         va='bottom',
                         rotation=45,
+                        size=6,
                     )
         
-        ax.annotate(pools[pn].target_info.sgRNA,
+        ax.annotate(sgRNA_to_target_name[ti.sgRNA],
                     xy=(x, sgRNA_y),
                     xycoords=('data', 'axes fraction'),
                     ha='center',
                     va='center',
-                    color=sgRNA_to_color[pools[pn].target_info.sgRNA],
+                    color=ti.PAM_color,
+                    size=6,
                 )
             
     common_kwargs = dict(
         xycoords='axes fraction',
-        xytext=(-30, 0),
+        xytext=(-10, 0),
         textcoords='offset points',
         ha='right',
         va='center',
+        size=6,
     )
 
     ax.annotate('donor:',
@@ -712,7 +823,7 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
                 **common_kwargs,
             )
 
-    ax.annotate('cutting sgRNA:',
+    ax.annotate('Cas9 target site:',
                 xy=(0, sgRNA_y),
                 **common_kwargs,
             )
@@ -933,7 +1044,6 @@ def deletion_heatmap(pool, buffer, groups, grids, guide=None, log2_fold_change=F
     #ax.plot([right_offset_to_x(0.5), right_offset_to_x(0.5)], [0, 1], linestyle='--', color='black', transform=t, clip_on=False)
     
     return fig
-
 
 def sorted_by_significance(pool, outcomes,
                            top_n_guides=None,

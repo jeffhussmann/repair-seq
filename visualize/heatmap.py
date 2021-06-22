@@ -1531,6 +1531,9 @@ def arrayed_group_categories(group,
                              log2_fc_xlims=None,
                              manual_colors=None,
                              label_aliases=None,
+                             grid=None,
+                             plot_kwargs=None,
+                             inches_per_outcome=0.3,
                             ):
     outcome_order = group.categories_by_baseline_frequency
     if manual_outcome_order is not None:
@@ -1541,23 +1544,32 @@ def arrayed_group_categories(group,
 
     if manual_colors is None:
         manual_colors = {}
-        
-    grid = ddr.visualize.outcome_diagrams.DiagramGrid(outcome_order,
-                                                      group.target_info,
-                                                      title=group.group,
-                                                      window=(-10, 10),
-                                                      draw_all_sequence=False,
-                                                      label_aliases=label_aliases,
-                                                     )
 
-    if 'freq' in panels_to_show:
-        grid.add_ax('freq', width_multiple=7, gap_multiple=1, title='percentage of reads\n(linear scale)')
-    if 'log10_freq' in panels_to_show:
-        grid.add_ax('log10_freq', width_multiple=7, gap_multiple=1, title='percentage of reads\n(log scale)')
-    if 'diff' in panels_to_show:
-        grid.add_ax('diff', width_multiple=7, gap_multiple=1, title=f'percentage change\nfrom baseline')
-    if 'log2_fc' in panels_to_show:
-        grid.add_ax('log2_fc', width_multiple=7, gap_multiple=1, title=f'log2 fold-change\nfrom baseline')
+    if plot_kwargs is None:
+        plot_kwargs = {}
+    
+    if grid is None:
+        grid_requires_styling = True
+        grid = ddr.visualize.outcome_diagrams.DiagramGrid(outcome_order,
+                                                        group.target_info,
+                                                        title=group.group,
+                                                        window=(-10, 10),
+                                                        draw_all_sequence=False,
+                                                        label_aliases=label_aliases,
+                                                        inches_per_outcome=inches_per_outcome,
+                                                        label_size=6,
+                                                       )
+
+        if 'freq' in panels_to_show:
+            grid.add_ax('freq', width_multiple=7, gap_multiple=1, title='percentage of reads\n(linear scale)', title_size=8)
+        if 'log10_freq' in panels_to_show:
+            grid.add_ax('log10_freq', width_multiple=7, gap_multiple=1, title='percentage of reads\n(log scale)', title_size=8)
+        if 'diff' in panels_to_show:
+            grid.add_ax('diff', width_multiple=7, gap_multiple=1, title=f'percentage change\nfrom baseline', title_size=8)
+        if 'log2_fc' in panels_to_show:
+            grid.add_ax('log2_fc', width_multiple=7, gap_multiple=1, title=f'log$_2$ fold change\nfrom baseline', title_size=8)
+    else:
+        grid_requires_styling = False
 
     if condition_order is None:
         condition_order = group.conditions
@@ -1581,6 +1593,7 @@ def arrayed_group_categories(group,
             color = f'C{i}'
 
         common_kwargs = dict(marker='o', color=color, markersize=3, y_offset=0.05 * i)
+        common_kwargs.update(**plot_kwargs)
         grid.plot_on_ax('freq', means, interval_sources=interval_sources, transform=percentage, **common_kwargs)
         grid.plot_on_ax('log10_freq', means, interval_sources=interval_sources, transform=np.log10, **common_kwargs)
         
@@ -1619,14 +1632,15 @@ def arrayed_group_categories(group,
         
     #grid.axs_by_name['freq'].legend(bbox_to_anchor=(0.5, 1), loc='lower center')
 
-    grid.set_xlim('freq', freq_xlims)
-    grid.set_xlim('log10_freq', log10_freq_xlims)
-    grid.set_xlim('log2_fc', log2_fc_xlims)
-    grid.set_xlim('log10_freq', log10_freq_xlims)
-    grid.style_log10_frequency_ax('log10_freq')
-    grid.style_fold_change_ax('log2_fc')
+    if grid_requires_styling:
+        grid.set_xlim('freq', freq_xlims)
+        grid.set_xlim('log10_freq', log10_freq_xlims)
+        grid.set_xlim('log2_fc', log2_fc_xlims)
+        grid.set_xlim('log10_freq', log10_freq_xlims)
+        grid.style_log10_frequency_ax('log10_freq', label_size=6)
+        grid.style_fold_change_ax('log2_fc', label_size=6)
 
-    return grid.fig
+    return grid
 
 def pooled_screen_categories(pool,
                              genes,
@@ -1696,8 +1710,9 @@ def pooled_screen_categories(pool,
                                                       window=(-10, 10),
                                                       draw_all_sequence=False,
                                                       label_aliases=label_aliases,
-                                                      inches_per_outcome=0.3,
+                                                      inches_per_outcome=kwargs.get('inches_per_outcome', 0.3),
                                                       outcome_ax_width=1,
+                                                      label_size=kwargs.get('label_size', 8),
                                                      )
 
     ax_kwargs = dict(
@@ -1768,6 +1783,7 @@ def pooled_screen_categories(pool,
             line_alpha=0.4,
             clip_on=False,
             zorder=5,
+            interval_alpha=0.3,
         )
 
         if gene in genes_to_plot:
@@ -1856,7 +1872,7 @@ def pooled_screen_categories(pool,
                         ha='right',
                         va='top',
                         color=color,
-                        size=8,
+                        size=kwargs.get('guide_label_size', 8),
             )
 
     elif ax_to_label == 'freq':
@@ -1869,7 +1885,7 @@ def pooled_screen_categories(pool,
                         ha='right',
                         va='bottom',
                         color=color,
-                        size=8,
+                        size=kwargs.get('guide_label_size', 8),
             )
 
     else:
@@ -1882,7 +1898,7 @@ def pooled_screen_categories(pool,
                         ha='right',
                         va='top',
                         color=color,
-                        size=8,
+                        size=kwargs.get('guide_label_size', 8),
             )
 
     return grid

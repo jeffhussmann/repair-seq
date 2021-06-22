@@ -1,7 +1,5 @@
-import copy
 from collections import defaultdict
 
-import bokeh.palettes
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
@@ -29,6 +27,9 @@ class Clustermap:
         '''
         options.setdefault('upside_down', False)
         options.setdefault('draw_outcome_clusters', False)
+        options.setdefault('draw_guide_clusters', True)
+        options.setdefault('draw_outcome_similarities', True)
+        options.setdefault('draw_guide_similarities', True)
         options.setdefault('guide_library', None)
         options.setdefault('diagram_kwargs', {})
         options.setdefault('gene_text_size', 14)
@@ -80,11 +81,15 @@ class Clustermap:
 
         self.draw_fold_changes()
 
-        self.draw_outcome_similarities()
-        self.draw_guide_similarities()
+        if self.options['draw_outcome_similarities']:
+            self.draw_outcome_similarities()
 
-        self.draw_guide_clusters()
-        self.annotate_guide_clusters()
+        if self.options['draw_guide_similarities']:
+            self.draw_guide_similarities()
+
+        if self.options['draw_guide_clusters']:
+            self.draw_guide_clusters()
+            self.annotate_guide_clusters()
 
         if self.options['draw_outcome_clusters']:
             self.draw_outcome_clusters()
@@ -133,12 +138,9 @@ class Clustermap:
         # See TODO comment in fold changes on reversing here.
 
         outcomes = self.clusterer.clustered_outcomes[::-1]
-        if len(outcomes[0]) == 4:
-            # outcomes include pool names:
-            outcomes = [(c, s, d) for pn, c, s, d in outcomes]
 
         ddr.visualize.outcome_diagrams.plot(outcomes,
-                                            self.clusterer.target_info,
+                                            self.clusterer.pn_to_target_info,
                                             ax=ax,
                                             **self.options['diagram_kwargs'],
                                            )
@@ -420,19 +422,16 @@ class Clustermap:
         self.y0['outcome categories'] = diagrams_position.y0
 
         self.height_inches['outcome categories'] = self.height_inches['fold changes']
-        self.width_inches['outcome categories'] = self.inches_per_guide * 5
+        self.width_inches['outcome categories'] = self.inches_per_guide * 2
 
         ax = self.add_axes('outcome categories')
 
         full_categories = defaultdict(list)
 
         outcomes = self.clusterer.clustered_outcomes[::-1]
-        if len(outcomes[0]) == 4:
-            # outcomes include pool names:
-            outcomes = [(c, s, d) for pn, c, s, d in outcomes]
 
-        for c, s, d in outcomes:
-            ti = self.clusterer.target_info
+        for pn, c, s, d in outcomes:
+            ti = self.clusterer.pn_to_target_info[pn]
             if c == 'deletion':
                 deletion = knock_knock.outcome.DeletionOutcome.from_string(d).undo_anchor_shift(ti.anchor)
                 directionality = deletion.classify_directionality(ti)
@@ -440,48 +439,41 @@ class Clustermap:
             else:
                 full_category = c
                 
-            full_categories[full_category].append((c, s, d))
-
-        cat_color_order = [
-            'SD-MMEJ',
-            'deletion, PAM-distal',
-            'deletion, PAM-proximal',
-            'deletion, ambiguous',
-            'deletion, bidirectional',
-            'genomic insertion',
-            'insertion',
-            'wild type',
-        ]
-
-        palette = bokeh.palettes.Dark2[8]
-        colors = dict(zip(cat_color_order, palette))
-
-        category_aliases = {
-            'wild type': 'unedited',
-            'deletion, PAM-distal': 'deletion on PAM-distal side',
-            'deletion, bidirectional': 'bidirectional deletion',
-            'deletion, PAM-proximal': 'deletion on PAM-proximal side',
-            'SD-MMEJ': 'insertion and deletion',
-        }
-
-        cat_display_order = [
-            'wild type',
-            'insertion',
-            'deletion, bidirectional',
-            'deletion, PAM-distal',
-            'deletion, PAM-proximal',
-            'deletion, ambiguous',
-            'SD-MMEJ',
-        ]
+            full_categories[full_category].append((pn, c, s, d))
 
         x = 0
-        for cat in cat_display_order:
+
+        effector = self.clusterer.target_info.effector.name
+        category_display_order = ddr.visualize.category_display_order[effector]
+        category_colors = ddr.visualize.category_colors[effector]
+
+        for cat in category_display_order:
             cat_outcomes = full_categories[cat]
             if len(cat_outcomes) > 0:
-                indices = [len(outcomes) - 1 - outcomes.index(outcome) for outcome in cat_outcomes]
+                indices = sorted([len(outcomes) - 1 - outcomes.index(outcome) for outcome in cat_outcomes])
+                connected_blocks = []
+                current_block_start = indices[0]
+                current_idx = indices[0]
 
-                for idx in indices:
-                    ax.plot([x, x], [idx - 0.3, idx + 0.3], linewidth=5, color=colors[cat], clip_on=False)
+                for next_idx in indices[1:]:
+                    if next_idx - current_idx > 1:
+                        block = (current_block_start, current_idx)
+                        connected_blocks.append(block)
+                        current_block_start = next_idx
+                        
+                    current_idx = next_idx
+
+                # Close off last block
+                block = (current_block_start, current_idx)
+                connected_blocks.append(block) 
+
+                for first, last in connected_blocks:
+                    ax.plot([x, x], [first - 0.4, last + 0.4],
+                            linewidth=6,
+                            color=category_colors[cat],
+                            clip_on=False,
+                            solid_capstyle='butt',
+                           )
 
                 x -= 1
 

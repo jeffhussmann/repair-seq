@@ -71,6 +71,8 @@ def genes(pool=None,
           min_x=None,
           label_size=10,
           marker_size=30,
+          initial_label_distance=5,
+          label_distance_increment=10,
          ):
 
     if genes_df is None:
@@ -111,9 +113,9 @@ def genes(pool=None,
     for gene in genes_df.index:
         if gene not in gene_to_color:
             if gene in genes_to_label:
-                gene_to_color[gene] = 'slategrey'
+                gene_to_color[gene] = 'darkgray'
             else:
-                gene_to_color[gene] = hits.visualize.apply_alpha('silver', 0.5)
+                gene_to_color[gene] = hits.visualize.apply_alpha('silver', 0.85)
 
     data = genes_df.xs('relevant', axis=1, level=1).copy()
 
@@ -146,14 +148,14 @@ def genes(pool=None,
     hits.visualize.label_scatter_plot(ax, x_column, y_column, 'gene',
                                       data=data.loc[genes_to_label],
                                       text_kwargs={'size': label_size},
-                                      initial_distance=5,
-                                      distance_increment=10,
+                                      initial_distance=initial_label_distance,
+                                      distance_increment=label_distance_increment,
                                       color='color' if color_labels else 'black',
                                       avoid=True,
                                       vector='above',
                                      )
 
-    ax.axvline(0, color='black', alpha=0.5)
+    ax.axvline(0, color='black', alpha=0.4, linewidth=0.5)
 
     ax.set_xlabel('log2 fold-change from non-targeting\n(average of top 2 guides)', size=label_size)
     ax.set_ylabel('-log10 gene p-value', size=label_size)

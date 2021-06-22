@@ -45,3 +45,94 @@ def make_guide_to_color(guide_to_gene, individual_genes, gene_sets, only_special
             guide_to_color[guide] = gene_to_color[gene]
         
     return pd.Series(gene_to_color), pd.Series(guide_to_color)
+
+Cas9_category_color_order = [
+    'deletion, ambiguous',
+    'insertion with deletion',
+    'deletion, PAM-distal',
+    'deletion, PAM-proximal',
+    'deletion, bidirectional',
+    'genomic insertion',
+    'insertion',
+    'wild type',
+]
+
+Cas9_category_palette = bokeh.palettes.Dark2[8]
+Cas9_category_colors = dict(zip(Cas9_category_color_order, Cas9_category_palette))
+
+Cas9_category_aliases = {n: n for n in Cas9_category_color_order}
+Cas9_category_aliases.update({
+    'wild type': 'unedited',
+    'deletion, bidirectional': 'bidirectional deletions',
+    'deletion, PAM-distal': 'deletions on only PAM-distal side',
+    'deletion, PAM-proximal': 'deletions on only PAM-proximal side',
+    'genomic insertion': 'capture of genomic sequence at break',
+    'deletion, ambiguous': 'deletions consistent with either side',
+})
+
+Cas9_category_display_order = [
+    'wild type',
+    'deletion, bidirectional',
+    'deletion, PAM-distal',
+    'deletion, PAM-proximal',
+    'deletion, ambiguous',
+    'insertion',
+    'insertion with deletion',
+    'genomic insertion',
+]
+
+Cas9_category_alias_colors = copy.copy(Cas9_category_colors)
+for name, alias in Cas9_category_aliases.items():
+    color = Cas9_category_alias_colors.pop(name)
+    Cas9_category_alias_colors[alias] = color
+
+Cpf1_category_display_order = [
+    'wild type',
+    'deletion, spans both nicks',
+    'deletion, spans PAM-distal nick',
+    'deletion, spans PAM-proximal nick',
+    'insertion',
+    'insertion with deletion',
+    'genomic insertion',
+]
+
+Cpf1_category_colors = {n: c for n, c in Cas9_category_colors.items() if n in Cpf1_category_display_order}
+Cpf1_category_colors.update({
+    'deletion, spans both nicks': bokeh.palettes.Set1[8][2],
+    'deletion, spans PAM-distal nick': bokeh.palettes.Set1[8][0],
+    'deletion, spans PAM-proximal nick': bokeh.palettes.Set1[8][3],
+})
+
+Cpf1_category_aliases = {n: n for n in Cpf1_category_display_order}
+Cpf1_category_aliases.update({
+    'wild type': 'unedited',
+    'deletion, spans both nicks': 'deletions spanning both nicks',
+    'deletion, spans PAM-distal nick': 'deletions spanning only PAM-distal nick',
+    'deletion, spans PAM-proximal nick': 'deletions spanning only PAM-proximal nick',
+    'genomic insertion': 'capture of genomic sequence at break',
+})
+
+Cpf1_category_alias_colors = copy.copy(Cpf1_category_colors)
+for name, alias in Cpf1_category_aliases.items():
+    color = Cpf1_category_alias_colors.pop(name)
+    Cpf1_category_alias_colors[alias] = color
+
+category_aliases = {
+    'SpCas9': Cas9_category_aliases,
+    'Cpf1': Cpf1_category_aliases,
+}
+
+category_colors = {
+    'SpCas9': Cas9_category_colors,
+    'Cpf1': Cpf1_category_colors,
+}
+
+category_alias_colors = {
+    'SpCas9': Cas9_category_alias_colors,
+    'Cpf1': Cpf1_category_alias_colors,
+}
+
+category_display_order = {
+    'SpCas9': Cas9_category_display_order,
+    'Cpf1': Cpf1_category_display_order,
+}

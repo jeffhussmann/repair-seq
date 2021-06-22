@@ -13,7 +13,7 @@ import bokeh.models
 from ddr import pooled_screen
 from ddr.visualize import outcome_diagrams
 from hits import utilities
-#from hits.visualize.interactive.external_coffeescript import build_callback
+from hits.visualize.interactive import build_js_callback
 
 def extract_numerator_and_denominator_counts(pool, numerator_outcomes, denominator_outcomes=None):
     if isinstance(numerator_outcomes, pd.Series):
@@ -182,6 +182,7 @@ def compute_table(base_dir, pool_names, outcome_groups,
                   initial_outcome=None,
                   progress=None,
                   use_short_names=False,
+                  pool_name_aliases=None,
                  ):
     if progress is None:
         progress = utilities.identity
@@ -196,6 +197,9 @@ def compute_table(base_dir, pool_names, outcome_groups,
 
     guide_to_gene = {}
 
+    if pool_name_aliases is None:
+        pool_name_aliases = {}
+
     for pool_name in progress(pool_names):
         pool = pooled_screen.PooledScreen(base_dir, pool_name)
 
@@ -203,6 +207,8 @@ def compute_table(base_dir, pool_names, outcome_groups,
             name_to_use = pool.short_name
         else:
             name_to_use = pool_name
+
+        name_to_use = pool_name_aliases.get(name_to_use)
         
         for outcome_specification in progress(outcome_groups):
             if isinstance(outcome_specification, tuple) and len(outcome_specification) == 3:
@@ -245,7 +251,8 @@ def compute_table(base_dir, pool_names, outcome_groups,
     genes_df = pd.DataFrame(all_gene_columns)
 
     if initial_dataset is None:
-        initial_dataset = pool_names[0]
+        initial_dataset = pool_name_aliases.get(pool_names[0])
+
     if initial_outcome is None:
         initial_outcome = outcome_names[0]
 
@@ -255,9 +262,12 @@ def compute_table(base_dir, pool_names, outcome_groups,
     color_list = [c for i, c in enumerate(bokeh.palettes.Category10[10]) if i != 7]
     grey = bokeh.palettes.Category10[10][7]
 
-    gene_to_color = {g: color_list[i % len(color_list)] if g != 'negative_control' else grey for i, g in enumerate(pool.variable_guide_library.genes)}
+    gene_to_color = {g: color_list[i % len(color_list)]
+                     if g != 'negative_control' and not g.startswith('non-targeting') else grey
+                     for i, g in enumerate(pool.variable_guide_library.genes_with_non_targeting_guide_sets)
+                    }
 
-    #full_df['color'] = [gene_to_color[row['gene']] for guide, row in df.iterrows()]
+    full_df['color'] = [gene_to_color[row['gene']] for guide, row in df.iterrows()]
     full_df.index.name = 'guide'
 
     for common_key in ['x', 'xs']:
@@ -266,7 +276,7 @@ def compute_table(base_dir, pool_names, outcome_groups,
     full_df['gene'] = pd.Series(guide_to_gene)
 
     to_pickle = {
-        'pool_names': pool_names,
+        'pool_names': [pool_name_aliases.get(pn) for pn in pool_names],
         'outcome_names': outcome_names,
         'full_df': full_df,
         'nt_fractions': nt_fractions,
@@ -282,6 +292,7 @@ def compute_table(base_dir, pool_names, outcome_groups,
     return to_pickle
 
 def scatter(pickle_fn,
+            outcome_names=None,
             plot_width=2000,
             plot_height=800,
            ):
@@ -289,18 +300,24 @@ def scatter(pickle_fn,
         data = pickle.load(fh)
 
     pool_names = data['pool_names']
-    outcome_names = data['outcome_names']
+    if outcome_names is None:
+        outcome_names = data['outcome_names']
     full_df = data['full_df']
     nt_fractions = data['nt_fractions']
     initial_dataset = data['initial_dataset']
     initial_outcome = data['initial_outcome']
 
+    full_df.columns = ['_'.join(t) if t[1] != '' else t[0] for t in data['full_df'].columns.values]
+
+    for k in ['frequency', 'ys', 'total_UMIs', 'gene_p_up', 'gene_p_down']:
+        full_df[k] = full_df[f'{initial_dataset}_{initial_outcome}_{k}'] 
+
     scatter_source = bokeh.models.ColumnDataSource(data=full_df, name='scatter_source')
     scatter_source.data[full_df.index.name] = full_df.index
 
-    initial_indices = np.array(full_df.query('gene_p_down <= 1e-5')['x'])
+    initial_indices = np.array(full_df.query('gene == "DNA2"')['x'])
     scatter_source.selected = bokeh.models.Selection(indices=initial_indices)
-    scatter_source.selected.js_on_change('indices', build_callback('screen_scatter_selection'))
+    scatter_source.selected.js_on_change('indices', build_js_callback('screen_scatter_selection'))
 
     filtered_data = {k: [scatter_source.data[k][i] for i in initial_indices] for k in scatter_source.data}
     filtered_source = bokeh.models.ColumnDataSource(data=filtered_data, name='filtered_source')
@@ -309,7 +326,7 @@ def scatter(pickle_fn,
     x_max = len(full_df)
 
     y_min = 0
-    y_max = 1
+    y_max = full_df['frequency'].max() * 1.2
 
     tools = [
         'reset',
@@ -328,8 +345,8 @@ def scatter(pickle_fn,
     fig.x_range = bokeh.models.Range1d(x_min, x_max, name='x_range')
     fig.y_range = bokeh.models.Range1d(y_min, y_max, name='y_range')
 
-    fig.x_range.callback = build_callback('screen_range', format_kwargs={'lower_bound': x_min, 'upper_bound': x_max})
-    fig.y_range.callback = build_callback('screen_range', format_kwargs={'lower_bound': y_min, 'upper_bound': y_max})
+    fig.x_range.callback = build_js_callback('screen_range', format_kwargs={'lower_bound': x_min, 'upper_bound': x_max})
+    fig.y_range.callback = build_js_callback('screen_range', format_kwargs={'lower_bound': 0, 'upper_bound': 1})
 
     circles = fig.circle(x='x', y='frequency',
                         source=scatter_source,
@@ -340,9 +357,9 @@ def scatter(pickle_fn,
                         )
 
     tooltips = [
-        ("guide", "@guide"),
-        ("frequency of outcome", "@frequency"),
-        ("total UMIs", "@total_UMIs"),
+        ('guide', '@guide'),
+        ('frequency of outcome', '@frequency'),
+        ('total UMIs', '@total_UMIs'),
     ]
 
     hover = bokeh.models.HoverTool(renderers=[circles])
@@ -353,7 +370,7 @@ def scatter(pickle_fn,
     fig.multi_line(xs='xs', ys='ys',
                    source=scatter_source,
                    color='color', selection_color='color', nonselection_color='color',
-                   alpha=0.8,
+                   alpha=0.4,
                    name='confidence_intervals',
                 )
 
@@ -373,24 +390,24 @@ def scatter(pickle_fn,
     dataset_menu = bokeh.models.widgets.MultiSelect(options=pool_names, value=[initial_dataset], name='dataset_menu', title='dataset', size=len(pool_names))
     outcome_menu = bokeh.models.widgets.MultiSelect(options=outcome_names, value=[initial_outcome], name='outcome_menu', title='outcome', size=len(outcome_names))
 
-    menu_js = build_callback('screen_menu', format_kwargs={'nt_fractions': str(nt_fractions)})
+    menu_js = build_js_callback('screen_menu', format_kwargs={'nt_fractions': str(nt_fractions)})
     for menu in [dataset_menu, outcome_menu]:
         menu.js_on_change('value', menu_js)
 
     fig.add_layout(bokeh.models.Span(location=nt_fractions[f'{initial_dataset}_{initial_outcome}'], dimension='width', line_alpha=0.5, name='nt_fraction'))
 
     interval_button = bokeh.models.widgets.Toggle(label='show confidence intervals', active=True)
-    interval_button.js_on_change('active', build_callback('screen_errorbars_button'))
+    interval_button.js_on_change('active', build_js_callback('screen_errorbars_button'))
 
     cutoff_slider = bokeh.models.Slider(start=-10, end=-2, value=-5, step=1, name='cutoff_slider', title='log10 p-val cutoff')
 
     down_button = bokeh.models.widgets.Button(label='filter significant down', name='filter_down')
     up_button = bokeh.models.widgets.Button(label='filter significant up', name='filter_up')
     for button in [down_button, up_button]:
-        button.js_on_click(build_callback('screen_significance_filter'))
+        button.js_on_click(build_js_callback('screen_significance_filter'))
 
     text_input = bokeh.models.TextInput(title='Search:', name='search')
-    text_input.js_on_change('value', build_callback('screen_search'))
+    text_input.js_on_change('value', build_js_callback('screen_search'))
 
     fig.outline_line_color = 'black'
     first_letters = [g[0] for g in full_df.index]
@@ -423,7 +440,7 @@ def scatter(pickle_fn,
         columns.append(column)
         
     save_button = bokeh.models.widgets.Button(label='save table', name='save_button')
-    save_button.js_on_click(build_callback('scatter_save_button', format_kwargs={'column_names': table_col_names}))
+    save_button.js_on_click(build_js_callback('scatter_save_button', format_kwargs={'column_names': table_col_names}))
 
     table = bokeh.models.widgets.DataTable(source=filtered_source,
                                            columns=columns,
@@ -435,7 +452,7 @@ def scatter(pickle_fn,
                                            index_position=None,
                                           )
 
-    fig.xaxis.axis_label = 'guides (ordered alphabetically)'
+    fig.xaxis.axis_label = 'CRISPRi sgRNAs (ordered alphabetically)'
     fig.yaxis.axis_label = 'frequency of outcome'
     for axis in (fig.xaxis, fig.yaxis):
         axis.axis_label_text_font_size = '16pt'
