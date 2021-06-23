@@ -92,6 +92,7 @@ class SingleGuideExperiment(experiment.Experiment):
         self.min_reads_per_UMI = self.pool.min_reads_per_UMI
 
         self.outcome_fn_keys = ['filtered_cell_outcomes']
+        self.count_index_levels = ['perfect_guide', 'category', 'subcategory', 'details']
 
         self.diagram_kwargs.update(self.pool.diagram_kwargs)
 
@@ -457,18 +458,6 @@ class SingleGuideExperiment(experiment.Experiment):
                     sorter.write(al)
 
         return np.array(times)
-
-    @memoized_property
-    def outcome_counts(self):
-        counts = pd.read_csv(self.fns['outcome_counts'],
-                             header=None,
-                             index_col=[0, 1, 2, 3],
-                             squeeze=True,
-                             na_filter=False,
-                             sep='\t',
-                            )
-        counts.index.names = ['perfect_guide', 'category', 'subcategory', 'details']
-        return counts
 
     @memoized_property
     def perfect_guide_outcome_counts(self):
@@ -1185,7 +1174,7 @@ class PooledScreen:
     def blunt_insertion_length_detection_limit(self):
         return self.R2_read_length - (self.target_info.sequencing_start.end - self.target_info.cut_after) - 5
 
-    def make_outcome_counts(self):
+    def generate_outcome_counts(self):
         all_counts = {}
 
         description = 'Loading outcome counts'
@@ -2624,7 +2613,7 @@ def parallel(base_dir, pool_name, max_procs, show_progress_bars=False, preload_i
     process_stage('align')
     process_stage('categorize')
 
-    pool.make_outcome_counts()
+    pool.generate_outcome_counts()
     pool.merge_templated_insertion_details()
     pool.extract_genomic_insertion_length_distributions()
     pool.extract_category_counts()
