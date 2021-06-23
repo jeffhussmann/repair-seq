@@ -2720,30 +2720,27 @@ def parallel_common_sequences(pool, max_procs, show_progress_bars=False):
 
     pool.write_common_outcome_files()
 
-def timestamp():
-    return f'{datetime.datetime.now():%Y-%m-%d %H:%M:%S}'
-
 def process(base_dir, pool_name, fixed_guide, variable_guide, stage, progress=None, print_timestamps=False):
     pool = get_pool(base_dir, pool_name, progress=progress)
     exp = pool.single_guide_experiment(fixed_guide, variable_guide)
 
     if print_timestamps:
-        print(f'{timestamp()} Started {fixed_guide}-{variable_guide} {stage}')
+        print(f'{utilities.current_time_string()} Started {fixed_guide}-{variable_guide} {stage}')
 
     exp.process(stage)
 
     if print_timestamps:
-        print(f'{timestamp()} Finished {fixed_guide}-{variable_guide} {stage}')
+        print(f'{utilities.current_time_string()} Finished {fixed_guide}-{variable_guide} {stage}')
 
 def process_common_sequences(base_dir, pool_name, chunk, progress=None):
     pool = get_pool(base_dir, pool_name, progress=progress)
     exp = pool.common_sequence_chunk_exp_from_name(chunk)
 
-    print(f'{timestamp()} Started {chunk}')
+    print(f'{utilities.current_time_string()} Started {chunk}')
 
     exp.process()
 
-    print(f'{timestamp()} Finished {chunk}')
+    print(f'{utilities.current_time_string()} Finished {chunk}')
 
 class PooledScreenExplorer(explore.Explorer):
     def __init__(self,
