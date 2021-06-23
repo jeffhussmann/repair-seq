@@ -1051,6 +1051,8 @@ class PooledScreen:
             'highest_guide_correlations': self.group_dir / 'highest_guide_correlations.txt',
 
             'gene_level_category_statistics': self.group_dir / 'gene_level_category_statistics.txt',
+
+            'snapshots_dir': self.group_dir / 'snapshots',
         }
 
         label_offsets = {}
@@ -1221,8 +1223,70 @@ class PooledScreen:
 
         collapsed.sum(axis=1).to_csv(self.fns['collapsed_total_outcome_counts'], header=False)
 
+    def record_snapshot(self, name=None, description=''):
+        ''' Make copies of outcome counts to allow comparison
+        when categorization code changes.
+        '''
+        snapshot_name = f'{datetime.datetime.now():%Y-%m-%d_%H%M%S}'
+        snapshot_dir = self.fns['snapshots_dir'] / snapshot_name
+        snapshot_dir.mkdir(parents=True)
+
+        if name is not None:
+            description_fn = snapshot_dir / 'description.txt'
+            description_fn.write_text(f'{name}\n{description}\n')
+
+        fn_keys_to_snapshot = [
+            'outcome_counts',
+            'total_outcome_counts',
+            'collapsed_outcome_counts',
+            'collapsed_total_outcome_counts',
+        ]
+
+        for key in fn_keys_to_snapshot:
+            fn = self.fns[key]
+            if fn.exists():
+                shutil.copy(fn, snapshot_dir)
+
+    def lookup_snapshot_name(self, name_to_lookup):
+        ''' Lookup a snapshot by its name or by its timestamp. '''
+        matches = set()
+
+        snapshots_dir = self.fns['snapshots_dir']
+        snapshot_dir_names = [d.name for d in snapshots_dir.iterdir() if d.is_dir()]
+
+        for snapshot_dir_name in snapshot_dir_names:
+            if snapshot_dir_name == name_to_lookup:
+                matches.add(snapshot_dir_name)
+                
+            description_fn = snapshots_dir / snapshot_dir_name / 'description.txt'
+
+            if description_fn.exists():
+                name, description = description_fn.read_text().splitlines()
+
+                if name == name_to_lookup:
+                    matches.add(snapshot_dir_name)
+                    
+        if len(matches) == 0:
+            raise ValueError(f'No matching snapshot found for {name_to_lookup}')
+        elif len(matches) > 1:
+            raise ValueError(f'Multiple matching snapshots found for {name_to_lookup}')
+        else:
+            return list(matches)[0]
+
+    def possibly_snapshotted_fn(self, key, snapshot_name):
+        ''' Returns a file name for either the current version or a snapshotted
+        version of the file corresponding to key.
+        '''
+        fn = self.fns[key]
+
+        if snapshot_name is not None:
+            resolved_snapshot_name = self.lookup_snapshot_name(snapshot_name)
+            fn = self.fns['snapshots_dir'] / resolved_snapshot_name / fn.name
+
+        return fn
+
     @memoized_with_key
-    def total_outcome_counts(self, collapsed):
+    def total_outcome_counts(self, collapsed, snapshot_name):
         if collapsed:
             prefix = 'collapsed_'
         else:
@@ -1230,10 +1294,12 @@ class PooledScreen:
 
         key = prefix + 'total_outcome_counts'
 
-        return pd.read_csv(self.fns[key], header=None, index_col=[0, 1, 2, 3], na_filter=False)
+        fn = self.possibly_snapshotted_fn(key, snapshot_name)
+
+        return pd.read_csv(fn, header=None, index_col=[0, 1, 2, 3], na_filter=False)
 
     @memoized_with_key
-    def outcome_counts_df(self, collapsed):
+    def outcome_counts_df(self, collapsed, snapshot_name):
         guides = self.guide_combinations
 
         if collapsed:
@@ -1242,10 +1308,11 @@ class PooledScreen:
             prefix = ''
 
         key = prefix + 'outcome_counts'
+        fn = self.possibly_snapshotted_fn(key, snapshot_name)
 
-        sparse_counts = scipy.sparse.load_npz(self.fns[key])
+        sparse_counts = scipy.sparse.load_npz(fn)
         df = pd.DataFrame(sparse_counts.toarray(),
-                          index=self.total_outcome_counts(collapsed).index,
+                          index=self.total_outcome_counts(collapsed, snapshot_name).index,
                           columns=pd.MultiIndex.from_tuples(guides),
                          )
 
