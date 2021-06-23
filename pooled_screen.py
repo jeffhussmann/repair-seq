@@ -107,7 +107,7 @@ class SingleGuideExperiment(experiment.Experiment):
     def load_description(self):
         return self.pool.sample_sheet
 
-    @memoized_property
+    @property
     def categorizer(self):
         return self.pool.categorizer
 
