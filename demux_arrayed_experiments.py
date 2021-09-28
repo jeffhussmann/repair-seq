@@ -2,6 +2,7 @@ import gzip
 import itertools
 from pathlib import Path
 from collections import Counter
+from contextlib import ExitStack
 
 import pandas as pd
 import tqdm
@@ -25,8 +26,6 @@ def demux_SE(base_dir, batch, payload_read_type='R1', num_reads=None, only_first
 
     resolvers = {k: hits.utilities.get_one_mismatch_resolver(sample_sheet[k]).get for k in ['i7', 'i5']}
 
-    sample_to_fh = {s: gzip.open(data_dir / fn, 'wt', compresslevel=1) for s, fn in sample_sheet['fastq_fn'].items()}
-
     zipped_reads = zip(reads[payload_read_type], reads['i7'], reads['i5'])
 
     if only_first_n is not None:
@@ -36,32 +35,37 @@ def demux_SE(base_dir, batch, payload_read_type='R1', num_reads=None, only_first
         else:
             num_reads = only_first_n
 
-    for payload_read, i7, i5 in progress(zipped_reads, total=num_reads):
-        i7_samples = resolvers['i7'](i7.seq, {'unknown'})
-        i5_samples = resolvers['i5'](i5.seq, {'unknown'})
-        
-        consistent_with_both = i7_samples & i5_samples
+    with ExitStack() as stack:
 
-        if len(consistent_with_both) == 0:
-            sample = f'{i7.seq}+{i5.seq}'
+        sample_to_fh = {}
 
-        elif len(consistent_with_both) == 1:
-            sample = next(iter(consistent_with_both))
-            if sample == 'unknown':
+        for sample, fn in sample_sheet['fastq_fn'].items():
+            fh = stack.enter_context(gzip.open(data_dir / fn, 'wt', compresslevel=1))
+            sample_to_fh[sample] = fh
+
+        for payload_read, i7, i5 in progress(zipped_reads, total=num_reads):
+            i7_samples = resolvers['i7'](i7.seq, {'unknown'})
+            i5_samples = resolvers['i5'](i5.seq, {'unknown'})
+            
+            consistent_with_both = i7_samples & i5_samples
+
+            if len(consistent_with_both) == 0:
                 sample = f'{i7.seq}+{i5.seq}'
 
-        else:
-            print(i7.seq, i5.seq, consistent_with_both)
-            raise ValueError
-            
-        counts[sample] += 1
-                    
-        if sample in sample_to_fh:
-            sample_to_fh[sample].write(str(payload_read))
-            
-    for fh in sample_to_fh.values():
-        fh.close()      
+            elif len(consistent_with_both) == 1:
+                sample = next(iter(consistent_with_both))
+                if sample == 'unknown':
+                    sample = f'{i7.seq}+{i5.seq}'
 
+            else:
+                print(i7.seq, i5.seq, consistent_with_both)
+                raise ValueError
+                
+            counts[sample] += 1
+                        
+            if sample in sample_to_fh:
+                sample_to_fh[sample].write(str(payload_read))
+            
     index_counts_fn = data_dir / 'index_counts.txt'
     pd.Series(counts).sort_values(ascending=False).to_csv(index_counts_fn, header=None)
 
