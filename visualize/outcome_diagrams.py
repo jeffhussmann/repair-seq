@@ -22,6 +22,7 @@ def plot(outcome_order,
          window=70,
          ax=None,
          flip_if_reverse=True,
+         flip_MH_deletion_boundaries=False,
          force_flip=False,
          center_at_PAM=False,
          draw_cut_afters=True,
@@ -95,8 +96,6 @@ def plot(outcome_order,
             flip = False
             transform_seq = hits.utilities.identity
 
-        print(source_name, flip)
-        
         if center_at_PAM:
             if guide.strand == '+':
                 offset = ti.PAM_slice.start
@@ -242,11 +241,18 @@ def plot(outcome_order,
 
         del_height = 0.15
         
-        del_start = starts[0] - 0.5
-        del_end = starts[0] + deletion.length - 1 + 0.5
+        if flip_MH_deletion_boundaries == False:
+            del_start = starts[0] - 0.5
+            del_end = starts[0] + deletion.length - 1 + 0.5
 
-        for x in range(starts[0], starts[0] + deletion.length):
-            xs_to_skip.add(x)
+            for x in range(starts[0], starts[0] + deletion.length):
+                xs_to_skip.add(x)
+        else:
+            del_start = starts[-1] - 0.5
+            del_end = starts[-1] + deletion.length - 1 + 0.5
+
+            for x in range(starts[-1], starts[-1] + deletion.length):
+                xs_to_skip.add(x)
         
         draw_rect(source_name, del_start, del_end, y - del_height / 2, y + del_height / 2, 0.4, color=color)
         draw_rect(source_name, window_left - 0.5, del_start, y - wt_height / 2, y + wt_height / 2, block_alpha, color=background_color)
@@ -626,7 +632,6 @@ def plot(outcome_order,
         ax.set_xticks([])
                 
     if not preserve_x_lims:
-        print('here')
         # Some uses don't want x lims to be changed.
         x_lims = [window_left - 0.5, window_right + 0.5]
         if flip:
@@ -636,8 +641,6 @@ def plot(outcome_order,
 
         ax.xaxis.tick_top()
         ax.axhline(num_outcomes + 0.5 - 1, color='black', alpha=0.75, clip_on=False)
-
-    print(ax.get_xlim())
 
     ax.set_ylim(-0.5, num_outcomes - 0.5)
     ax.set_frame_on(False)
@@ -651,7 +654,7 @@ def plot(outcome_order,
         ax.annotate(title,
                     xy=(0.5, 1),
                     xycoords=('axes fraction', 'axes fraction'),
-                    xytext=(0, 20),
+                    xytext=(0, kwargs.get('title_offset', 20)),
                     textcoords='offset points',
                     ha='center',
                     va='bottom',
@@ -1133,11 +1136,10 @@ class DiagramGrid:
         ax_p = self.ordered_axs[-1].get_position()
 
         if loc == 'right':
-            x0 = ax_p.x1 + 3 * self.width_per_heatmap_cell
+            x0 = ax_p.x1 + 5 * self.width_per_heatmap_cell
             y0 = 0.5
         else:
-            x0 = ax_p.x1 + 3 * self.width_per_heatmap_cell
-            y0 = 0.5
+            raise NotImplementedError
 
         width = width_multiple * self.width_per_heatmap_cell
         height = 1 * self.height_per_heatmap_cell

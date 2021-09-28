@@ -1,16 +1,14 @@
 import array
 from collections import Counter
-from pathlib import Path
 
 import numpy as np
-import yaml
 import tqdm
 import pysam
 
-from hits import fastq, utilities, sw
+from hits import fastq, utilities
 from hits import annotation as annotation_module
 
-from .collapse_cython import hq_mismatches_from_seed, hamming_distance_matrix, register_corrections
+from .collapse_cython import hq_mismatches_from_seed
 
 progress = tqdm.tqdm_notebook
 
@@ -22,19 +20,6 @@ LOW_Q = 10
 N_Q = 2
 
 annotation_fields = {
-    'cluster': [
-        ('cell_BC', 's'),
-        ('UMI', 's'),
-        ('num_reads', '06d'),
-        ('cluster_id', 's'),
-    ],
-
-    'read': [
-        ('cell_BC', 's'),
-        ('UMI', 's'),
-        ('original_name', 's'),
-    ],
-
     'UMI': [
         ('UMI', 's'),
         ('original_name', 's'),
@@ -60,6 +45,22 @@ annotation_fields = {
         ('cluster_id', '06d'),
         ('num_reads', '010d'),
         ('mismatch', 'd'),
+    ],
+
+    'common_sequence': [
+        ('rank', '012d'),
+        ('count', '012d'),
+    ],
+
+    'R2_with_guide': [
+        ('query_name', 's'),
+        ('guide', 's'),
+        ('guide_qual', 's'),
+    ],
+
+    'R2_with_guide_mismatches': [
+        ('query_name', 's'),
+        ('mismatches', 's'),
     ],
 }
 

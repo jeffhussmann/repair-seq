@@ -1966,7 +1966,7 @@ class Layout(layout.Categorizer):
 
                         else:
                             self.subcategory = 'mismatches'
-                            self.outcome = Outcome('n/a')
+                            self.outcome = MismatchOutcome(self.non_donor_SNVs)
 
                     else:
                         self.category = 'uncategorized'

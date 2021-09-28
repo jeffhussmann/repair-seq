@@ -6,7 +6,7 @@ import pandas as pd
 from hits import utilities, fasta, mapping_tools
 
 memoized_property = utilities.memoized_property
-memoized_with_key = utilities.memoized_with_key
+memoized_with_args = utilities.memoized_with_args
 
 class GuideLibrary:
     def __init__(self, base_dir, name):
@@ -157,7 +157,7 @@ class GuideLibrary:
     def guide_barcodes(self):
         return self.guides_df['guide_barcode']
 
-    @memoized_with_key
+    @memoized_with_args
     def gene_indices(self, gene):
         idxs = [i for i, g in enumerate(self.guides_df['gene']) if g == gene]
         return min(idxs), max(idxs)
@@ -199,7 +199,7 @@ class DummyGuideLibrary:
     def guide_to_gene(self):
         return defaultdict(lambda: 'none')
 
-    def gene_guides(self, gene):
+    def gene_guides(self, gene, **kwargs):
         if gene == 'negative_control':
             return ['none']
         else:

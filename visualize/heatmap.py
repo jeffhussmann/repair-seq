@@ -175,9 +175,9 @@ def genes(pool,
             return p.high_frequency_outcome_fractions[f]
     else:
         def get_log2_fold_changes(p, f=fixed_guide):
-            return p.log2_fold_changes_full_arguments(guide_status, f)[f]
+            return p.log2_fold_changes(guide_status=guide_status, fixed_guide=f)
         def get_outcome_fractions(p, f=fixed_guide):
-            return p.outcome_fractions(guide_status)[f]
+            return p.outcome_fractions(guide_status=guide_status)[f]
 
     if gene_to_sort_by is not None:
         outcome_order = pool.sort_outcomes_by_gene_phenotype(outcome_order, gene_to_sort_by)
@@ -225,7 +225,7 @@ def genes(pool,
         if use_high_frequency:
             return pool.high_frequency_outcome_fractions[fixed_guide, 'all_non_targeting'].reindex(outcome_order, fill_value=0)
         else:
-            return pool.non_targeting_fractions_full_arguments('all', fixed_guide).reindex(outcome_order, fill_value=0)
+            return pool.non_targeting_fractions(guide_status='all', fixed_guide=fixed_guide).reindex(outcome_order, fill_value=0)
 
     fractions = get_outcome_fractions(pool).reindex(outcome_order, fill_value=0)
     nt_fracs = get_nt_fractions(pool, fixed_guide)
@@ -309,7 +309,7 @@ def genes(pool,
 
                 xs = fractions[guide]
                 if 'log10' in key:
-                    UMIs = pool.UMI_counts_full_arguments(guide_status).loc[fixed_guide, guide]
+                    UMIs = pool.UMI_counts(guide_status=guide_status).loc[guide]
                     min_frac = 0.5 / UMIs
                     xs = np.maximum(xs, min_frac)
                     xs = np.log10(xs)

@@ -1,7 +1,6 @@
 import bisect
 from collections import defaultdict
 
-import bokeh.palettes
 import matplotlib.pyplot as plt
 import matplotlib.colors
 import numpy as np
@@ -37,7 +36,7 @@ class ReplicatePair:
 
     @memoized_property
     def average_nt_fractions(self):
-        nt_fracs = {pn: self.pools[pn].non_targeting_fractions for pn in self.pn_pair}
+        nt_fracs = {pn: self.pools[pn].non_targeting_fractions() for pn in self.pn_pair}
         return pd.concat(nt_fracs, axis=1).fillna(0).mean(axis=1).sort_values(ascending=False)
 
     @memoized_property
@@ -73,7 +72,7 @@ class ReplicatePair:
         return all_guides
 
     def log2_fold_changes(self, outcomes, guides):
-        return pd.concat({pn: self.pools[pn].log2_fold_changes.loc[outcomes, guides] for pn in self.pn_pair}, axis=1)
+        return pd.concat({pn: self.pools[pn].log2_fold_changes().loc[outcomes, guides] for pn in self.pn_pair}, axis=1)
 
     def outcome_r_matrix(self, outcomes, guides):
         log2_fold_changes = self.log2_fold_changes(outcomes, guides)
@@ -185,11 +184,12 @@ class ReplicatePair:
                                                        inches_per_outcome=inches_per_outcome * scale,
                                                        line_widths=0.75,
                                                        title=None,
+                                                       block_alpha=0.2,
                                                       )
 
         g.add_ax('frequency',
                  width_multiple=10,
-                 title='percentage of\noutcomes for\nnon-targeting\nsgRNAs',
+                 title='Baseline % of\noutcomes in cells\nwith non-targeting\nCRISPRi sgRNAs',
                  title_size=7,
                  gap_multiple=2,
                 )
@@ -205,30 +205,10 @@ class ReplicatePair:
         plt.setp(g.axs_by_name['frequency'].get_xticklabels(), size=6)
         g.axs_by_name['frequency'].tick_params(axis='x', which='both', pad=2)
 
-        g.add_ax('cumulative_frequency',
-                 width_multiple=10,
-                 title='cumulative\npercentage of\noutcomes for\nnon-targeting\nsgRNAs',
-                 title_size=7,
-                 gap_multiple=3,
-                )
-        g.plot_on_ax('cumulative_frequency', np.cumsum(self.average_nt_fractions),
-                     transform=lambda f: f * 100,
-                     marker='o',
-                     color='black',
-                     clip_on=False,
-                     markersize=1,
-                     line_alpha=0.5,
-                    )
-
-        plt.setp(g.axs_by_name['cumulative_frequency'].get_xticklabels(), size=6)
-        g.axs_by_name['cumulative_frequency'].tick_params(axis='x', which='both', pad=2)
-        g.set_xlim('cumulative_frequency', (0, 100))
-        g.axs_by_name['cumulative_frequency'].set_xticks([0, 25, 50, 75, 100])
-
         g.add_ax('correlation',
                  gap_multiple=3,
                  width_multiple=10,
-                 title='correlation between\nreplicates in outcome\nsignature\n across sgRNAs',
+                 title='Correlation between\nreplicates in log$_2$ fold\nchanges in frequencies\nof each outcome\nacross active\nCRISPRi sgRNAs',
                  title_size=7,
                 )
 
@@ -326,7 +306,7 @@ class ReplicatePair:
 
         return fig
 
-    def outcome_outcome_correlation_scatter(self, threshold=5e-3, n_guides=100):
+    def outcome_outcome_correlation_scatter(self, threshold=5e-3, n_guides=100, rasterize=False):
         threshold = 5e-3
 
         outcomes = self.outcomes_above_simple_threshold(threshold)
@@ -363,16 +343,16 @@ class ReplicatePair:
         x = self.pn0
         y = self.pn1
 
-        fig, ax = plt.subplots(figsize=(2, 2))
+        fig, ax = plt.subplots(figsize=(1.25, 1.25))
 
-        kwargs = dict(x=x, y=y, color='color', linewidths=(0,))
-        ax.scatter(data=df.query('color == "grey"'), label='', alpha=0.4, s=15, **kwargs)
-        ax.scatter(data=df.query('color != "grey"'), label='bidirectional deletions', s=20, **kwargs)
+        kwargs = dict(x=x, y=y, color='color', linewidths=(0,), rasterized=rasterize)
+        ax.scatter(data=df.query('color == "grey"'), label='', alpha=0.4, s=12, **kwargs)
+        ax.scatter(data=df.query('color != "grey"'), label='bidirectional deletions', s=15, **kwargs)
         
         ax.annotate('pairs of\nbidirectional\ndeletions',
                     xy=(0, 1),
                     xycoords='axes fraction',
-                    xytext=(3, -3),
+                    xytext=(2, -1),
                     textcoords='offset points',
                     ha='left',
                     va='top',
@@ -380,10 +360,10 @@ class ReplicatePair:
                     size=6,
                    )
 
-        ax.annotate('all other pairs',
+        ax.annotate('all other\npairs',
                     xy=(0, 1),
                     xycoords='axes fraction',
-                    xytext=(3, -24),
+                    xytext=(2, -21),
                     textcoords='offset points',
                     ha='left',
                     va='top',
@@ -403,8 +383,8 @@ class ReplicatePair:
         plt.setp(ax.spines.values(), linewidth=0.5)
         ax.tick_params(labelsize=6, width=0.5, length=2)
 
-        ax.set_ylabel('correlation between distinct\noutcomes in replicate 2', size=6)
-        ax.set_xlabel('correlation between distinct\noutcomes in replicate 1', size=6)
+        ax.set_ylabel('Correlation between distinct\noutcomes in replicate 2', size=6)
+        ax.set_xlabel('Correlation between distinct\noutcomes in replicate 1', size=6)
 
         return fig
 
@@ -463,7 +443,14 @@ class ReplicatePair:
 
         return fig
 
-    def compare_single_outcomes(self, num_outcomes=5, top_n_guides=None, manual_data_lims=None, manual_ticks=None, show_r_squared=True):
+    def compare_single_outcomes(self,
+                                outcome_ranks=None,
+                                top_n_guides=None,
+                                manual_data_lims=None,
+                                manual_ticks=None,
+                                correlation_label=None,
+                                scale=2,
+                               ):
         x = self.pn0
         y = self.pn1
 
@@ -476,12 +463,16 @@ class ReplicatePair:
             guides = self.common_guides
             relevant_guides = guides
 
-
         log2_fold_changes = self.log2_fold_changes(outcomes, guides).stack().sort_index()
 
-        fig, axs = plt.subplots(1, num_outcomes, figsize=(2 * num_outcomes, 1), gridspec_kw=dict(wspace=1))
+        if isinstance(outcome_ranks, int):
+            outcome_ranks = np.arange(outcome_ranks)
 
-        for outcome_i, ax in enumerate(axs):
+        num_outcomes = len(outcome_ranks)
+
+        fig, axs = plt.subplots(1, num_outcomes, figsize=(scale * num_outcomes, scale * 0.5), gridspec_kw=dict(wspace=1))
+
+        for outcome_i, ax in zip(outcome_ranks, axs):
             outcome = outcomes[outcome_i]
             df = log2_fold_changes.loc[outcome]
 
@@ -490,9 +481,9 @@ class ReplicatePair:
             else:
                 data_lims = (np.floor(df.min().min() - 0.1), np.ceil(df.max().max() + 0.1))
 
-            df['color'] = bokeh.palettes.Greys9[4]
+            df['color'] = ddr.visualize.targeting_guide_color
 
-            df.loc[self.common_non_targeting_guides, 'color'] = bokeh.palettes.Greys9[1]
+            df.loc[self.common_non_targeting_guides, 'color'] = ddr.visualize.nontargeting_guide_color
 
             df = df.dropna()
 
@@ -503,30 +494,34 @@ class ReplicatePair:
             ax.set_xlim(*data_lims)
             ax.set_ylim(*data_lims)
 
-            ax.set_xlabel(f'replicate 1', size=6)
-            ax.set_ylabel(f'replicate 2', size=6)
+            ax.set_xlabel(f'Replicate 1', size=6)
+            ax.set_ylabel(f'Replicate 2', size=6)
 
             outcome_string = '\n'.join(outcome)
-            ax.set_title(f'{outcome_i}\n{outcome_string}', size=6)
+            ax.set_title(f'Rank: {outcome_i}\n{outcome_string}', size=6)
 
-            hits.visualize.draw_diagonal(ax, alpha=0.2)
-            ax.axhline(0, color='black', alpha=0.2)
-            ax.axvline(0, color='black', alpha=0.2)
+            line_kwargs = dict(alpha=0.2, color='black', linewidth=0.5)
+            hits.visualize.draw_diagonal(ax, **line_kwargs)
+            ax.axhline(0, **line_kwargs)
+            ax.axvline(0, **line_kwargs)
 
-            if show_r_squared:
+            if correlation_label == 'r_squared':
                 label = f'r$^2$ = {r**2:0.2f}'
-            else:
+            elif correlation_label == 'r':
                 label = f'r = {r:0.2f}'
+            else:
+                label = None
 
-            ax.annotate(label,
-                        xy=(0, 1),
-                        xycoords='axes fraction',
-                        xytext=(3, -3),
-                        textcoords='offset points',
-                        ha='left',
-                        va='top',
-                        size=6,
-                       )
+            if label is not None:
+                ax.annotate(label,
+                            xy=(0, 1),
+                            xycoords='axes fraction',
+                            xytext=(3, -3),
+                            textcoords='offset points',
+                            ha='left',
+                            va='top',
+                            size=6,
+                        )
 
             ax.set_aspect('equal')
 
@@ -536,9 +531,12 @@ class ReplicatePair:
                 ax.set_xticks(manual_ticks)
                 ax.set_yticks(manual_ticks)
 
+            plt.setp(ax.spines.values(), linewidth=0.5)
+            ax.tick_params(width=0.5)
+
         return fig
 
-    def compare_single_guides(self, num_guides=5, threshold=2e-3, manual_data_lims=None, manual_ticks=None):
+    def compare_single_guides(self, guide_ranks=5, threshold=2e-3, manual_data_lims=None, manual_ticks=None):
         x = self.pn0
         y = self.pn1
 
@@ -548,11 +546,14 @@ class ReplicatePair:
 
         r_series = self.guide_r_series(outcomes).sort_values(ascending=False)
 
-        num_guides = 5
+        if isinstance(guide_ranks, int):
+            guide_ranks = np.arange(guide_ranks)
+
+        num_guides = len(guide_ranks)
 
         fig, axs = plt.subplots(1, num_guides, figsize=(2 * num_guides, 1), gridspec_kw=dict(wspace=1))
 
-        for guide_i, ax in enumerate(axs):
+        for guide_i, ax in zip(guide_ranks, axs):
             guide = r_series.index[guide_i]
             
             df = log2_fold_changes.xs(guide, axis=1, level=1).copy()
@@ -571,14 +572,15 @@ class ReplicatePair:
             ax.set_xlim(*data_lims)
             ax.set_ylim(*data_lims)
 
-            ax.set_xlabel(f'replicate 1', size=6)
-            ax.set_ylabel(f'replicate 2', size=6)
+            ax.set_xlabel(f'Replicate 1', size=6)
+            ax.set_ylabel(f'Replicate 2', size=6)
 
-            ax.set_title(f'log$_2$ fold-changes in\noutcome frequencies for {guide}', size=6)
+            ax.set_title(f'{guide}', size=6)
 
-            hits.visualize.draw_diagonal(ax, alpha=0.2)
-            ax.axhline(0, color='black', alpha=0.2)
-            ax.axvline(0, color='black', alpha=0.2)
+            line_kwargs = dict(alpha=0.2, color='black', linewidth=0.5)
+            hits.visualize.draw_diagonal(ax, **line_kwargs)
+            ax.axhline(0, **line_kwargs)
+            ax.axvline(0, **line_kwargs)
 
             ax.tick_params(labelsize=6)
 
@@ -597,6 +599,9 @@ class ReplicatePair:
             if manual_ticks is not None:
                 ax.set_xticks(manual_ticks)
                 ax.set_yticks(manual_ticks)
+
+            plt.setp(ax.spines.values(), linewidth=0.5)
+            ax.tick_params(width=0.5)
 
         return fig
 
@@ -647,7 +652,7 @@ class ReplicatePair:
 
         return upper_triangle
 
-    def guide_guide_correlation_scatter(self, threshold=5e-3, num_guides=100, bad_guides=None):
+    def guide_guide_correlation_scatter(self, threshold=5e-3, num_guides=100, bad_guides=None, rasterize=False):
         outcomes = self.outcomes_above_simple_threshold(5e-3)
         guides = self.union_of_top_n_guides(outcomes, num_guides)
         if bad_guides is not None:
@@ -659,39 +664,41 @@ class ReplicatePair:
 
         active_rs['color'] = 'grey'
 
-        active_rs.loc[active_rs['gene_1'] == active_rs['gene_2'], 'color'] = 'tab:red'
+        color_for_same = 'tab:cyan'
 
-        g = sns.JointGrid(height=2.2, space=0.5, xlim=(-1.02, 1.02), ylim=(-1.02, 1.02))
+        active_rs.loc[active_rs['gene_1'] == active_rs['gene_2'], 'color'] = color_for_same
+
+        g = sns.JointGrid(height=1.75, space=0.5, xlim=(-1.02, 1.02), ylim=(-1.02, 1.02))
 
         ax = g.ax_joint
 
         distinct = active_rs.query('color == "grey"')
-        same = active_rs.query('color == "tab:red"')
+        same = active_rs.query('color == @color_for_same')
 
         x = self.pn0
         y = self.pn1
 
-        kwargs = dict(x=x, y=y, color='color', linewidths=(0,))
-        ax.scatter(data=distinct, s=5, label='different target genes', alpha=0.3, **kwargs)
-        ax.scatter(data=same, s=10, label='same target gene', alpha=0.8, **kwargs)
+        kwargs = dict(x=x, y=y, color='color', linewidths=(0,), clip_on=False, rasterized=rasterize)
+        ax.scatter(data=distinct, s=5, alpha=0.2, **kwargs)
+        ax.scatter(data=same, s=10, alpha=0.95, **kwargs)
 
         plt.setp(ax.spines.values(), linewidth=0.5)
 
-        ax.annotate('same target gene',
+        ax.annotate('same\ngene',
                     xy=(0, 1),
                     xycoords='axes fraction',
                     xytext=(3, 0),
                     textcoords='offset points',
                     ha='left',
                     va='top',
-                    color='tab:red',
+                    color=color_for_same,
                     size=6,
                    )
 
-        ax.annotate('different target genes',
+        ax.annotate('different\ngenes',
                     xy=(0, 1),
                     xycoords='axes fraction',
-                    xytext=(3, -8),
+                    xytext=(3, -16),
                     textcoords='offset points',
                     ha='left',
                     va='top',
@@ -703,8 +710,8 @@ class ReplicatePair:
         ax.axhline(0, color='black', alpha=0.2)
         ax.axvline(0, color='black', alpha=0.2)
 
-        ax.set_xlabel('correlation between\ndistinct CRISPRi guides,\nreplicate 1', size=6)
-        ax.set_ylabel('correlation between\ndistinct CRISPRi guides,\nreplicate 2', size=6)
+        ax.set_xlabel('Correlation between\ndistinct CRISPRi guides,\nreplicate 1', size=6)
+        ax.set_ylabel('Correlation between\ndistinct CRISPRi guides,\nreplicate 2', size=6)
 
         ax.tick_params(labelsize=6, width=0.5, length=2)
         ticks = [-1, -0.5, 0, 0.5, 1]
@@ -721,7 +728,7 @@ class ReplicatePair:
             max_n = max(max_n, max(n))
             
             focused_bins = bins[bisect.bisect_right(bins, min(same[pn])) - 1:]
-            n, *rest = ax.hist(same[pn], color='red', bins=focused_bins, **kwargs)
+            n, *rest = ax.hist(same[pn], color=color_for_same, bins=focused_bins, **kwargs)
             max_n = max(max_n, max(n))
             
             if orientation == 'vertical':

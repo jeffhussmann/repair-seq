@@ -1,7 +1,6 @@
 import copy
 from collections import defaultdict, Counter
 
-import bokeh.palettes
 import hdbscan
 import matplotlib
 import matplotlib.cm
@@ -59,6 +58,8 @@ class Clusterer:
 
         options.setdefault('outcomes_method', 'hierarchical')
         options.setdefault('outcomes_kwargs', {})
+
+        options.setdefault('use_high_frequency_counts', False)
 
         options['guides_kwargs'].setdefault('metric', 'cosine')
         options['outcomes_kwargs'].setdefault('metric', 'correlation')
@@ -146,6 +147,8 @@ class Clusterer:
                                 )
         embedding['color'] = pd.Series(self.guide_clustering['colors'])
         embedding['gene'] = [self.guide_to_gene[guide] for guide in embedding.index]
+        embedding['cluster_assignments'] = pd.Series(self.guide_clustering['cluster_assignments'], index=self.guide_clustering['clustered_order'])
+
         return embedding
 
     @memoized_property
@@ -186,7 +189,11 @@ class Clusterer:
             deletion_lengths.append(deletion_length)
             directionalities.append(directionality)
 
-            fraction = pool.outcome_fractions('perfect').loc[(c, s, d), ('none', 'all_non_targeting')]
+            if self.options['use_high_frequency_counts']:
+                fraction = pool.high_frequency_outcome_fractions.loc[(c, s, d), 'all_non_targeting']
+            else:
+                fraction = pool.outcome_fractions().loc[(c, s, d), ('none', 'all_non_targeting')]
+
             fractions.append(fraction)
 
         embedding['MH length'] = MH_lengths
@@ -213,7 +220,9 @@ class Clusterer:
         data = self.guide_embedding.copy()
 
         if color_by == 'cluster':
-            pass
+            # sort so that guides assigned to clusters are drawn on top
+            data['sort_by'] = data['cluster_assignments']
+            data = data.sort_values(by='sort_by')
         elif color_by == 'gamma':
             min_gamma = -0.3
 
@@ -326,7 +335,7 @@ class Clusterer:
                             va='center',
                             size=label_size,
                             alpha=label_alpha,
-                        )
+                           )
 
         elif label_genes:
             for gene, rows in self.guide_embedding.groupby('gene', sort=False):
@@ -904,7 +913,9 @@ class SinglePoolClusterer(Clusterer):
 
         elif selection_method == 'above_frequency_threshold':
             threshold = self.options['outcomes_selection_kwargs']['threshold']
-            outcomes = self.pool.outcomes_above_simple_threshold(threshold)
+            outcomes = self.pool.outcomes_above_simple_threshold(frequency_threshold=threshold,
+                                                                 use_high_frequency_counts=self.options['use_high_frequency_counts'],
+                                                                )
 
         elif selection_method == 'top_n':
             num_outcomes = self.options['outcomes_selection_kwargs']['n']
@@ -935,7 +946,11 @@ class SinglePoolClusterer(Clusterer):
 
     @memoized_property
     def log2_fold_changes(self):
-        l2fcs = self.pool.log2_fold_changes.loc[self.outcomes, self.guides]
+        if self.options['use_high_frequency_counts']:
+            l2fcs = self.pool.high_frequency_log2_fold_changes.loc[self.outcomes, self.guides]
+        else:
+            l2fcs = self.pool.log2_fold_changes().loc[self.outcomes, self.guides]
+
         index = pd.MultiIndex.from_tuples([(self.pool.short_name, *vs) for vs in l2fcs.index])
         index.names = ['pool_name'] + l2fcs.index.names
         l2fcs.index = index
@@ -991,7 +1006,7 @@ class MultiplePoolClusterer(Clusterer):
             active_guide_lists = defaultdict(list)
 
             for pool in self.pools:
-                for i, guide in enumerate(pool.canonical_active_guides):
+                for i, guide in enumerate(pool.canonical_active_guides(use_high_frequency_counts=self.options['use_high_frequency_counts'])):
                     active_guide_lists[guide].append((pool.short_name, i))
 
             # Include guides that were active in at least two screens.
@@ -1027,7 +1042,9 @@ class MultiplePoolClusterer(Clusterer):
 
             elif selection_method == 'above_frequency_threshold':
                 threshold = self.options['outcomes_selection_kwargs']['threshold']
-                outcomes = pool.outcomes_above_simple_threshold(threshold)
+                outcomes = pool.outcomes_above_simple_threshold(frequency_threshold=threshold,
+                                                                use_high_frequency_counts=self.options['use_high_frequency_counts'],
+                                                               )
 
             elif selection_method == 'top_n':
                 num_outcomes = self.options['outcomes_selection_kwargs']['n']
@@ -1049,8 +1066,12 @@ class MultiplePoolClusterer(Clusterer):
         all_fcs = {}
 
         for pool in self.pools:
-            fcs = pool.log2_fold_changes.loc[self.pool_specific_outcomes[pool.short_name], self.guides]
-            all_fcs[pool.short_name] = fcs
+            if self.options['use_high_frequency_counts']:
+                fcs = pool.high_frequency_log2_fold_changes
+            else:
+                fcs = pool.log2_fold_changes()
+
+            all_fcs[pool.short_name] = fcs.loc[self.pool_specific_outcomes[pool.short_name], self.guides]
             
         all_fcs = pd.concat(all_fcs)
 

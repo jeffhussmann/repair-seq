@@ -83,16 +83,16 @@ def outcome(outcome,
 
     quantity_to_axis = hits.utilities.reverse_dictionary(axis_to_quantity)
 
-    UMI_counts = pool.UMI_counts_full_arguments(guide_status).xs(fixed_guide, level=0, drop_level=False)
+    UMI_counts = pool.UMI_counts_for_all_fixed_guides(guide_status=guide_status)
     max_cells = max(UMI_counts)
 
-    granular_df = pool.outcome_counts(guide_status).xs(fixed_guide, level=0, axis=1, drop_level=False)
+    granular_df = pool.outcome_counts(guide_status=guide_status).xs(fixed_guide, level=0, axis=1, drop_level=False)
 
     if isinstance(outcome, pd.Series):
         outcome_counts = outcome
 
     elif isinstance(outcome, tuple):
-        nt_fraction = pool.non_targeting_fractions_full_arguments(guide_status, fixed_guide)[outcome]
+        nt_fraction = pool.non_targeting_fractions(guide_status=guide_status, fixed_guide=fixed_guide)[outcome]
         outcome_counts = granular_df.loc[outcome]
 
     else:

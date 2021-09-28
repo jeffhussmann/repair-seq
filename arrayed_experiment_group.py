@@ -15,7 +15,6 @@ from ipywidgets import Layout, Select
 import ddr.experiment_group
 
 import ddr.prime_editing_experiment
-import ddr.endogenous
 import ddr.paired_end_experiment
 import ddr.single_end_experiment
 
@@ -115,7 +114,7 @@ def get_all_batches(base_dir=Path.home() / 'projects' / 'ddr', progress=None, **
 
     batches = {}
 
-    for possible_batch_dir in possible_batch_dirs:
+    for possible_batch_dir in sorted(possible_batch_dirs):
         batch_name = possible_batch_dir.name
         batch = get_batch(base_dir, batch_name, progress=progress, **kwargs)
         if batch is not None:
@@ -587,7 +586,7 @@ class ArrayedExperiment:
         self.sample_name = sample_name
         self.experiment_group = experiment_group
 
-        self.error_corrected = False
+        self.has_UMIs = False
 
     @property
     def default_read_type(self):
@@ -689,7 +688,7 @@ class ArrayedExperiment:
                     layout.query_name = name
 
                 else:
-                    layout = self.categorizer(als, self.target_info, error_corrected=self.error_corrected, mode=self.layout_mode)
+                    layout = self.categorizer(als, self.target_info, error_corrected=self.has_UMIs, mode=self.layout_mode)
 
                     try:
                         layout.categorize()
@@ -732,11 +731,13 @@ class ArrayedExperiment:
                     fh.write(qname + '\n')
             
         with alignment_sorters:
+            saved_verbosity = pysam.set_verbosity(0)
             with pysam.AlignmentFile(bam_fn) as full_bam_fh:
                 for al in self.progress(full_bam_fh, desc='Making outcome-specific bams'):
                     if al.query_name in qname_to_outcome:
                         outcome = qname_to_outcome[al.query_name]
                         alignment_sorters[outcome].write(al)
+            pysam.set_verbosity(saved_verbosity)
 
         # Make special alignments bams.
         for outcome, als in self.progress(special_als.items(), desc='Making special alignments bams'):
@@ -748,21 +749,6 @@ class ArrayedExperiment:
                     sorter.write(al)
 
         return np.array(times_taken)
-
-    @memoized_property
-    def outcome_counts(self):
-        counts = pd.read_csv(self.fns['outcome_counts'],
-                             header=None,
-                             index_col=[0, 1, 2],
-                             squeeze=True,
-                             na_filter=False,
-                             sep='\t',
-                            )
-        counts.index.names = ['category', 'subcategory', 'details']
-        return counts
-
-    def load_outcome_counts(self):
-        return self.outcome_counts.sum(level=[0, 1])
 
 def arrayed_specialized_experiment_factory(experiment_kind):
     experiment_kind_to_class = {
@@ -819,7 +805,8 @@ class ArrayedGroupExplorer(knock_knock.explore.Explorer):
         return experiment
 
     def set_up_read_selection_widgets(self):
-        condition_options = [(', '.join(c), c) for c in self.group.conditions] 
+
+        condition_options = [(', '.join(c) if isinstance(c, tuple) else c, c) for c in self.group.conditions] 
         self.widgets.update({
             'condition': Select(options=condition_options, value=self.initial_condition, layout=Layout(height='200px', width='300px')),
             'replicate': Select(options=[], layout=Layout(height='200px', width='150px')),

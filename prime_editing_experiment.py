@@ -148,8 +148,8 @@ class PrimeEditingExperiment(experiment.Experiment):
             elif stage == 'categorize':
                 self.categorize_outcomes()
 
-                self.count_outcomes()
-                self.count_read_lengths()
+                self.generate_outcome_counts()
+                self.generate_read_lengths()
 
                 self.extract_templated_insertion_info()
 

@@ -195,8 +195,7 @@ def make_color_column(guide_to_gene, genes, full_gene_list=None, default_color='
         
     return guide_to_color, gene_to_color
 
-def scatter_and_pc(pool,
-                   results,
+def scatter_and_pc(results,
                    x_column,
                    y_column,
                    genes_to_label,
@@ -211,44 +210,46 @@ def scatter_and_pc(pool,
                    gene_to_color=None,
                    guides_to_highlight=None,
                    manual_labels=None,
-                   plot_genes=False,
+                   resolution_to_plot='genes',
                    scatter_genes_to_label=None,
                    **kwargs,
                   ):
 
+    guide_to_gene = results['guides_df']['gene']
+
     if manual_labels is None:
         manual_labels = []
 
-    data = results['full_df'].xs('log2_fold_change', axis=1, level=1).copy()
+    if resolution_to_plot == 'guides':
+        data = results['guides_df'].xs('log2_fold_change', axis=1, level=1).copy()
+
+        best_promoter = pool.variable_guide_library.guides_df['best_promoter']
+        if guides_to_highlight is None:
+            guides_to_highlight = guide_to_gene[guide_to_gene.isin(genes_to_label) & best_promoter].index
+    else:
+        data = results['genes_df']
 
     if column_order is None:
         column_order = data.columns.values
 
     data = data[column_order]
-    best_promoter = pool.variable_guide_library.guides_df['best_promoter']
-    guide_to_gene = results['full_df']['gene']
         
-    if guides_to_highlight is None:
-        guides_to_highlight = guide_to_gene[guide_to_gene.isin(genes_to_label) & best_promoter].index
-
     if gene_to_color is None and guide_to_color is None:
         guide_to_color, gene_to_color = make_color_column(guide_to_gene, genes_to_label, full_gene_list=full_gene_list)
 
     pc_width = kwargs.get('pc_width_per_column', 0.75) * len(column_order)
-    fig, pc_ax = plt.subplots(figsize=(pc_width, kwargs.get('pc_height')))
+    fig, pc_ax = plt.subplots(figsize=(pc_width, kwargs.get('pc_height', 2)))
     
-    if plot_genes:
-        gene_data = results['genes_df'][column_order]
-
-        parallel_coordinates_genes(gene_data,
-                                pc_ax,
-                                gene_to_color,
-                                genes_to_label,
-                                lims=lims,
-                                text_labels=['right'],
-                                pn_to_name=pn_to_name,
-                                legend=legend,
-                                )
+    if resolution_to_plot == 'genes':
+        parallel_coordinates_genes(data,
+                                   pc_ax,
+                                   gene_to_color,
+                                   genes_to_label,
+                                   lims=lims,
+                                   text_labels=['right'],
+                                   pn_to_name=pn_to_name,
+                                   legend=legend,
+                                  )
     else:
         parallel_coordinates(data, pc_ax,
                              guides_to_label,
@@ -264,7 +265,7 @@ def scatter_and_pc(pool,
     fig_width, fig_height = fig.get_size_inches()
     scatter_height = pc_ax_p.height
     scatter_width = fig_height / fig_width * scatter_height
-    scatter_ax = fig.add_axes((pc_ax_p.x1 + 0.3 * pc_ax_p.width,
+    scatter_ax = fig.add_axes((pc_ax_p.x1 + 0.5 * scatter_width,
                                pc_ax_p.y0,
                                scatter_width,
                                scatter_height,
@@ -272,21 +273,21 @@ def scatter_and_pc(pool,
                               sharey=pc_ax,
                              ) 
 
-    if plot_genes:
+    if resolution_to_plot == 'genes':
         if scatter_genes_to_label is None:
             scatter_genes_to_label = genes_to_label
 
-        scatter_genes(gene_data,
-                scatter_ax,
-                x_column,
-                y_column,
-                scatter_genes_to_label,
-                gene_to_color,
-                avoid_overlapping_labels=avoid_overlapping_labels,
-                lims=lims,
-                pn_to_name=pn_to_name,
-                draw_labels=draw_labels,
-            )
+        scatter_genes(data,
+                      scatter_ax,
+                      x_column,
+                      y_column,
+                      scatter_genes_to_label,
+                      gene_to_color,
+                      avoid_overlapping_labels=avoid_overlapping_labels,
+                      lims=lims,
+                      pn_to_name=pn_to_name,
+                      draw_labels=draw_labels,
+                     )
     else:
         scatter(data, scatter_ax,
                 x_column,
@@ -308,7 +309,7 @@ def scatter_and_pc(pool,
                             annotation_clip=False,
                            )
 
-    fig_transform = pc_ax.figure.transFigure
+    fig_transform = fig.transFigure
     inverse_figure = fig_transform.inverted()
     pc_transform = pc_ax.get_xaxis_transform() + inverse_figure
     scatter_transform = scatter_ax.transAxes + inverse_figure
@@ -316,6 +317,9 @@ def scatter_and_pc(pool,
     def draw_path(points, transforms):
         xs, ys = np.array([t.transform_point(p) for t, p in zip(transforms, points)]).T
         pc_ax.plot(xs, ys, linewidth=0.5, transform=fig_transform, clip_on=False, color='black')
+
+    bracket_offset = 0.03
+    bracket_height = 0.025
 
     def draw_bracket(x):
         draw_path([(x - 0.1, -bracket_offset + bracket_height),
@@ -326,8 +330,6 @@ def scatter_and_pc(pool,
                   [pc_transform, pc_transform, pc_transform, pc_transform],
                  )
 
-    bracket_offset = 0.03
-    bracket_height = 0.025
     y_pc_x = data.columns.get_loc(y_column)
     draw_bracket(y_pc_x)
     draw_path([(y_pc_x, -bracket_offset),
@@ -678,26 +680,42 @@ def parallel_coordinates_genes(data,
         if gene.startswith('non-targeting_set'):
             continue
 
+        common_kwargs = dict(
+            text=gene,
+            color=kwargs['color'],
+            textcoords='offset points',
+            va='center',
+            size=6,
+            xycoords=('axes fraction', 'data'),
+        )
+        specific_kwargs_list = []
         if 'right' in text_labels:
-            ax.annotate(gene,
-                        xy=(1, row.values[-1]),
-                        xycoords=('axes fraction', 'data'),
-                        xytext=(5, 0),
-                        textcoords='offset points',
-                        color=kwargs['color'],
-                        ha='left',
-                        va='center',
-                        size=6,
-            )
+            specific_kwargs_list.append(dict(
+                xy=(1, row.values[-1]),
+                xytext=(5, 0),
+                ha='left',
+            ))
+
+        if 'left' in text_labels:
+            specific_kwargs_list.append(dict(
+                xy=(0, row.values[0]),
+                xytext=(-5, 0),
+                ha='right',
+            ))
+
+        for specific_kwargs in specific_kwargs_list:
+            ax.annotate(**common_kwargs, **specific_kwargs)
         
     if legend:
         ax.legend(bbox_to_anchor=(-0.35, 1),
                 loc='upper right',
                 )
         
-    ax.set_ylabel('log$_2$ fold-change from non-targeting\n(average of 2 most active guides)', size=6)
+    ax.set_ylabel('log$_2$ fold-change from non-targeting', size=6)
 
-    ax.set_xticks(np.arange(len(data.columns)))
+    num_columns = len(data.columns)
+    ax.set_xlim(0, num_columns - 1)
+    ax.set_xticks(np.arange(num_columns))
     labels = []
     for n in data.columns:
         pn, outcome = n.rsplit('_', 1)
@@ -709,8 +727,9 @@ def parallel_coordinates_genes(data,
 
     ax.set_ylim(*lims)
 
-    for y in np.arange(-3, 2):
-        ax.axhline(y, color='black', alpha=0.2, linewidth=0.5)
+    y_lines = np.arange(int(np.floor(lims[0])), int(np.ceil(lims[1])) + 1)
+    for y in y_lines:
+        ax.axhline(y, color='black', alpha=0.2, linewidth=0.5, clip_on=False)
 
     all_axs = [ax]
     for x in range(1, len(data.columns)):
@@ -736,59 +755,75 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
     sgRNA_to_target_name = {
         'sgRNA-5': '1',
         'sgRNA-3': '2',
+        'sgRNA-2': '3',
+        'sgRNA-7': '4',
+    }
+
+    library_name_to_alias = {
+        'DDR_library': '1.5k',
+        'DDR_sublibrary': '366',
     }
         
-    label_y = 1.20
-    donor_y = 1.14
-    sgRNA_y = 1.07
+    label_y = 1.24
+    donor_y = 1.21
+    sgRNA_y = 1.14
+    library_y = 1.07
 
     donor_half_width = 0.3
 
     arrow_width = donor_half_width * 0.2
     arrow_height = 0.01
 
-    top_strand_y = donor_y + 0.005
-    bottom_strand_y = donor_y - 0.005
+    top_strand_y = donor_y + 0.007
+    bottom_strand_y = donor_y - 0.007
+
+    at_least_one_donor = False
         
     for x, pn in enumerate([n.rsplit('_', 1)[0] for n in data.columns]):
-        ti = pools[pn].target_info
+        pool = pools[pn]
+        ti = pool.target_info
 
-        _, _, is_reverse_complement = ti.best_donor_target_alignment
+        if ti.donor is not None:
+            at_least_one_donor = True
+            # Draw donor.
+            _, _, is_reverse_complement = ti.best_donor_target_alignment
+                
+            if 'sODN' in pn:
+                donor_color = bokeh.palettes.Dark2[8][1]
+            elif 'all-SNVs' in pn:
+                donor_color = bokeh.palettes.Set2[8][0]
+            elif 'first-half' in pn:
+                donor_color = bokeh.palettes.Set2[8][1]
+            elif 'second-half' in pn:
+                donor_color = bokeh.palettes.Set2[8][2]
+            else:
+                donor_color = 'black'
             
-        if 'sODN' in pn:
-            donor_color = bokeh.palettes.Set2[8][3]
-        elif 'all-SNVs' in pn:
-            donor_color = bokeh.palettes.Set2[8][0]
-        elif 'first-half' in pn:
-            donor_color = bokeh.palettes.Set2[8][1]
-        elif 'second-half' in pn:
-            donor_color = bokeh.palettes.Set2[8][2]
-        
-        double_stranded = 'dsODN' in pn
-        
-        common_kwargs = dict(
-            transform=ax.get_xaxis_transform(),
-            clip_on=False,
-            color=donor_color,
-        )
-        
-        # Draw reverse orientation strands.
-        if is_reverse_complement or double_stranded:
-            xs = [x - donor_half_width + arrow_width, x - donor_half_width, x + donor_half_width]
-            ys = [bottom_strand_y - arrow_height, bottom_strand_y, bottom_strand_y]
-            ax.plot(xs, ys, **common_kwargs)
-        
-        # Draw forward orientation strands.
-        if (not is_reverse_complement) or double_stranded:
-            xs = [x - donor_half_width, x + donor_half_width, x + donor_half_width - arrow_width]
-            ys = [top_strand_y, top_strand_y, top_strand_y + arrow_height]
-            ax.plot(xs, ys, **common_kwargs)
-        
-        # Draw base pairing ticks for double stranded donors.
-        if double_stranded:
-            bp_xs = np.linspace(x - 0.9 * donor_half_width, x + 0.9 * donor_half_width, endpoint=True, num=10)
-            for bp_x in bp_xs:
-                ax.plot([bp_x, bp_x], [top_strand_y, bottom_strand_y], alpha=0.5, solid_capstyle='butt', **common_kwargs)
+            double_stranded = 'dsODN' in pn
+            
+            common_kwargs = dict(
+                transform=ax.get_xaxis_transform(),
+                clip_on=False,
+                color=donor_color,
+            )
+            
+            # Draw reverse orientation strands.
+            if is_reverse_complement or double_stranded:
+                xs = [x - donor_half_width + arrow_width, x - donor_half_width, x + donor_half_width]
+                ys = [bottom_strand_y - arrow_height, bottom_strand_y, bottom_strand_y]
+                ax.plot(xs, ys, **common_kwargs)
+            
+            # Draw forward orientation strands.
+            if (not is_reverse_complement) or double_stranded:
+                xs = [x - donor_half_width, x + donor_half_width, x + donor_half_width - arrow_width]
+                ys = [top_strand_y, top_strand_y, top_strand_y + arrow_height]
+                ax.plot(xs, ys, **common_kwargs)
+            
+            # Draw base pairing ticks for double stranded donors.
+            if double_stranded:
+                bp_xs = np.linspace(x - 0.9 * donor_half_width, x + 0.9 * donor_half_width, endpoint=True, num=10)
+                for bp_x in bp_xs:
+                    ax.plot([bp_x, bp_x], [top_strand_y, bottom_strand_y], alpha=0.5, solid_capstyle='butt', **common_kwargs)
                 
         if show_text_labels:
             ax.annotate(pn_to_name[pn],
@@ -808,6 +843,16 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
                     color=ti.PAM_color,
                     size=6,
                 )
+
+        library_alias = library_name_to_alias[pool.variable_guide_library.name]
+        ax.annotate(library_alias,
+                    xy=(x, library_y),
+                    xycoords=('data', 'axes fraction'),
+                    ha='center',
+                    va='center',
+                    color='black',
+                    size=6,
+                )
             
     common_kwargs = dict(
         xycoords='axes fraction',
@@ -818,13 +863,19 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
         size=6,
     )
 
-    ax.annotate('donor:',
-                xy=(0, donor_y),
-                **common_kwargs,
-            )
+    if at_least_one_donor:
+        ax.annotate('donor:',
+                    xy=(0, donor_y),
+                    **common_kwargs,
+                )
 
     ax.annotate('Cas9 target site:',
                 xy=(0, sgRNA_y),
+                **common_kwargs,
+            )
+
+    ax.annotate('CRISPRi library:',
+                xy=(0, library_y),
                 **common_kwargs,
             )
 

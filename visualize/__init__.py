@@ -4,6 +4,11 @@ import bokeh.palettes
 import matplotlib.pyplot as plt
 import pandas as pd
 
+import knock_knock.outcome
+
+targeting_guide_color = 'silver'
+nontargeting_guide_color = bokeh.palettes.Greys9[2]
+
 correlation_cmap = copy.copy(plt.get_cmap('PuOr_r'))
 correlation_cmap.set_bad('white')
 
@@ -101,6 +106,7 @@ Cpf1_category_colors.update({
     'deletion, spans both nicks': bokeh.palettes.Set1[8][2],
     'deletion, spans PAM-distal nick': bokeh.palettes.Set1[8][0],
     'deletion, spans PAM-proximal nick': bokeh.palettes.Set1[8][3],
+    'deletion, spans neither': 'gray',
 })
 
 Cpf1_category_aliases = {n: n for n in Cpf1_category_display_order}
@@ -109,6 +115,7 @@ Cpf1_category_aliases.update({
     'deletion, spans both nicks': 'deletions spanning both nicks',
     'deletion, spans PAM-distal nick': 'deletions spanning only PAM-distal nick',
     'deletion, spans PAM-proximal nick': 'deletions spanning only PAM-proximal nick',
+    'deletion, spans neither': 'deletions spanning neither nick',
     'genomic insertion': 'capture of genomic sequence at break',
 })
 
@@ -136,3 +143,8 @@ category_display_order = {
     'SpCas9': Cas9_category_display_order,
     'Cpf1': Cpf1_category_display_order,
 }
+def assign_category_colors(outcomes, target_info):
+    combined_categories = knock_knock.outcome.add_directionalities_to_deletions(outcomes, target_info)
+    category_to_color = category_colors[target_info.effector.name]
+    colors = [category_to_color[c] for c in combined_categories]
+    return colors

@@ -120,8 +120,8 @@ class SingleEndExperiment(knock_knock.experiment.Experiment):
             elif stage == 'categorize':
                 self.categorize_outcomes()
 
-                self.count_read_lengths()
-                self.count_outcomes()
+                self.generate_read_lengths()
+                self.generate_outcome_counts()
 
                 self.record_sanitized_category_names()
             

@@ -30,12 +30,12 @@ def extract_numerator_and_denominator_counts(pool, numerator_outcomes, denominat
         elif all(outcome in pool.subcategory_counts.index for outcome in list(numerator_outcomes)):
             count_source = pool.subcategory_counts
         else:
-            count_source = pool.outcome_counts('perfect')['none']
+            count_source = pool.outcome_counts()['none']
             
         numerator_counts = count_source.loc[numerator_outcomes].sum(axis='index')
         
     if denominator_outcomes is None:
-        denominator_counts = pool.UMI_counts
+        denominator_counts = pool.UMI_counts()
     else:
         if not all(outcome in count_source.index for outcome in denominator_outcomes):
             raise ValueError(denominator_outcomes)
@@ -76,16 +76,6 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
         guides_to_omit = []
 
     numerator_counts, denominator_counts = extract_numerator_and_denominator_counts(pool, outcomes, denominator_outcomes)
-
-    #if denominator_outcomes is None:
-    #    UMI_counts = pool.UMI_counts_full_arguments('perfect')[fixed_guide]
-    #else:
-    #    UMI_counts = pool.outcome_counts('perfect')[fixed_guide].loc[denominator_outcomes].sum()
-
-    #if isinstance(outcomes, pd.Series):
-    #    numerator_counts = outcomes.loc[fixed_guide]
-    #else:
-    #    numerator_counts = pool.outcome_counts('perfect')[fixed_guide].loc[outcomes].sum()
 
     frequencies = numerator_counts / denominator_counts
     
@@ -145,8 +135,10 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
     guides_df['p_relevant'] = guides_df[['p_down', 'p_up']].min(axis=1)
     guides_df['-log10_p_relevant'] = -np.log10(np.maximum(np.finfo(np.float64).tiny, guides_df['p_relevant']))
 
+    #return guides_df, corrected_ps_df
+
     for direction in ['down', 'up']:
-        guides_df[f'gene_p_{direction}'] = np.array([corrected_ps_df.loc[row['gene'], direction] for guide, row in guides_df.iterrows()])
+        guides_df[f'gene_p_{direction}'] = corrected_ps_df.loc[guides_df['gene'], direction].values
 
     guides_df.index.name = 'guide'
 
@@ -176,7 +168,7 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
 
     return guides_df, nt_fraction, genes_df
 
-def compute_table(base_dir, pool_names, outcome_groups,
+def compute_table(pool_and_outcomes,
                   pickle_fn=None,
                   initial_dataset=None,
                   initial_outcome=None,
@@ -192,61 +184,52 @@ def compute_table(base_dir, pool_names, outcome_groups,
 
     all_gene_columns = {}
 
-    guide_column_names = ['log2_fold_change', 'frequency', 'ys', 'total_UMIs', 'gene_p_up', 'gene_p_down']
+    guide_column_names = [
+        'log2_fold_change',
+        'frequency',
+        'ys',
+        'total_UMIs',
+        'gene_p_up',
+        'gene_p_down',
+    ]
     outcome_names = []
+    pool_names = []
 
     guide_to_gene = {}
 
     if pool_name_aliases is None:
         pool_name_aliases = {}
 
-    for pool_name in progress(pool_names):
-        pool = pooled_screen.PooledScreen(base_dir, pool_name)
-
+    for pool, (outcome_name, outcomes) in progress(pool_and_outcomes):
         if use_short_names:
-            name_to_use = pool.short_name
+            pool_name_to_use = pool.short_name
         else:
-            name_to_use = pool_name
+            pool_name_to_use = pool.name
 
-        name_to_use = pool_name_aliases.get(name_to_use)
+        pool_name_to_use = pool_name_aliases.get(pool_name_to_use, pool_name_to_use)
         
-        for outcome_specification in progress(outcome_groups):
-            if isinstance(outcome_specification, tuple) and len(outcome_specification) == 3:
-                # It is a just a single outcome.
-                outcome_name = '_'.join(outcome_specification)
-                outcomes = [outcome_specification]
-            elif len(outcome_specification) == 2:
-                outcome_name, rule = outcome_specification
-                if callable(rule):
-                    outcomes = rule(pool)
-                else:
-                    if isinstance(rule, tuple) and len(rule) == 3:
-                        # It is a just a single outcome.
-                        outcomes = [rule]
-                    else:
-                        # a list of outcomes
-                        outcomes = rule
+        pool_names.append(pool_name_to_use)
+        outcome_names.append(outcome_name)
+
+        full_name = f'{pool_name_to_use}_{outcome_name}'
+
+        df, nt_fraction, genes_df = get_outcome_statistics(pool, outcomes)
+
+        all_gene_columns[full_name] = genes_df['log2 fold change', 'relevant']
+
+        guide_to_gene.update(df['gene'].items())
+
+        df['x'] = np.arange(len(df))
+        df['xs'] = [[x, x] for x in df['x']]
+        df['ys'] = list(zip(df['interval_bottom'], df['interval_top']))
+        #df['ys'] = [[row['interval_bottom'], row['interval_top']] for _, row in df.iterrows()]
+
+        for col_name in guide_column_names:
+            all_columns[full_name, col_name] = df[col_name]
             
-            outcome_names.append(outcome_name)
-
-            full_name = f'{name_to_use}_{outcome_name}'
-
-            df, nt_fraction, genes_df = get_outcome_statistics(pool, outcomes)
-
-            all_gene_columns[full_name] = genes_df['log2 fold change', 'relevant']
-
-            guide_to_gene.update(df['gene'].items())
-
-            df['x'] = np.arange(len(df))
-            df['xs'] = [[x, x] for x in df['x']]
-            df['ys'] = [[row['interval_bottom'], row['interval_top']] for _, row in df.iterrows()]
-
-            for col_name in guide_column_names:
-                all_columns[full_name, col_name] = df[col_name]
-                
-            nt_fractions[full_name] = nt_fraction
+        nt_fractions[full_name] = nt_fraction
             
-    full_df = pd.DataFrame(all_columns)
+    guides_df = pd.DataFrame(all_columns)
 
     genes_df = pd.DataFrame(all_gene_columns)
 
@@ -267,21 +250,21 @@ def compute_table(base_dir, pool_names, outcome_groups,
                      for i, g in enumerate(pool.variable_guide_library.genes_with_non_targeting_guide_sets)
                     }
 
-    full_df['color'] = [gene_to_color[row['gene']] for guide, row in df.iterrows()]
-    full_df.index.name = 'guide'
+    guides_df['color'] = df['gene'].map(gene_to_color)
+    guides_df.index.name = 'guide'
 
     for common_key in ['x', 'xs']:
-        full_df[common_key] = df[common_key]
+        guides_df[common_key] = df[common_key]
 
-    full_df['gene'] = pd.Series(guide_to_gene)
+    guides_df['gene'] = pd.Series(guide_to_gene)
 
     to_pickle = {
-        'pool_names': [pool_name_aliases.get(pn) for pn in pool_names],
+        'pool_names': pool_names,
         'outcome_names': outcome_names,
-        'full_df': full_df,
         'nt_fractions': nt_fractions,
         'initial_dataset': initial_dataset,
         'initial_outcome': initial_outcome,
+        'guides_df': guides_df,
         'genes_df': genes_df,
     }
 

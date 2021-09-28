@@ -11,43 +11,40 @@ Pooled_UMI_Outcome = outcome_record.OutcomeRecord_factory(
         'guide_mismatch',
         'cluster_id',
         'num_reads',
+        'inferred_amplicon_length',
         'category',
         'subcategory',
         'details',
         'query_name',
+        'common_sequence_name',
     ],
     converters_arg={
         'num_reads': int,
         'guide_mismatch': int,
+        'inferred_amplicon_length': int,
     },
 )
 
 gDNA_Outcome = outcome_record.OutcomeRecord_factory(
     columns_arg=[
         'query_name',
+        'guide_mismatches',
+        'inferred_amplicon_length',
         'category',
         'subcategory',
         'details',
+        'common_sequence_name',
     ],
-    converters_arg={
-    },
+    converters_arg={'inferred_amplicon_length': int},
 )
 
-def load_UMI_outcomes(fn, pooled=True):
-    UMI_outcomes = []
-    for line in fn.open():
-        UMI_outcome = Pooled_UMI_Outcome.from_line(line)
-        UMI_outcomes.append(UMI_outcome)
-
-    return UMI_outcomes
-
-def collapse_pooled_UMI_outcomes(input_fn):
+def collapse_pooled_UMI_outcomes(outcome_iter):
     def is_relevant(outcome):
         return (outcome.category != 'bad sequence' and
                 outcome.outcome != ('no indel', 'other', 'ambiguous')
                )
 
-    all_outcomes = [o for o in load_UMI_outcomes(input_fn, True) if is_relevant(o)]
+    all_outcomes = [o for o in outcome_iter if is_relevant(o)]
     all_outcomes = sorted(all_outcomes, key=lambda u: (u.UMI, u.cluster_id))
 
     all_collapsed_outcomes = []

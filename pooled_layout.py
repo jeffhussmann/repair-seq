@@ -513,13 +513,13 @@ class Layout(layout.Categorizer):
         else:
             return False
 
-    def overlaps_primer(self, al, side):
+    def overlaps_primer(self, al, side, require_correct_strand=True):
         primer = self.target_info.primers_by_side_of_read[side]
         num_overlapping_bases = al.get_overlap(primer.start, primer.end + 1)
         overlaps = num_overlapping_bases > 0
         correct_strand = sam.get_strand(al) == self.target_info.sequencing_direction 
 
-        return correct_strand and overlaps
+        return overlaps and (correct_strand or not require_correct_strand)
 
     @memoized_property
     def whole_read(self):
@@ -2400,6 +2400,9 @@ class Layout(layout.Categorizer):
                                                 self.register_insertion_with_deletion()
                                             else:
                                                 self.register_deletion_plus_mismatches()
+                                        elif self.is_valid_SD_MMEJ and self.is_valid_insertion_with_deletion:
+                                            # stop-gap mesaure to prevent mismatches near cut from being ignored
+                                            self.register_insertion_with_deletion()
                                         else:
                                             self.register_indel(indel, near_cut)
 
@@ -2428,6 +2431,9 @@ class Layout(layout.Categorizer):
                                             self.register_insertion_plus_mismatches()
                                         else:
                                             raise ValueError('bad indel kind', indel.kind)
+                                elif self.is_valid_SD_MMEJ and self.is_valid_insertion_with_deletion:
+                                    # stop-gap mesaure to prevent mismatches near cut from being ignored
+                                    self.register_insertion_with_deletion()
 
                                 else:
                                     self.register_indel(indel, near_cut)

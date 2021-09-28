@@ -7,7 +7,7 @@ import scipy.sparse
 
 from hits import utilities
 memoized_property = utilities.memoized_property
-memoized_with_key = utilities.memoized_with_key
+memoized_with_args = utilities.memoized_with_args
 
 import knock_knock.outcome_record
 
@@ -248,7 +248,7 @@ class ExperimentGroup:
 
         #collapsed.sum(axis=1).to_csv(self.fns['collapsed_total_outcome_counts'], header=False)
 
-    @memoized_with_key
+    @memoized_with_args
     def outcome_counts_df(self, collapsed):
         if collapsed:
             prefix = 'collapsed_'
@@ -268,7 +268,7 @@ class ExperimentGroup:
 
         return df
 
-    @memoized_with_key
+    @memoized_with_args
     def total_outcome_counts(self, collapsed):
         if collapsed:
             prefix = 'collapsed_'
