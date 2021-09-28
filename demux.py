@@ -1,6 +1,8 @@
 import argparse
 import gzip
+import itertools
 import multiprocessing
+import shutil
 
 from pathlib import Path
 from collections import defaultdict, Counter
@@ -59,13 +61,14 @@ def chunk_number_to_string(chunk_number):
     return f'{chunk_number:06d}'
 
 class FastqChunker:
-    def __init__(self, base_dir, group, quartet_name, which, reads_per_chunk=None, queue=None):
+    def __init__(self, base_dir, group, quartet_name, which, reads_per_chunk=None, queue=None, debug=False):
         self.base_dir = Path(base_dir)
         self.group = group
         self.quartet_name = quartet_name
         self.which = which
         self.reads_per_chunk = reads_per_chunk
         self.queue = queue
+        self.debug = debug
         
         sample_sheet = load_sample_sheet(self.base_dir, self.group)
         quartet = sample_sheet['quartets'][quartet_name]
@@ -103,6 +106,9 @@ class FastqChunker:
         
     def split_into_chunks(self):
         line_groups = fastq.get_line_groups(self.input_fn)
+
+        if self.debug:
+            line_groups = itertools.islice(line_groups, int(5e5))
         
         for read_number, line_group in enumerate(line_groups):
             if read_number % self.reads_per_chunk == 0:
@@ -148,8 +154,8 @@ class UMISorters:
             del self.sorters[sample, fixed_guide, variable_guide]
             del sorted_reads
             
-def split_into_chunks(base_dir, group, quartet_name, which, reads_per_chunk, queue):
-    chunker = FastqChunker(base_dir, group, quartet_name, which, reads_per_chunk, queue)
+def split_into_chunks(base_dir, group, quartet_name, which, reads_per_chunk, queue, debug):
+    chunker = FastqChunker(base_dir, group, quartet_name, which, reads_per_chunk, queue, debug)
     return chunker.split_into_chunks()
 
 def get_resolvers(base_dir, group):
@@ -317,10 +323,12 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('base_dir', type=Path, default=Path.home() / 'projects' / 'ddr')
     parser.add_argument('group_name')
+    parser.add_argument('--debug', action='store_true')
 
     args = parser.parse_args()
     base_dir = args.base_dir
     group = args.group_name
+    debug = args.debug
     
     make_pool_sample_sheets(base_dir, group)
 
@@ -351,9 +359,10 @@ if __name__ == '__main__':
         
         for quartet_name in quartet_names:
             for which in fastq.quartet_order:
-                args = (base_dir, group, quartet_name, which, reads_per_chunk, tasks_done_queue)
+                args = (base_dir, group, quartet_name, which, reads_per_chunk, tasks_done_queue, debug)
                 chunk_result = chunk_pool.apply_async(split_into_chunks, args)
-                #print(chunk_result.get())
+                if debug:
+                    print(chunk_result.get())
                 chunk_results.append(chunk_result)
 
                 unfinished_chunkers.add((quartet_name, which))
@@ -377,12 +386,12 @@ if __name__ == '__main__':
                         
                         args = (base_dir, group, quartet_name, chunk_number, tasks_done_queue)
                         demux_result = demux_pool.apply_async(demux_chunk, args)
-                        #print(demux_result.get())
+                        if debug:
+                            print(demux_result.get())
                         demux_results.append(demux_result)
 
             elif task_type == 'demux':
                 demux_progress.update()
-
 
         while demux_progress.n < chunk_progress.n:
             task_type, *task_info = tasks_done_queue.get()
@@ -423,4 +432,4 @@ if __name__ == '__main__':
             print(merge_result.get())
 
     chunk_dir = base_dir / 'data' / group / 'chunks'
-    chunk_dir.rmdir()
+    shutil.rmtree(str(chunk_dir))
