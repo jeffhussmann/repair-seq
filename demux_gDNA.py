@@ -13,11 +13,12 @@ idx = pd.IndexSlice
 import yaml
 import tqdm
 
-from hits import fastq, fasta, utilities
+from hits import fastq, utilities
 import knock_knock.target_info
 import ddr.guide_library
 import ddr.pooled_screen
 import ddr.guide_library
+import ddr.collapse
 
 def load_sample_sheet(base_dir, batch):
     sample_sheet_fn = Path(base_dir) / 'data' / batch / 'gDNA_sample_sheet.yaml'
@@ -60,11 +61,12 @@ def make_pool_sample_sheets(base_dir, batch):
         pool_sample_sheet = {
             'pooled': True,
             'gDNA': True,
-            'primer_names': [sample_sheet['R1_primer'], sample_sheet['R2_primer']],
+            'R1_primer': sample_sheet['R1_primer'],
+            'R2_primer': sample_sheet['R2_primer'],
             'variable_guide_library': sample_sheet['variable_guide_library'],
-            'has_UMIs': sample_sheet['has_UMIs'],
+            'has_UMIs': sample_sheet.get('has_UMIs', False),
             'layout_module': sample_sheet['layout_module'],
-            'infer_homology_arms': sample_sheet['infer_homology_arms'],
+            'infer_homology_arms': sample_sheet.get('infer_homology_arms', True),
         }
 
         if 'target_info_prefix' in sample_sheet:
@@ -137,7 +139,7 @@ class FastqChunker:
         line_groups = fastq.get_line_groups(self.input_fn)
 
         if self.debug:
-            line_groups = itertools.islice(line_groups, int(5e5))
+            line_groups = itertools.islice(line_groups, int(5e6))
         
         for read_number, line_group in enumerate(line_groups):
             if read_number % self.reads_per_chunk == 0:
@@ -313,6 +315,8 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
 
     counts = defaultdict(Counter)
 
+    Annotation = ddr.collapse.Annotations['R2_with_guide']
+
     for quartet in fastq.read_quartets(fastq_fns, standardize_names=True):
         if len({r.name for r in quartet}) != 1:
             raise ValueError('quartet out of sync')
@@ -331,7 +335,7 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
         counts['I5'][quartet.I2.seq] += 1
 
         # Note: primer for gDNA prep makes R1 read start 1 downstream of UMI prep.
-        variable_guide_seq = quartet.R1.seq[:44]
+        variable_guide_seq = quartet.R1.seq
 
         variable_guides = resolvers['variable_guide'](variable_guide_seq, {'unknown'})
         if len(variable_guides) == 1:
@@ -355,6 +359,16 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
         # Retain quartets with an unknown fixed guide to allow detection of weird ligations.
         if 'unknown' in {sample, variable_guide}:
             continue
+
+        query_name = quartet.R1.name
+        guide_seq = quartet.R1.seq
+        guide_qual = fastq.sanitize_qual(quartet.R1.qual)
+
+        annotation = Annotation(query_name=query_name,
+                                guide=guide_seq,
+                                guide_qual=guide_qual,
+                               )
+        quartet.R2.name = str(annotation)
 
         writers[sample, fixed_guide, variable_guide].append(quartet.R2[after_guide_barcode_slice])
 
