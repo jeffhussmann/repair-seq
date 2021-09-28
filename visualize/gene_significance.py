@@ -135,8 +135,6 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
     guides_df['p_relevant'] = guides_df[['p_down', 'p_up']].min(axis=1)
     guides_df['-log10_p_relevant'] = -np.log10(np.maximum(np.finfo(np.float64).tiny, guides_df['p_relevant']))
 
-    #return guides_df, corrected_ps_df
-
     for direction in ['down', 'up']:
         guides_df[f'gene_p_{direction}'] = corrected_ps_df.loc[guides_df['gene'], direction].values
 
@@ -222,7 +220,6 @@ def compute_table(pool_and_outcomes,
         df['x'] = np.arange(len(df))
         df['xs'] = [[x, x] for x in df['x']]
         df['ys'] = list(zip(df['interval_bottom'], df['interval_top']))
-        #df['ys'] = [[row['interval_bottom'], row['interval_top']] for _, row in df.iterrows()]
 
         for col_name in guide_column_names:
             all_columns[full_name, col_name] = df[col_name]
