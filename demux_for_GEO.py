@@ -1,7 +1,8 @@
 import argparse
-from collections import defaultdict
-import itertools
 import gzip
+import itertools
+import sys
+from collections import defaultdict
 
 from contextlib import ExitStack
 from pathlib import Path
@@ -18,6 +19,7 @@ parser.add_argument('base_dir', type=Path)
 parser.add_argument('batch')
 parser.add_argument('--has_UMIs', action='store_true')
 parser.add_argument('--debug', action='store_true')
+parser.add_argument('--only_names', action='store_true')
 
 args = parser.parse_args()
 
@@ -35,6 +37,8 @@ systematic_name_fields = [
 systematic_names = set()
 
 if args.has_UMIs:
+    pool_sample_sheet = yaml.safe_load(Path(batch_dir / 'sample_sheet.yaml').read_text())
+
     pool_details = pd.read_csv(batch_dir / 'pool_details.csv',
                                dtype={'guide_library': str, 'replicate': str},
                                index_col='pool_name',
@@ -57,11 +61,25 @@ if args.has_UMIs:
         if len(missing_fields[pool_name]) == 0:
             systematic_name = '_'.join(map(str, row[systematic_name_fields]))
             systematic_names.add(systematic_name)
+
+            # If systematic_name has been manually added back to sample sheet,
+            # confirm that it is consistent.
+            if 'systematic_name' in row:
+                if row['systematic_name'] != systematic_name:
+                    raise ValueError(row['systematic_name'], systematic_name)
+
             systematic_name_to_index[systematic_name] = row['index']
+
+            if args.only_names:
+                full_pool_name = f'{pool_sample_sheet["group_name"]}_{pool_name}'
+                print(full_pool_name, systematic_name)
+
         else:
-            print(f'Warning: {pool_name} is missing fields.')
-            for name_field in missing_fields[pool_name]:
-                print(f'\t{name_field}')
+            if not args.only_names:
+                print(f'Warning: {pool_name} is missing fields.')
+                for name_field in missing_fields[pool_name]:
+                    print(f'\t{name_field}')
+
 
     sample_resolver = hits.utilities.get_one_mismatch_resolver(systematic_name_to_index).get
 
@@ -104,6 +122,9 @@ else:
             sample = 'unknown'
         
         return sample
+
+if args.only_names:
+    sys.exit()
 
 all_lane_info = yaml.safe_load(sample_sheet_fn.read_text())['quartets']
 
