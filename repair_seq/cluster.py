@@ -18,7 +18,7 @@ import hits.visualize
 
 import knock_knock.outcome
 
-import ddr.visualize
+import repair_seq.visualize
 
 memoized_property = hits.utilities.memoized_property
 
@@ -227,7 +227,7 @@ class Clusterer:
             min_gamma = -0.3
 
             values = self.guide_library.guides_df['gamma'].loc[data.index]
-            cmap = ddr.visualize.gamma_cmap
+            cmap = repair_seq.visualize.gamma_cmap
 
             norm = matplotlib.colors.Normalize(vmin=min_gamma, vmax=0)
             sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
@@ -269,7 +269,7 @@ class Clusterer:
             phase = color_by
 
             values = self.guide_library.cell_cycle_log2_fold_changes.loc[phase, data.index]
-            cmap = ddr.visualize.cell_cycle_cmap
+            cmap = repair_seq.visualize.cell_cycle_cmap
 
             norm = matplotlib.colors.Normalize(vmin=-1, vmax=1)
             sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
@@ -461,9 +461,9 @@ class Clusterer:
                     combined_categories.append(combined_category)
 
                 combined_categories = pd.Series(combined_categories, index=data.index)
-                categories_aliased = combined_categories.map(ddr.visualize.category_aliases[effector])
+                categories_aliased = combined_categories.map(repair_seq.visualize.category_aliases[effector])
 
-                value_to_color = ddr.visualize.category_alias_colors[effector]
+                value_to_color = repair_seq.visualize.category_alias_colors[effector]
                 colors = categories_aliased.map(value_to_color)
 
                 data['color'] = colors
@@ -582,7 +582,7 @@ class Clusterer:
 
                 values = values.loc[data.index]
                 norm = matplotlib.colors.Normalize(vmin=-2, vmax=2)
-                cmap = ddr.visualize.fold_changes_cmap
+                cmap = repair_seq.visualize.fold_changes_cmap
                 sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
 
                 colors = [tuple(row) for row in sm.to_rgba(values)]

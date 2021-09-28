@@ -10,8 +10,8 @@ import matplotlib.gridspec
 import bokeh.palettes
 import bokeh.models
 
-from ddr import pooled_screen
-from ddr.visualize import outcome_diagrams
+from repair_seq import pooled_screen
+from repair_seq.visualize import outcome_diagrams
 from hits import utilities
 from hits.visualize.interactive import build_js_callback
 

@@ -8,7 +8,7 @@ import numpy as np
 import hits.visualize
 from hits import fastq, utilities, adapters
 from knock_knock import experiment, svg
-from ddr import prime_editing_layout, pooled_layout
+from repair_seq import prime_editing_layout, pooled_layout
 
 from hits.utilities import memoized_property
 

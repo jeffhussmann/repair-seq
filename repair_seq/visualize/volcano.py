@@ -7,8 +7,8 @@ import numpy as np
 
 import hits.visualize
 
-import ddr.visualize
-import ddr.visualize.gene_significance
+import repair_seq.visualize
+import repair_seq.visualize.gene_significance
 
 def guides(guides_df, guide_to_color=None, gene_to_color=None, gene_sets=None):
     data = guides_df.copy()
@@ -76,7 +76,7 @@ def genes(pool=None,
          ):
 
     if genes_df is None:
-        guides_df, nt_fraction, genes_df = ddr.visualize.gene_significance.get_outcome_statistics(pool, outcomes, denominator_outcomes=denominator_outcomes)
+        guides_df, nt_fraction, genes_df = repair_seq.visualize.gene_significance.get_outcome_statistics(pool, outcomes, denominator_outcomes=denominator_outcomes)
 
     if gene_to_color is None:
         gene_to_color = {}

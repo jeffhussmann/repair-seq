@@ -12,11 +12,11 @@ import pysam
 
 from ipywidgets import Layout, Select
 
-import ddr.experiment_group
+import repair_seq.experiment_group
 
-import ddr.prime_editing_experiment
-import ddr.paired_end_experiment
-import ddr.single_end_experiment
+import repair_seq.prime_editing_experiment
+import repair_seq.paired_end_experiment
+import repair_seq.single_end_experiment
 
 from hits import utilities, sam
 import knock_knock.explore
@@ -109,7 +109,7 @@ def get_batch(base_dir, batch_name, progress=None, **kwargs):
 
     return batch
 
-def get_all_batches(base_dir=Path.home() / 'projects' / 'ddr', progress=None, **kwargs):
+def get_all_batches(base_dir=Path.home() / 'projects' / 'repair_seq', progress=None, **kwargs):
     possible_batch_dirs = [p for p in (Path(base_dir) / 'results').iterdir() if p.is_dir()]
 
     batches = {}
@@ -122,7 +122,7 @@ def get_all_batches(base_dir=Path.home() / 'projects' / 'ddr', progress=None, **
 
     return batches
 
-class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
+class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
     def __init__(self, base_dir, batch, group,
                  category_groupings=None,
                  progress=None,
@@ -286,7 +286,7 @@ class ArrayedExperimentGroup(ddr.experiment_group.ExperimentGroup):
                 if outcome.category == 'genomic insertion':
                     organism = outcome.subcategory
                     
-                    lti  = ddr.outcome.LongTemplatedInsertionOutcome.from_string(outcome.details)
+                    lti  = repair_seq.outcome.LongTemplatedInsertionOutcome.from_string(outcome.details)
                     key = (*condition, organism)
                     length_distributions[key][lti.insertion_length()] += 1
 
@@ -752,9 +752,9 @@ class ArrayedExperiment:
 
 def arrayed_specialized_experiment_factory(experiment_kind):
     experiment_kind_to_class = {
-        'paired_end': ddr.paired_end_experiment.PairedEndExperiment,
-        'prime_editing': ddr.prime_editing_experiment.PrimeEditingExperiment,
-        'single_end': ddr.single_end_experiment.SingleEndExperiment,
+        'paired_end': repair_seq.paired_end_experiment.PairedEndExperiment,
+        'prime_editing': repair_seq.prime_editing_experiment.PrimeEditingExperiment,
+        'single_end': repair_seq.single_end_experiment.SingleEndExperiment,
     }
 
     SpecializedExperiment = experiment_kind_to_class[experiment_kind]
@@ -767,9 +767,9 @@ def arrayed_specialized_experiment_factory(experiment_kind):
         def __repr__(self):
             return f'Arrayed{SpecializedExperiment.__repr__(self)}'
     
-    class ArrayedSpecializedCommonSequencesExperiment(ddr.experiment_group.CommonSequencesExperiment, ArrayedExperiment, SpecializedExperiment):
+    class ArrayedSpecializedCommonSequencesExperiment(repair_seq.experiment_group.CommonSequencesExperiment, ArrayedExperiment, SpecializedExperiment):
         def __init__(self, base_dir, batch, group, sample_name, experiment_group=None, **kwargs):
-            ddr.experiment_group.CommonSequencesExperiment.__init__(self)
+            repair_seq.experiment_group.CommonSequencesExperiment.__init__(self)
             ArrayedExperiment.__init__(self, base_dir, batch, group, sample_name, experiment_group=experiment_group)
             SpecializedExperiment.__init__(self, base_dir, (batch, group), sample_name, **kwargs)
     

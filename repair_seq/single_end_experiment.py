@@ -8,7 +8,7 @@ from hits import utilities, fastq, adapters
 memoized_property = utilities.memoized_property
 
 import knock_knock.experiment
-import ddr.pooled_layout
+import repair_seq.pooled_layout
 
 class SingleEndExperiment(knock_knock.experiment.Experiment):
     def __init__(self, *args, **kwargs):
@@ -71,8 +71,8 @@ class SingleEndExperiment(knock_knock.experiment.Experiment):
 
     @memoized_property
     def categorizer(self):
-        return ddr.pooled_layout.Layout
-        #return ddr.prime_editing_layout.Layout
+        return repair_seq.pooled_layout.Layout
+        #return repair_seq.prime_editing_layout.Layout
 
     def trim_reads(self):
         trimmed_fn = self.fns_by_read_type['fastq']['trimmed']

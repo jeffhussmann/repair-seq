@@ -9,7 +9,7 @@ import tqdm
 
 from knock_knock import target_info
 from hits import utilities
-from ddr.guide_library import GuideLibrary
+from repair_seq.guide_library import GuideLibrary
 
 def build_guide_specific_target(original_target,
                                 original_genbank_name,
@@ -193,7 +193,7 @@ def build_all_doubles(base_dir, fixed_guide_library_name, variable_guide_library
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--base_dir', type=Path, default=Path.home() / 'projects' / 'ddr')
+    parser.add_argument('--base_dir', type=Path, default=Path.home() / 'projects' / 'repair_seq')
     parser.add_argument('--test', action='store_true', help='run the first 10 without parallelization')
     parser.add_argument('--num_processes', type=int, default=18, help='number of processes')
     parser.add_argument('vector')

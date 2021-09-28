@@ -12,8 +12,8 @@ import hits.visualize
 from knock_knock.target_info import degenerate_indel_from_string, SNV, SNVs, effectors
 from knock_knock.outcome import *
 
-import ddr.visualize
-import ddr.visualize.heatmap
+import repair_seq.visualize
+import repair_seq.visualize.heatmap
 
 def plot(outcome_order,
          target_infos,
@@ -1052,7 +1052,7 @@ class DiagramGrid:
                     color='black',
                     colors=None,
                     vmin=-2, vmax=2,
-                    cmap=ddr.visualize.fold_changes_cmap,
+                    cmap=repair_seq.visualize.fold_changes_cmap,
                     draw_tick_labels=True,
                     text_size=10,
                     tick_label_rotation=90,
@@ -1143,7 +1143,7 @@ class DiagramGrid:
 
         width = width_multiple * self.width_per_heatmap_cell
         height = 1 * self.height_per_heatmap_cell
-        ddr.visualize.heatmap.add_fold_change_colorbar(self.fig, self.ims[0], x0, y0, width, height,
+        repair_seq.visualize.heatmap.add_fold_change_colorbar(self.fig, self.ims[0], x0, y0, width, height,
                                                        baseline_condition_name=baseline_condition_name,
                                                        label_interpretation=label_interpretation,
                                                        **kwargs,
@@ -1201,7 +1201,7 @@ class DiagramGrid:
 
         x = 0
 
-        for cat in ddr.visualize.Cas9_category_display_order:
+        for cat in repair_seq.visualize.Cas9_category_display_order:
             cat_outcomes = full_categories[cat]
             if len(cat_outcomes) > 0:
                 indices = sorted([len(self.outcomes) - 1 - self.outcomes.index(outcome) for outcome in cat_outcomes])
@@ -1224,7 +1224,7 @@ class DiagramGrid:
                 for first, last in connected_blocks:
                     ax.plot([x, x], [first - 0.4, last + 0.4],
                             linewidth=2,
-                            color=ddr.visualize.Cas9_category_colors[cat],
+                            color=repair_seq.visualize.Cas9_category_colors[cat],
                             clip_on=False,
                             solid_capstyle='butt',
                            )

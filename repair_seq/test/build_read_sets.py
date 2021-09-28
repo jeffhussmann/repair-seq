@@ -1,9 +1,9 @@
 import hits.sam
 
-import ddr.pooled_screen
-from ddr.test.test_read_sets import ReadSet, base_dir
+import repair_seq.pooled_screen
+from repair_seq.test.test_read_sets import ReadSet, base_dir
 
-prime_editing_pools = ddr.pooled_screen.get_all_pools('/lab/solexa_weissman/jah/projects/prime_editing_screens')
+prime_editing_pools = repair_seq.pooled_screen.get_all_pools('/lab/solexa_weissman/jah/projects/prime_editing_screens')
 
 prime_editing_manual_read_sets = [
     ('PE2_screen', '2020_03_18_prime_editing_PE2_rep1', 'none', 'ABRAXAS1_1', [

@@ -10,7 +10,7 @@ subparsers = parser.add_subparsers(dest='subcommand', title='subcommands')
 subparsers.required = True
 
 def process(args):
-    from ddr import pooled_screen
+    from repair_seq import pooled_screen
     pooled_screen.process(args.base_dir, args.pool, args.fixed_guide, args.variable_guide, args.stage, args.progress, print_timestamps=args.timestamp)
 
 parser_process = subparsers.add_parser('process')
@@ -23,7 +23,7 @@ parser_process.add_argument('--timestamp', action='store_true')
 parser_process.set_defaults(func=process)
 
 def parallel(args):
-    from ddr import pooled_screen
+    from repair_seq import pooled_screen
     pooled_screen.parallel(args.base_dir, args.pool, args.max_procs, args.show_progress_bars)
 
 parser_parallel = subparsers.add_parser('parallel')
@@ -33,7 +33,7 @@ parser_parallel.add_argument('--show_progress_bars', action='store_true')
 parser_parallel.set_defaults(func=parallel)
 
 def process_common_sequences(args):
-    from ddr import pooled_screen
+    from repair_seq import pooled_screen
     pooled_screen.process_common_sequences(args.base_dir, args.pool, args.chunk, args.progress)
 
 parser_process_cs = subparsers.add_parser('process_common_sequences')
@@ -42,7 +42,7 @@ parser_process_cs.add_argument('chunk')
 parser_process_cs.add_argument('--progress', const=tqdm.tqdm, action='store_const')
 parser_process_cs.set_defaults(func=process_common_sequences)
 
-parser.add_argument('--base_dir', type=Path, default=Path.home() / 'projects' / 'ddr')
+parser.add_argument('--base_dir', type=Path, default=Path.home() / 'projects' / 'repair_seq')
 
 args = parser.parse_args()
 args.func(args)

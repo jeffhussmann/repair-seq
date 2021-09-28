@@ -10,11 +10,11 @@ import bokeh.palettes
 import scipy.cluster.hierarchy
 
 from . import outcome_diagrams
-import ddr.pooled_screen
-import ddr.visualize
+import repair_seq.pooled_screen
+import repair_seq.visualize
 
 idx = pd.IndexSlice
-ALL_NON_TARGETING = ddr.pooled_screen.ALL_NON_TARGETING
+ALL_NON_TARGETING = repair_seq.pooled_screen.ALL_NON_TARGETING
 
 bokeh.io.output_notebook()
 
@@ -125,7 +125,7 @@ def genes(pool,
         real_genes = [g for g in genes if g != 'negative_control']
 
         if len(real_genes) > 1 or not different_colors_if_one_gene:
-            gene_to_colors.update(dict(zip(real_genes, ddr.visualize.colors_list)))
+            gene_to_colors.update(dict(zip(real_genes, repair_seq.visualize.colors_list)))
 
         elif len(real_genes) == 1:
             gene = real_genes[0]
@@ -133,7 +133,7 @@ def genes(pool,
             if len(guides) > 6:
                 gene_to_colors.update({gene: ['C0']*1000})
             else:
-                gene_to_colors.update({gene: ddr.visualize.good_colors})
+                gene_to_colors.update({gene: repair_seq.visualize.good_colors})
         
     if ax_order is None:
         if just_percentages:
@@ -1249,7 +1249,7 @@ cb_obj.end = {upper_bound} if cb_obj.end > {upper_bound}
              source=quad_source,
             )
     
-    search_code_fn = '/home/jah/projects/ddr/code/visualize/heatmap_search.coffee'
+    search_code_fn = Path.home() / 'projects' / 'repair_seq' / 'code' / 'repair_seq' / 'visualize' / 'heatmap_search.coffee'
     search_code_template = Path(search_code_fn).read_text()
     search_code = search_code_template.format(guides=list(guide_order), lower_bound=lower_bound, upper_bound=upper_bound)
     search_callback = bokeh.models.CustomJS.from_coffeescript(search_code)
@@ -1444,7 +1444,7 @@ def arrayed_group(group,
     if condition_to_sort_by is not None:
         outcome_order = group.log2_fold_change_condition_means.loc[outcome_order, condition_to_sort_by].sort_values(ascending=False).index.values
         
-    grid = ddr.visualize.outcome_diagrams.DiagramGrid(outcome_order, group.target_info, title=title, **diagram_kwargs)
+    grid = repair_seq.visualize.outcome_diagrams.DiagramGrid(outcome_order, group.target_info, title=title, **diagram_kwargs)
 
     if 'freq' in panels_to_show:
         grid.add_ax('freq', width_multiple=10, gap_multiple=2, title='percentage of reads')
@@ -1550,7 +1550,7 @@ def arrayed_group_categories(group,
     
     if grid is None:
         grid_requires_styling = True
-        grid = ddr.visualize.outcome_diagrams.DiagramGrid(outcome_order,
+        grid = repair_seq.visualize.outcome_diagrams.DiagramGrid(outcome_order,
                                                         group.target_info,
                                                         title=group.group,
                                                         window=(-10, 10),
@@ -1676,7 +1676,7 @@ def pooled_screen_categories(pool,
     if title is None:
         title = pool.short_name
 
-    if isinstance(pool, ddr.pooled_screen.PooledScreen):
+    if isinstance(pool, repair_seq.pooled_screen.PooledScreen):
         if subcategories:
             outcome_order = pool.subcategories_by_baseline_frequency
             fractions = pool.subcategory_fractions
@@ -1704,7 +1704,7 @@ def pooled_screen_categories(pool,
     fraction_differences = fraction_differences.loc[outcome_order]
     log2_fold_changes = log2_fold_changes.loc[outcome_order]
 
-    grid = ddr.visualize.outcome_diagrams.DiagramGrid(outcome_order,
+    grid = repair_seq.visualize.outcome_diagrams.DiagramGrid(outcome_order,
                                                       pool.target_info,
                                                       title=title,
                                                       window=(-10, 10),

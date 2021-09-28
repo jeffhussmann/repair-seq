@@ -2,9 +2,9 @@ from pathlib import Path
 
 import hits.sam
 import knock_knock.target_info
-import ddr.prime_editing_layout
+import repair_seq.prime_editing_layout
 
-base_dir = Path('/home/jah/projects/ddr/code/test')
+base_dir = Path.home() / 'projects' / 'repair_seq' / 'code' / 'repair_seq' / 'test')
 
 class ReadSet:
     def __init__(self, set_name, target_info_name):
@@ -39,7 +39,7 @@ def test_read_sets():
 
             actual_values = {}
             for qname, als in hits.sam.grouped_by_name(read_set.bam_fn):
-                l = ddr.prime_editing_layout.Layout(als, read_set.target_info)
+                l = repair_seq.prime_editing_layout.Layout(als, read_set.target_info)
                 l.categorize()
                 actual_values[qname] = {
                     'category': l.category,

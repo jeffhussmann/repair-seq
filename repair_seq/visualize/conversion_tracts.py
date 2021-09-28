@@ -4,8 +4,8 @@ import matplotlib.pyplot as plt
 
 import hits.utilities
 
-import ddr.visualize
-import ddr.visualize.outcome_diagrams
+import repair_seq.visualize
+import repair_seq.visualize.outcome_diagrams
 
 def draw_ssODN_configurations(pools=None,
                               tis=None,
@@ -315,7 +315,7 @@ def conversion_tracts(pool,
     gene_guides_by_activity = pool.gene_guides_by_activity()
 
     if gene_to_color is None:
-        gene_to_color = {gene: ddr.visualize.good_colors[i] for i, gene in enumerate(heatmap_genes)}
+        gene_to_color = {gene: repair_seq.visualize.good_colors[i] for i, gene in enumerate(heatmap_genes)}
 
     if draw_conversion_plots:
         frequency_ax = fig.add_axes([left, c_ax_p.y0 - height, width, height])
@@ -448,7 +448,7 @@ def conversion_tracts(pool,
     ))
 
     # Note: plot does a weird flip of outcomes
-    diagram_grid = ddr.visualize.outcome_diagrams.DiagramGrid(sorted_outcomes[::-1],
+    diagram_grid = repair_seq.visualize.outcome_diagrams.DiagramGrid(sorted_outcomes[::-1],
                                                               pool.target_info,
                                                               diagram_ax=diagram_ax,
                                                               ax_on_bottom=ax_on_bottom,

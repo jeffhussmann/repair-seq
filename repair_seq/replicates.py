@@ -15,12 +15,12 @@ memoized_property = hits.utilities.memoized_property
 
 import knock_knock.outcome
 
-import ddr.visualize
-import ddr.visualize.clustermap
-import ddr.visualize.outcome_diagrams
-import ddr.pooled_screen
+import repair_seq.visualize
+import repair_seq.visualize.clustermap
+import repair_seq.visualize.outcome_diagrams
+import repair_seq.pooled_screen
 
-ALL_NON_TARGETING = ddr.pooled_screen.ALL_NON_TARGETING
+ALL_NON_TARGETING = repair_seq.pooled_screen.ALL_NON_TARGETING
 
 class ReplicatePair:
     def __init__(self, pools, pn_pair):
@@ -173,7 +173,7 @@ class ReplicatePair:
         text_size = 7
         inches_per_outcome = 0.2
         scale = 0.5
-        g = ddr.visualize.outcome_diagrams.DiagramGrid(outcomes,
+        g = repair_seq.visualize.outcome_diagrams.DiagramGrid(outcomes,
                                                        self.target_info,
                                                        window=window,
                                                        cut_color='PAM',
@@ -213,7 +213,7 @@ class ReplicatePair:
                 )
 
         norm = matplotlib.colors.Normalize(vmin=-1, vmax=1)
-        sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=ddr.visualize.correlation_cmap)
+        sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=repair_seq.visualize.correlation_cmap)
 
         g.plot_on_ax('correlation',
                      r_series,
@@ -246,7 +246,7 @@ class ReplicatePair:
         if draw_heatmap:
             # Note reversing of row order.
             g.add_heatmap(r_matrix[::-1], 'r',
-                        cmap=ddr.visualize.correlation_cmap,
+                        cmap=repair_seq.visualize.correlation_cmap,
                         draw_tick_labels=False,
                         vmin=-1, vmax=1,
                         gap_multiple=2,
@@ -269,7 +269,7 @@ class ReplicatePair:
         
         fig, ax = plt.subplots(figsize=(8, 8))
 
-        ax.imshow(guide_r_matrix, cmap=ddr.visualize.clustermap.correlation_cmap, vmin=-1, vmax=1)
+        ax.imshow(guide_r_matrix, cmap=repair_seq.visualize.clustermap.correlation_cmap, vmin=-1, vmax=1)
 
         ax.set_xticks([])
         ax.set_yticks([])
@@ -338,7 +338,7 @@ class ReplicatePair:
 
         df['color'] = 'grey'
         to_highlight = df['outcome_1'].isin(relevant_indices) & df['outcome_2'].isin(relevant_indices)
-        df.loc[to_highlight, 'color'] = ddr.visualize.Cas9_category_colors[cat_to_highlight]
+        df.loc[to_highlight, 'color'] = repair_seq.visualize.Cas9_category_colors[cat_to_highlight]
 
         x = self.pn0
         y = self.pn1
@@ -356,7 +356,7 @@ class ReplicatePair:
                     textcoords='offset points',
                     ha='left',
                     va='top',
-                    color=ddr.visualize.Cas9_category_colors[cat_to_highlight],
+                    color=repair_seq.visualize.Cas9_category_colors[cat_to_highlight],
                     size=6,
                    )
 
@@ -396,7 +396,7 @@ class ReplicatePair:
 
         fig, ax = plt.subplots(figsize=(6, 6))
 
-        ax.imshow(outcome_r_matrix, cmap=ddr.visualize.correlation_cmap, vmin=-1, vmax=1)
+        ax.imshow(outcome_r_matrix, cmap=repair_seq.visualize.correlation_cmap, vmin=-1, vmax=1)
 
         ax.set_xticks([])
         ax.set_yticks([])
@@ -481,9 +481,9 @@ class ReplicatePair:
             else:
                 data_lims = (np.floor(df.min().min() - 0.1), np.ceil(df.max().max() + 0.1))
 
-            df['color'] = ddr.visualize.targeting_guide_color
+            df['color'] = repair_seq.visualize.targeting_guide_color
 
-            df.loc[self.common_non_targeting_guides, 'color'] = ddr.visualize.nontargeting_guide_color
+            df.loc[self.common_non_targeting_guides, 'color'] = repair_seq.visualize.nontargeting_guide_color
 
             df = df.dropna()
 

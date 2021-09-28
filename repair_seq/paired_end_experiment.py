@@ -8,7 +8,7 @@ from hits import utilities, fastq
 memoized_property = utilities.memoized_property
 
 import knock_knock.illumina_experiment
-import ddr.pooled_layout
+import repair_seq.pooled_layout
 
 class PairedEndExperiment(knock_knock.illumina_experiment.IlluminaExperiment):
     def __init__(self, *args, **kwargs):
@@ -55,8 +55,8 @@ class PairedEndExperiment(knock_knock.illumina_experiment.IlluminaExperiment):
 
     @memoized_property
     def categorizer(self):
-        #return ddr.pooled_layout.Layout
-        return ddr.prime_editing_layout.Layout
+        #return repair_seq.pooled_layout.Layout
+        return repair_seq.prime_editing_layout.Layout
 
     @memoized_property
     def max_relevant_length(self):

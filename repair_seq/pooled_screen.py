@@ -2012,7 +2012,7 @@ class PooledScreen:
 
         for c, s, d in self.non_targeting_fractions_full_arguments('perfect', 'none').index.values:
             if c == 'mismatches':
-                outcome = ddr.pooled_layout.MismatchOutcome.from_string(d).undo_anchor_shift(self.target_info.anchor)
+                outcome = repair_seq.pooled_layout.MismatchOutcome.from_string(d).undo_anchor_shift(self.target_info.anchor)
                 for p, b in zip(outcome.snvs.positions, outcome.snvs.basecalls):
                     # positive direction for x is towards protospacer from PAM
                     if reverse:
@@ -2785,7 +2785,7 @@ def get_pool(base_dir, group, category_groupings=None, progress=None):
 
     return pool
 
-def get_all_pools(base_dir=Path.home() / 'projects' / 'ddr', category_groupings=None, progress=None):
+def get_all_pools(base_dir=Path.home() / 'projects' / 'repair_seq', category_groupings=None, progress=None):
     group_dirs = [p for p in (Path(base_dir) / 'results').iterdir() if p.is_dir()]
 
     pools = {}
@@ -2822,7 +2822,7 @@ def parallel(base_dir, pool_name, max_procs, show_progress_bars=False, preload_i
             '-n', num_args,
         ] + possibly_progress + [
             '--max-procs', str(max_procs),
-            'ddr',
+            'repair_seq',
             '--base_dir', str(base_dir),
             'process', ':::',
         ]
@@ -2877,7 +2877,7 @@ def parallel_common_sequences(pool, max_procs, show_progress_bars=False):
         '-n', '2',
     ] + possibly_progress + [
         '--max-procs', str(max_procs),
-        'ddr',
+        'repair_seq',
         '--base_dir', str(pool.base_dir),
         'process_common_sequences', ':::',
     ]

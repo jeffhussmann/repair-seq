@@ -20,7 +20,7 @@ from pomegranate import GeneralMixtureModel, PoissonDistribution, NormalDistribu
 from hits import utilities, mapping_tools, fasta, fastq, bus, sam
 from hits.utilities import memoized_property
 
-import ddr.guide_library
+import repair_seq.guide_library
 
 def build_guide_index(guides_fn, index_dir):
     ''' index entries are in same orientation as R2 '''
@@ -125,7 +125,7 @@ class PerturbseqLane:
         self.GEX_dir  = self.output_dir / 'GEX'
         self.cellranger_dir = self.output_dir / 'cellranger_output'
 
-        self.guide_library = ddr.guide_library.GuideLibrary(self.base_dir, full_sample_sheet['guide_libary'])
+        self.guide_library = repair_seq.guide_library.GuideLibrary(self.base_dir, full_sample_sheet['guide_libary'])
         self.guide_index = self.guide_library.fns['perturbseq_STAR_index']
         self.whitelist_fn = Path(full_sample_sheet['whitelist_fn'])
 
@@ -425,7 +425,7 @@ class MultipleLanes:
         sample_sheet_fn = self.base_dir / 'data' / group / 'sample_sheet.yaml'
         full_sample_sheet = load_sample_sheet(sample_sheet_fn)
 
-        self.guide_library = ddr.guide_library.GuideLibrary(self.base_dir, full_sample_sheet['guide_libary'])
+        self.guide_library = repair_seq.guide_library.GuideLibrary(self.base_dir, full_sample_sheet['guide_libary'])
 
         self.lanes = [PerturbseqLane(self.base_dir, self.group, name) for name in full_sample_sheet['lanes']]
 

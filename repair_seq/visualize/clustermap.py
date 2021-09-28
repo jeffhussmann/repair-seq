@@ -9,9 +9,9 @@ import pandas as pd
 import hits.visualize
 import hits.utilities
 import knock_knock.outcome
-import ddr.cluster
-import ddr.visualize
-import ddr.visualize.outcome_diagrams
+import repair_seq.cluster
+import repair_seq.visualize
+import repair_seq.visualize.outcome_diagrams
 
 memoized_property = hits.utilities.memoized_property
 
@@ -139,7 +139,7 @@ class Clustermap:
 
         outcomes = self.clusterer.clustered_outcomes[::-1]
 
-        ddr.visualize.outcome_diagrams.plot(outcomes,
+        repair_seq.visualize.outcome_diagrams.plot(outcomes,
                                             self.clusterer.pn_to_target_info,
                                             ax=ax,
                                             **self.options['diagram_kwargs'],
@@ -160,7 +160,7 @@ class Clustermap:
         ax = self.add_axes('fold changes', sharey='diagrams')
 
         im = ax.imshow(self.clusterer.clustered_log2_fold_changes,
-                       cmap=ddr.visualize.fold_changes_cmap,
+                       cmap=repair_seq.visualize.fold_changes_cmap,
                        vmin=-2, vmax=2,
                        interpolation='none',
                       )
@@ -201,7 +201,7 @@ class Clustermap:
         ax.spines['right'].set_color('white')
 
         im = ax.imshow(vs,
-                       cmap=ddr.visualize.correlation_cmap,
+                       cmap=repair_seq.visualize.correlation_cmap,
                        vmin=-1,
                        vmax=1,
                        interpolation='none',
@@ -237,7 +237,7 @@ class Clustermap:
         vs = self.clusterer.guide_clustering['similarities']
 
         im = ax.imshow(vs,
-                       cmap=ddr.visualize.correlation_cmap,
+                       cmap=repair_seq.visualize.correlation_cmap,
                        vmin=-1,
                        vmax=1,
                        interpolation='none',
@@ -282,7 +282,7 @@ class Clustermap:
 
         assignments = guide_clustering['cluster_assignments']
 
-        cluster_blocks = ddr.cluster.get_cluster_blocks(assignments)
+        cluster_blocks = repair_seq.cluster.get_cluster_blocks(assignments)
         for cluster_id, blocks in cluster_blocks.items():
             if cluster_id == -1:
                 continue
@@ -325,7 +325,7 @@ class Clustermap:
         ax = self.add_axes(ax_key)
 
         im = ax.imshow(cell_cycle_fold_changes,
-                       cmap=ddr.visualize.cell_cycle_cmap,
+                       cmap=repair_seq.visualize.cell_cycle_cmap,
                        vmin=-1, vmax=1,
                        interpolation='none',
                       )
@@ -392,7 +392,7 @@ class Clustermap:
 
         ax = self.add_axes('outcome clusters')
 
-        cluster_blocks = ddr.cluster.get_cluster_blocks(outcome_clustering['cluster_assignments'])
+        cluster_blocks = repair_seq.cluster.get_cluster_blocks(outcome_clustering['cluster_assignments'])
         for cluster_id, blocks in cluster_blocks.items():
             if cluster_id == -1:
                 continue
@@ -444,8 +444,8 @@ class Clustermap:
         x = 0
 
         effector = self.clusterer.target_info.effector.name
-        category_display_order = ddr.visualize.category_display_order[effector]
-        category_colors = ddr.visualize.category_colors[effector]
+        category_display_order = repair_seq.visualize.category_display_order[effector]
+        category_colors = repair_seq.visualize.category_colors[effector]
 
         for cat in category_display_order:
             cat_outcomes = full_categories[cat]
@@ -507,8 +507,8 @@ class Clustermap:
         guide_clustering = self.clusterer.guide_clustering
 
         assignments = guide_clustering['cluster_assignments']
-        cluster_blocks = ddr.cluster.get_cluster_blocks(assignments)
-        cluster_genes = ddr.cluster.get_cluster_genes(guide_clustering, self.clusterer.guide_to_gene)
+        cluster_blocks = repair_seq.cluster.get_cluster_blocks(assignments)
+        cluster_genes = repair_seq.cluster.get_cluster_genes(guide_clustering, self.clusterer.guide_to_gene)
         cluster_colors = guide_clustering['cluster_colors']
 
         ax = self.axs['guide clusters']

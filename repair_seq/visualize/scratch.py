@@ -8,10 +8,10 @@ import bokeh.palettes
 
 import hits.visualize
 import hits.utilities
-import ddr.visualize.heatmap
-import ddr.visualize.outcome_diagrams
-import ddr.visualize.gene_significance
-import ddr.visualize.volcano
+import repair_seq.visualize.heatmap
+import repair_seq.visualize.outcome_diagrams
+import repair_seq.visualize.gene_significance
+import repair_seq.visualize.volcano
 
 def plot_correlations(pool, guide, num_outcomes, label=True, extra_genes=None, n_highest=5, legend=True):
 
@@ -81,7 +81,7 @@ def fraction_removed(pool, genes, fraction_y_lims=(5e-4, 1), fold_change_y_lims=
     ]
 
     for gene_i, gene in enumerate(genes):
-        guide_sets.append((gene, f'{gene} guides', dict(color=ddr.visualize.good_colors[gene_i], alpha=0.8, linewidth=1.5)))
+        guide_sets.append((gene, f'{gene} guides', dict(color=repair_seq.visualize.good_colors[gene_i], alpha=0.8, linewidth=1.5)))
 
     kwargs = dict(color='black', alpha=0.9, linewidth=2, label='all non-targeting guides')
     fraction_ax.plot(pool.fraction_removed[fixed_guide, 'all_non_targeting'], '-', **kwargs)
@@ -1105,7 +1105,7 @@ def sorted_by_significance(pool, outcomes,
                            quantity_to_plot='log2_fold_change',
                           ):
 
-    df, nt_frac, gene_df = ddr.visualize.gene_significance.get_outcome_statistics(pool, outcomes)
+    df, nt_frac, gene_df = repair_seq.visualize.gene_significance.get_outcome_statistics(pool, outcomes)
                           
     if quantity_to_plot == 'log2_fold_change':
         y_key = 'log2_fold_change'
@@ -1302,13 +1302,13 @@ def sorted_by_significance(pool, outcomes,
     return fig
 
 def parts_lists(pool, outcomes, gene_sets, interesting_genes, label_all_above=None, label_top_n=None, x_lims=None):
-    guides_df, nt_fraction, genes_df = ddr.visualize.gene_significance.get_outcome_statistics(pool, outcomes)
+    guides_df, nt_fraction, genes_df = repair_seq.visualize.gene_significance.get_outcome_statistics(pool, outcomes)
 
     gene_to_color, guide_to_color = make_guide_to_color(pool.variable_guide_library.guide_to_gene, interesting_genes, gene_sets)
 
     figs = {}
 
-    #figs['alphabetical'], *rest = ddr.visualize.gene_significance.gene_significance_simple(pool, outcomes, quantity_to_plot='log2_fold_change', max_num_to_label=25, figsize=(15, 6))
+    #figs['alphabetical'], *rest = repair_seq.visualize.gene_significance.gene_significance_simple(pool, outcomes, quantity_to_plot='log2_fold_change', max_num_to_label=25, figsize=(15, 6))
 
     #figs['sorted_fc'] = sorted_by_significance(pool, outcomes, top_n_guides=2, n_up=15, n_down=15, quantity_to_plot='log2_fold_change')
     #
@@ -1316,7 +1316,7 @@ def parts_lists(pool, outcomes, gene_sets, interesting_genes, label_all_above=No
     #
     #figs['volcano_guides'] = volcano_guides(guides_df, guide_to_color, gene_to_color, gene_sets)
     
-    figs['volcano_genes'] = ddr.visualize.volcano.genes(genes_df, gene_to_color, gene_sets, label_all_above=label_all_above, x_lims=x_lims, label_top_n=label_top_n)
+    figs['volcano_genes'] = repair_seq.visualize.volcano.genes(genes_df, gene_to_color, gene_sets, label_all_above=label_all_above, x_lims=x_lims, label_top_n=label_top_n)
     #figs['volcano_genes'].axes[0].set_title(pool.short_name)
 
     return figs

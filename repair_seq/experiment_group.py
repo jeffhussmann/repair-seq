@@ -11,7 +11,7 @@ memoized_with_args = utilities.memoized_with_args
 
 import knock_knock.outcome_record
 
-from ddr.common_sequences import CommonSequenceSplitter
+from repair_seq.common_sequences import CommonSequenceSplitter
 
 def run_stage(GroupClass, group_args, sample_name, stage):
     group = GroupClass(*group_args)
