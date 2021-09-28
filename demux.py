@@ -179,7 +179,7 @@ def get_resolvers(base_dir, group):
         # If there weren't multiple fixed guide pools present, keep everything
         # to allow possibility of outcomes that don't include the intended NotI site.
         def fixed_guide_barcode_resolver(*args):
-            return 'none'
+            return {'none'}
 
         resolvers['fixed_guide_barcode'] = fixed_guide_barcode_resolver
         expected_seqs['fixed_guide_barcode'] = set()
@@ -222,13 +222,28 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
         if len({r.name for r in quartet}) != 1:
             raise ValueError('quartet out of sync')
 
-        sample = resolvers['sample'](quartet.I2.seq, 'unknown')
+        samples = resolvers['sample'](quartet.I2.seq, {'unknown'})
+
+        if len(samples) == 1:
+            sample = next(iter(samples))
+        else:
+            sample = 'unknown'
+
         counts['sample'][quartet.I2.seq] += 1
 
-        variable_guide = resolvers['variable_guide'](quartet.R1.seq[:45], 'unknown')
+        variable_guides = resolvers['variable_guide'](quartet.R1.seq[:45], 'unknown')
+        if len(variable_guides) == 1:
+            variable_guide = next(iter(variable_guides))
+        else:
+            variable_guide = 'unknown'
 
         guide_barcode = quartet.R2.seq[guide_barcode_slice]
-        fixed_guide = resolvers['fixed_guide_barcode'](guide_barcode, 'unknown')
+        fixed_guides = resolvers['fixed_guide_barcode'](guide_barcode, {'unknown'})
+        if len(fixed_guides) == 1:
+            fixed_guide = next(iter(fixed_guides))
+        else:
+            fixed_guide = 'unknown'
+
         counts['fixed_guide_barcode'][guide_barcode] += 1
 
         counts['id'][sample, fixed_guide, variable_guide] += 1
