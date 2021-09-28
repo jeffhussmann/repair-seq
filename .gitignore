@@ -4,3 +4,4 @@ __pycache__
 *.so
 .ipynb_checkpoints
 *.ipynb
+.nfs*
