@@ -216,11 +216,14 @@ if __name__ == '__main__':
         original_target = 'pooled_vector'
         original_genbank_name = 'pooled_vector'
         guide_library_names = [
-            #'DDR_library',
-            #'DDR_sublibrary',
-            #'DDR_microlibrary',
-            #'MRE11_pool',
+            'DDR_library',
+            'DDR_sublibrary',
+            'DDR_microlibrary',
+            'MRE11_pool',
             'MRE11+01332',
+            'DNA2_MCM10_CRISPRi',
+            'DNA2_CRISPRa',
+            'MRE11_POLQ_RAD17',
         ]
         build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names,
                           test=args.test,
@@ -228,7 +231,6 @@ if __name__ == '__main__':
                          )
 
     elif args.vector == 'doubles':
-        #build_all_doubles(args.base_dir, 'MRN_MMR_fixed', 'MRN_MMR_variable')
         build_all_doubles(args.base_dir, 'DDR_skinny', 'DDR_sublibrary',
                           test=args.test,
                           num_processes=args.num_processes,
