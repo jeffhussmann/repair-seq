@@ -38,18 +38,20 @@ memoized_with_kwargs = utilities.memoized_with_kwargs
 ALL_NON_TARGETING = 'all_non_targeting'
 
 class SingleGuideExperiment(experiment.Experiment):
-    def __init__(self, base_dir, group, fixed_guide, variable_guide, **kwargs):
+    def __init__(self, base_dir, pool_name, fixed_guide, variable_guide, **kwargs):
         name = f'{fixed_guide}-{variable_guide}'
 
         # Provide an option to pass in a premade pool to prevent excessive remaking.
         self.pool = kwargs.pop('pool', None)
         if self.pool is None:
-            self.pool = get_pool(base_dir, group, progress=kwargs.get('progress'))
+            self.pool = get_pool(base_dir, pool_name, progress=kwargs.get('progress'))
+
+        self.has_UMIs = self.pool.has_UMIs
 
         self.fixed_guide = fixed_guide
         self.variable_guide = variable_guide
         
-        super().__init__(base_dir, group, name, **kwargs)
+        super().__init__(base_dir, pool_name, name, **kwargs)
 
         self.fns.update({
             'chunks': self.results_dir / 'chunks',
@@ -116,10 +118,6 @@ class SingleGuideExperiment(experiment.Experiment):
     @property
     def categorizer(self):
         return self.pool.categorizer
-
-    @memoized_property
-    def has_UMIs(self):
-        return self.pool.has_UMIs
 
     @memoized_property
     def supplemental_indices(self):
@@ -896,7 +894,7 @@ class SingleGuideExperiment(experiment.Experiment):
             else:
                 raise ValueError(stage)
         except:
-            print(self.group, self.sample_name)
+            print(self.pool_name, self.sample_name)
             raise
 
 class SingleGuideNoUMIExperiment(SingleGuideExperiment):
@@ -1047,12 +1045,11 @@ def collapse_categories(df):
     return pd.concat((df, new_rows))
 
 class PooledScreen:
-    def __init__(self, base_dir, group, category_groupings=None, progress=None):
+    def __init__(self, base_dir, name, category_groupings=None, progress=None):
         self.base_dir = Path(base_dir)
-        self.group = group
-        self.name = group
+        self.name = name
 
-        self.group_dir = self.base_dir / 'results' / group
+        self.dir = self.base_dir / 'results' / name
 
         self.category_groupings = category_groupings
 
@@ -1071,7 +1068,7 @@ class PooledScreen:
 
         self.progress = pass_along_kwargs
 
-        self.sample_sheet_fn = self.group_dir / 'sample_sheet.yaml'
+        self.sample_sheet_fn = self.dir / 'sample_sheet.yaml'
         self.sample_sheet = yaml.safe_load(self.sample_sheet_fn.read_text())
 
         categorizer_name = self.sample_sheet.get('categorizer', 'pooled_layout')
@@ -1084,7 +1081,7 @@ class PooledScreen:
 
         self.has_UMIs = self.sample_sheet.get('has_UMIs', True)
 
-        self.short_name = self.sample_sheet.get('short_name', self.group)
+        self.short_name = self.sample_sheet.get('short_name', self.name)
 
         self.sgRNA = self.sample_sheet.get('sgRNA')
         self.donor = self.sample_sheet.get('donor')
@@ -1118,49 +1115,49 @@ class PooledScreen:
         self.fixed_guides = self.fixed_guide_library.guides
 
         self.fns = {
-            'read_counts': self.group_dir / 'read_counts.txt',
+            'read_counts': self.dir / 'read_counts.txt',
 
-            'outcome_counts': self.group_dir  / 'outcome_counts.npz',
-            'total_outcome_counts': self.group_dir / 'total_outcome_counts.txt',
-            'collapsed_outcome_counts': self.group_dir / 'collapsed_outcome_counts.npz',
-            'collapsed_total_outcome_counts': self.group_dir / 'collapsed_total_outcome_counts.txt',
+            'outcome_counts': self.dir  / 'outcome_counts.npz',
+            'total_outcome_counts': self.dir / 'total_outcome_counts.txt',
+            'collapsed_outcome_counts': self.dir / 'collapsed_outcome_counts.npz',
+            'collapsed_total_outcome_counts': self.dir / 'collapsed_total_outcome_counts.txt',
 
-            'category_counts': self.group_dir / 'category_counts.txt',
-            'subcategory_counts': self.group_dir / 'subcategory_counts.txt',
+            'category_counts': self.dir / 'category_counts.txt',
+            'subcategory_counts': self.dir / 'subcategory_counts.txt',
 
-            'high_frequency_outcome_counts': self.group_dir / 'high_frequency_outcome_counts.hdf5',
+            'high_frequency_outcome_counts': self.dir / 'high_frequency_outcome_counts.hdf5',
 
-            'filtered_cell_bam': self.group_dir / 'filtered_cell_alignments.bam',
-            'reads_per_UMI': self.group_dir / 'reads_per_UMI.pkl',
+            'filtered_cell_bam': self.dir / 'filtered_cell_alignments.bam',
+            'reads_per_UMI': self.dir / 'reads_per_UMI.pkl',
 
-            'quantiles': self.group_dir / 'quantiles.hdf5',
+            'quantiles': self.dir / 'quantiles.hdf5',
 
-            'common_sequences_dir': self.group_dir / 'common_sequences',
-            'common_sequence_outcomes': self.group_dir / 'common_sequences' / 'common_sequence_outcomes.txt',
+            'common_sequences_dir': self.dir / 'common_sequences',
+            'common_sequence_outcomes': self.dir / 'common_sequences' / 'common_sequence_outcomes.txt',
 
-            'deletion_boundaries': self.group_dir / 'deletion_boundaries.hdf5',
+            'deletion_boundaries': self.dir / 'deletion_boundaries.hdf5',
 
-            'common_sequence_special_alignments': self.group_dir / 'common_sequences' / 'all_special_alignments.bam',
-            'special_alignments_dir': self.group_dir / 'special_alignments',
+            'common_sequence_special_alignments': self.dir / 'common_sequences' / 'all_special_alignments.bam',
+            'special_alignments_dir': self.dir / 'special_alignments',
 
-            'filtered_templated_insertion_details': self.group_dir / 'filtered_templated_insertion_details.hdf5',
-            'filtered_duplication_details': self.group_dir / 'filtered_duplication_details.hdf5',
+            'filtered_templated_insertion_details': self.dir / 'filtered_templated_insertion_details.hdf5',
+            'filtered_duplication_details': self.dir / 'filtered_duplication_details.hdf5',
             
-            'deletion_ranges': self.group_dir / 'deletion_ranges.hdf5',
-            'duplication_ranges': self.group_dir / 'duplication_ranges.hdf5',
+            'deletion_ranges': self.dir / 'deletion_ranges.hdf5',
+            'duplication_ranges': self.dir / 'duplication_ranges.hdf5',
 
-            'genomic_insertion_length_counts': self.group_dir / 'genomic_insertion_length_counts.txt',
-            'genomic_insertion_length_fractions': self.group_dir / 'genomic_insertion_length_fractions.txt',
+            'genomic_insertion_length_counts': self.dir / 'genomic_insertion_length_counts.txt',
+            'genomic_insertion_length_fractions': self.dir / 'genomic_insertion_length_fractions.txt',
 
-            'highest_guide_correlations': self.group_dir / 'highest_guide_correlations.txt',
+            'highest_guide_correlations': self.dir / 'highest_guide_correlations.txt',
 
-            'gene_level_category_statistics': self.group_dir / 'gene_level_category_statistics.txt',
+            'gene_level_category_statistics': self.dir / 'gene_level_category_statistics.txt',
 
-            'snapshots_dir': self.group_dir / 'snapshots',
+            'snapshots_dir': self.dir / 'snapshots',
         }
 
     def __repr__(self):
-        return f'{type(self)}: group={self.group}, short_name={self.short_name}, sgRNA={self.sgRNA}, donor={self.donor}, base_dir={self.base_dir}'
+        return f'{type(self).__name__}: {self.name} (base_dir={self.base_dir})'
 
     @memoized_property
     def supplemental_indices(self):
@@ -1289,12 +1286,17 @@ class PooledScreen:
         else:
             progress = self.progress
 
-        return self.Experiment(self.base_dir, self.group, fixed_guide, variable_guide, pool=self, progress=progress)
+        return self.Experiment(self.base_dir, self.name, fixed_guide, variable_guide, pool=self, progress=progress)
 
     @memoized_property
     def R2_read_length(self):
-        exp = next(self.single_guide_experiments(no_progress=True))
-        return exp.R2_read_length
+        if 'R2_read_length' in self.sample_sheet:
+            R2_read_length = self.sample_sheet['R2_read_length']
+        else:
+            exp = next(self.single_guide_experiments(no_progress=True))
+            R2_read_length = exp.R2_read_length
+
+        return R2_read_length
 
     @memoized_property
     def blunt_insertion_length_detection_limit(self):
@@ -1374,6 +1376,9 @@ class PooledScreen:
             'genomic_insertion_length_counts',
             'genomic_insertion_length_fractions',
             'high_frequency_outcome_counts',
+            'category_counts',
+            'subcategory_counts',
+            'gene_level_category_statistics',
         ]
 
         for key in fn_keys_to_snapshot:
@@ -1383,6 +1388,7 @@ class PooledScreen:
 
     def list_snapshots(self):
         snapshots_dir = self.fns['snapshots_dir']
+
         if snapshots_dir.is_dir():
             snapshot_dir_names = [d.name for d in snapshots_dir.iterdir() if d.is_dir()]
             for snapshot_dir_name in snapshot_dir_names:
@@ -1396,6 +1402,8 @@ class PooledScreen:
                     print(f'\tDescription: {description}')
 
                 print()
+
+        return snapshot_dir_names
 
     def resolve_snapshot_name(self, name_to_lookup):
         ''' Lookup a snapshot by its name or by its timestamp. '''
@@ -1435,9 +1443,12 @@ class PooledScreen:
 
         return fn
 
-    def copy_snapshot(self, snapshot_name, new_base_dir, new_name=None):
+    def copy_snapshot(self, snapshot_name, new_base_dir, new_name=None,
+                      include_guide_library=True,
+                      include_target_info=True,
+                     ):
         if new_name is None:
-            new_name = self.group
+            new_name = self.name
 
         new_base_dir = Path(new_base_dir)
 
@@ -1463,22 +1474,24 @@ class PooledScreen:
         new_sample_sheet_fn = new_snapshot_dir / self.sample_sheet_fn.name
         new_sample_sheet_fn.write_text(yaml.safe_dump(sample_sheet, default_flow_style=False))
 
-        # Copy the guide library.
-        old_guides_dir = self.variable_guide_library.full_dir
-        new_guides_dir = new_base_dir / 'guides' / self.variable_guide_library.name
+        if include_guide_library:
+            # Copy the guide library.
+            old_guides_dir = self.variable_guide_library.full_dir
+            new_guides_dir = new_base_dir / 'guides' / self.variable_guide_library.name
 
-        if new_guides_dir.exists():
-            shutil.rmtree(new_guides_dir)
+            if new_guides_dir.exists():
+                shutil.rmtree(new_guides_dir)
 
-        shutil.copytree(old_guides_dir, new_guides_dir)
+            shutil.copytree(old_guides_dir, new_guides_dir)
 
-        # Copy the main pool target info.
-        new_target_info_dir = new_base_dir / 'targets' / self.target_info.name
+        if include_target_info:
+            # Copy the main pool target info.
+            new_target_info_dir = new_base_dir / 'targets' / self.target_info.name
 
-        if new_target_info_dir.exists():
-            shutil.rmtree(new_target_info_dir)
+            if new_target_info_dir.exists():
+                shutil.rmtree(new_target_info_dir)
 
-        shutil.copytree(self.target_info.dir, new_target_info_dir)
+            shutil.copytree(self.target_info.dir, new_target_info_dir)
 
     @memoized_with_kwargs
     def total_outcome_counts(self, *, collapsed=True, snapshot_name=None):
@@ -1549,8 +1562,8 @@ class PooledScreen:
 
         if guide_status == 'perfect':
             if not np.allclose(short_and_long, outcome_counts.loc['genomic insertion', 'hg19', 'collapsed']):
-                print('temp suppressed')
-                #raise ValueError
+                # TODO: understand source of discrepancies here
+                pass
 
         outcome_counts.drop(('genomic insertion', 'hg19', 'collapsed'), inplace=True)
 
@@ -1657,10 +1670,11 @@ class PooledScreen:
         max_nt = chi_squared.loc[self.variable_guide_library.non_targeting_guides].max()
         return chi_squared[chi_squared > multiple * max_nt].index.values
 
-    def top_n_active_guides(self, relevant_outcomes, n):
+    def top_n_active_guides(self, relevant_outcomes, n, use_high_frequency_counts=False):
         chi_squared = self.chi_squared_per_guide(relevant_outcomes=relevant_outcomes,
                                                  only_best_promoter=True,
                                                  exclude_unedited=True,
+                                                 use_high_frequency_counts=use_high_frequency_counts,
                                                 )
         return chi_squared.sort_values(ascending=False).iloc[:n].index.values
 
@@ -2012,7 +2026,7 @@ class PooledScreen:
 
         for c, s, d in self.non_targeting_fractions_full_arguments('perfect', 'none').index.values:
             if c == 'mismatches':
-                outcome = repair_seq.pooled_layout.MismatchOutcome.from_string(d).undo_anchor_shift(self.target_info.anchor)
+                outcome = pooled_layout.MismatchOutcome.from_string(d).undo_anchor_shift(self.target_info.anchor)
                 for p, b in zip(outcome.snvs.positions, outcome.snvs.basecalls):
                     # positive direction for x is towards protospacer from PAM
                     if reverse:
@@ -2407,7 +2421,7 @@ class PooledScreen:
         if relevant_outcomes is None:
             relevant_outcomes = 50
         if isinstance(relevant_outcomes, int):
-            relevant_outcomes = self.most_frequent_outcomes(fixed_guide)[:relevant_outcomes]
+            relevant_outcomes = self.most_frequent_outcomes(fixed_guide=fixed_guide)[:relevant_outcomes]
             
         if exclude_unedited:
             relevant_outcomes = [outcome for outcome in relevant_outcomes if outcome != ('wild type', 'clean', 'n/a')]
@@ -2763,13 +2777,13 @@ class MergedPools(PooledScreen):
                 merged_f.create_dataset(f'{key}/values', data=values)
                 merged_f.create_dataset(f'{key}/counts', data=counts)
 
-def get_pool(base_dir, group, category_groupings=None, progress=None):
+def get_pool(base_dir, pool_name, category_groupings=None, progress=None):
     pool = None
 
-    group_dir = Path(base_dir) / 'results' / group
-    sample_sheet_fn = group_dir / 'sample_sheet.yaml'
+    pool_dir = Path(base_dir) / 'results' / pool_name
+    sample_sheet_fn = pool_dir / 'sample_sheet.yaml'
 
-    args = (base_dir, group)
+    args = (base_dir, pool_name)
     kwargs = dict(category_groupings=category_groupings, progress=progress)
 
     if sample_sheet_fn.exists():
@@ -2786,12 +2800,12 @@ def get_pool(base_dir, group, category_groupings=None, progress=None):
     return pool
 
 def get_all_pools(base_dir=Path.home() / 'projects' / 'repair_seq', category_groupings=None, progress=None):
-    group_dirs = [p for p in (Path(base_dir) / 'results').iterdir() if p.is_dir()]
+    pool_dirs = [p for p in (Path(base_dir) / 'results').iterdir() if p.is_dir()]
 
     pools = {}
 
-    for group_dir in group_dirs:
-        name = group_dir.name
+    for pool_dir in pool_dirs:
+        name = pool_dir.name
         pool = get_pool(base_dir, name, category_groupings=category_groupings, progress=progress)
         if pool is not None:
             pools[name] = pool
@@ -2882,7 +2896,7 @@ def parallel_common_sequences(pool, max_procs, show_progress_bars=False):
         'process_common_sequences', ':::',
     ]
 
-    arg_pairs = [(pool.group, chunk_name) for chunk_name in pool.common_sequence_chunk_exp_names]
+    arg_pairs = [(pool.name, chunk_name) for chunk_name in pool.common_sequence_chunk_exp_names]
     for pair in sorted(arg_pairs):
         parallel_command.extend(pair)
     
@@ -2937,8 +2951,8 @@ class PooledScreenExplorer(explore.Explorer):
         super().__init__(by_outcome, **plot_kwargs)
 
     @classmethod
-    def from_base_dir_and_group(self, base_dir, group, **kwargs):
-        pool = get_pool(base_dir, group)
+    def from_base_dir_and_name(self, base_dir, name, **kwargs):
+        pool = get_pool(base_dir, name)
         return PooledScreenExplorer(pool, **kwargs)
 
     def get_current_experiment(self):

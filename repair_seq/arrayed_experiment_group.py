@@ -9,17 +9,13 @@ from collections import defaultdict, Counter
 import numpy as np
 import pandas as pd
 import pysam
-
 from ipywidgets import Layout, Select
 
-import repair_seq.experiment_group
-
-import repair_seq.prime_editing_experiment
-import repair_seq.paired_end_experiment
-import repair_seq.single_end_experiment
-
-from hits import utilities, sam
 import knock_knock.explore
+import knock_knock.outcome
+from hits import utilities, sam
+
+from . import experiment_group, prime_editing_experiment, single_end_experiment, paired_end_experiment
 
 memoized_property = utilities.memoized_property
 
@@ -51,7 +47,7 @@ class Batch:
         self.sample_sheet = pd.read_csv(self.sample_sheet_fn, index_col='sample_name')
 
         self.group_descriptions_fn = self.data_dir / 'group_descriptions.csv'
-        self.group_descriptions = pd.read_csv(self.group_descriptions_fn, index_col='group')
+        self.group_descriptions = pd.read_csv(self.group_descriptions_fn, index_col='group').replace({np.nan: None})
 
         self.condition_colors_fn = self.data_dir / 'condition_colors.csv'
         if self.condition_colors_fn.exists():
@@ -98,6 +94,83 @@ class Batch:
 
         return exps
 
+    def copy_snapshot(self, new_base_dir,
+                      new_batch_name=None,
+                      groups_to_include=None,
+                      include_target_infos=True,
+                     ):
+        if new_batch_name is None:
+            new_batch_name = self.batch
+
+        if groups_to_include is None:
+            groups_to_include = {group_name: group_name for group_name in self.groups}
+
+        new_base_dir = Path(new_base_dir)
+
+        # Out of paranoia, make sure that new_base_dir is different
+        # than this pool's base_dir since existing dirs will be deleted.
+        if str(new_base_dir) == str(self.base_dir):
+            raise ValueError('Attempted to copy to same base dir.')
+
+        new_results_dir = new_base_dir / 'results' / new_batch_name
+        new_data_dir = new_base_dir / 'data' / new_batch_name
+
+        for new_dir in [new_results_dir, new_data_dir]:
+            if new_dir.exists():
+                shutil.rmtree(new_dir)
+            new_dir.mkdir()
+
+        for new_group_name in groups_to_include.values():
+            (new_results_dir / new_group_name).mkdir()
+
+        # Copy relevant results files.
+        fns_to_copy = [
+            'outcome_counts',
+            'total_outcome_counts',
+        ]
+
+        for old_group_name, new_group_name in groups_to_include.items():
+            old_group = self.groups[old_group_name]
+            for fn_key in fns_to_copy:
+                old_fn = old_group.fns[fn_key]
+                new_fn = new_results_dir / new_group_name / old_fn.name
+                shutil.copy(old_fn, new_fn)
+
+        # Copy group descriptions.
+        new_group_descriptions = self.group_descriptions.loc[sorted(groups_to_include)].copy()
+        new_group_descriptions.index = [groups_to_include[name] for name in new_group_descriptions.index]
+        new_group_descriptions.index.name = 'group'
+
+        # Convoluted way of blanking supplmental_indices - '' will be parse as nan, then coverted to None,
+        # then converted to [].
+        new_group_descriptions['supplemental_indices'] = ''
+
+        new_group_descriptions.to_csv(new_data_dir / 'group_descriptions.csv')
+
+        # Copy sample sheet.
+        new_sample_sheet_fn = new_data_dir / 'sample_sheet.csv'
+        new_sample_sheet = self.sample_sheet.query('group in @groups_to_include').copy()
+        new_sample_sheet['group'] = new_sample_sheet['group'].replace(groups_to_include)
+        new_sample_sheet.to_csv(new_sample_sheet_fn)
+
+        ## Copy the pool sample sheet, wiping any value of supplemental_indices.
+        #sample_sheet = copy.deepcopy(self.sample_sheet)
+        #sample_sheet['supplemental_indices'] = []
+        #new_sample_sheet_fn = new_snapshot_dir / self.sample_sheet_fn.name
+        #new_sample_sheet_fn.write_text(yaml.safe_dump(sample_sheet, default_flow_style=False))
+
+        if include_target_infos:
+            for old_group_name in groups_to_include:
+                old_group = self.groups[old_group_name]
+
+                new_target_info_dir = new_base_dir / 'targets' / old_group.target_info.name
+
+                if new_target_info_dir.exists():
+                    shutil.rmtree(new_target_info_dir)
+
+                shutil.copytree(old_group.target_info.dir, new_target_info_dir)
+    
+
 def get_batch(base_dir, batch_name, progress=None, **kwargs):
     batch = None
 
@@ -122,7 +195,7 @@ def get_all_batches(base_dir=Path.home() / 'projects' / 'repair_seq', progress=N
 
     return batches
 
-class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
+class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
     def __init__(self, base_dir, batch, group,
                  category_groupings=None,
                  progress=None,
@@ -286,7 +359,7 @@ class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
                 if outcome.category == 'genomic insertion':
                     organism = outcome.subcategory
                     
-                    lti  = repair_seq.outcome.LongTemplatedInsertionOutcome.from_string(outcome.details)
+                    lti  = knock_knock.outcome.LongTemplatedInsertionOutcome.from_string(outcome.details)
                     key = (*condition, organism)
                     length_distributions[key][lti.insertion_length()] += 1
 
@@ -575,6 +648,7 @@ class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
         explorer = ArrayedGroupExplorer(self, **kwargs)
         return explorer.layout
 
+
 class ArrayedExperiment:
     def __init__(self, base_dir, batch, group, sample_name, experiment_group=None):
         if experiment_group is None:
@@ -752,9 +826,9 @@ class ArrayedExperiment:
 
 def arrayed_specialized_experiment_factory(experiment_kind):
     experiment_kind_to_class = {
-        'paired_end': repair_seq.paired_end_experiment.PairedEndExperiment,
-        'prime_editing': repair_seq.prime_editing_experiment.PrimeEditingExperiment,
-        'single_end': repair_seq.single_end_experiment.SingleEndExperiment,
+        'paired_end': paired_end_experiment.PairedEndExperiment,
+        'prime_editing': prime_editing_experiment.PrimeEditingExperiment,
+        'single_end': single_end_experiment.SingleEndExperiment,
     }
 
     SpecializedExperiment = experiment_kind_to_class[experiment_kind]
@@ -767,9 +841,9 @@ def arrayed_specialized_experiment_factory(experiment_kind):
         def __repr__(self):
             return f'Arrayed{SpecializedExperiment.__repr__(self)}'
     
-    class ArrayedSpecializedCommonSequencesExperiment(repair_seq.experiment_group.CommonSequencesExperiment, ArrayedExperiment, SpecializedExperiment):
+    class ArrayedSpecializedCommonSequencesExperiment(experiment_group.CommonSequencesExperiment, ArrayedExperiment, SpecializedExperiment):
         def __init__(self, base_dir, batch, group, sample_name, experiment_group=None, **kwargs):
-            repair_seq.experiment_group.CommonSequencesExperiment.__init__(self)
+            experiment_group.CommonSequencesExperiment.__init__(self)
             ArrayedExperiment.__init__(self, base_dir, batch, group, sample_name, experiment_group=experiment_group)
             SpecializedExperiment.__init__(self, base_dir, (batch, group), sample_name, **kwargs)
     

@@ -1,3 +1,4 @@
+import copy
 import pickle
 import string
 from collections import defaultdict
@@ -7,15 +8,20 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec
-import bokeh.palettes
+import bokeh.io
 import bokeh.models
+import bokeh.palettes
+import bokeh.plotting
 
 from repair_seq import pooled_screen
 from repair_seq.visualize import outcome_diagrams
 from hits import utilities
-from hits.visualize.interactive import build_js_callback
+from hits.visualize.callback import build_js_callback
 
-def extract_numerator_and_denominator_counts(pool, numerator_outcomes, denominator_outcomes=None):
+def extract_numerator_and_denominator_counts(pool, numerator_outcomes,
+                                             denominator_outcomes=None,
+                                             use_high_frequency_counts=False,
+                                            ):
     if isinstance(numerator_outcomes, pd.Series):
         # numerator_outcomes is a series of counts
         if isinstance(numerator_outcomes.index, pd.MultiIndex):
@@ -35,7 +41,10 @@ def extract_numerator_and_denominator_counts(pool, numerator_outcomes, denominat
         numerator_counts = count_source.loc[numerator_outcomes].sum(axis='index')
         
     if denominator_outcomes is None:
-        denominator_counts = pool.UMI_counts()
+        if use_high_frequency_counts:
+            denominator_counts = pool.UMI_counts_from_high_frequency_counts
+        else:
+            denominator_counts = pool.UMI_counts()
     else:
         if not all(outcome in count_source.index for outcome in denominator_outcomes):
             raise ValueError(denominator_outcomes)
@@ -47,7 +56,11 @@ def extract_numerator_and_denominator_counts(pool, numerator_outcomes, denominat
         
     return numerator_counts, denominator_counts
 
-def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='none', denominator_outcomes=None):
+def get_outcome_statistics(pool, outcomes,
+                           omit_bad_guides=True,
+                           denominator_outcomes=None,
+                           use_high_frequency_counts=False,
+                          ):
     def pval_down(outcome_count, UMI_count, nt_fraction):
         return scipy.stats.binom.cdf(outcome_count, UMI_count, nt_fraction)
 
@@ -75,7 +88,7 @@ def get_outcome_statistics(pool, outcomes, omit_bad_guides=True, fixed_guide='no
     else:
         guides_to_omit = []
 
-    numerator_counts, denominator_counts = extract_numerator_and_denominator_counts(pool, outcomes, denominator_outcomes)
+    numerator_counts, denominator_counts = extract_numerator_and_denominator_counts(pool, outcomes, denominator_outcomes, use_high_frequency_counts=use_high_frequency_counts)
 
     frequencies = numerator_counts / denominator_counts
     
@@ -173,18 +186,21 @@ def compute_table(pool_and_outcomes,
                   progress=None,
                   use_short_names=False,
                   pool_name_aliases=None,
+                  use_high_frequency_counts=False,
                  ):
     if progress is None:
         progress = utilities.identity
 
     all_columns = {}
     nt_fractions = {}
+    nt_percentages = {}
 
     all_gene_columns = {}
 
     guide_column_names = [
         'log2_fold_change',
         'frequency',
+        'percentage',
         'ys',
         'total_UMIs',
         'gene_p_up',
@@ -206,12 +222,15 @@ def compute_table(pool_and_outcomes,
 
         pool_name_to_use = pool_name_aliases.get(pool_name_to_use, pool_name_to_use)
         
-        pool_names.append(pool_name_to_use)
-        outcome_names.append(outcome_name)
+        if pool_name_to_use not in pool_names:
+            pool_names.append(pool_name_to_use)
+
+        if outcome_name not in outcome_names:
+            outcome_names.append(outcome_name)
 
         full_name = f'{pool_name_to_use}_{outcome_name}'
 
-        df, nt_fraction, genes_df = get_outcome_statistics(pool, outcomes)
+        df, nt_fraction, genes_df = get_outcome_statistics(pool, outcomes, use_high_frequency_counts=use_high_frequency_counts)
 
         all_gene_columns[full_name] = genes_df['log2 fold change', 'relevant']
 
@@ -219,25 +238,29 @@ def compute_table(pool_and_outcomes,
 
         df['x'] = np.arange(len(df))
         df['xs'] = [[x, x] for x in df['x']]
-        df['ys'] = list(zip(df['interval_bottom'], df['interval_top']))
+
+        df['percentage'] = df['frequency'] * 100
+
+        df['ys'] = list(zip(df['interval_bottom'] * 100, df['interval_top'] * 100))
 
         for col_name in guide_column_names:
             all_columns[full_name, col_name] = df[col_name]
             
         nt_fractions[full_name] = nt_fraction
+        nt_percentages[full_name] = nt_fraction * 100
             
     guides_df = pd.DataFrame(all_columns)
 
     genes_df = pd.DataFrame(all_gene_columns)
 
     if initial_dataset is None:
-        initial_dataset = pool_name_aliases.get(pool_names[0])
+        initial_dataset = pool_names[0]
 
     if initial_outcome is None:
         initial_outcome = outcome_names[0]
 
     #for col_name in column_names:
-    #    full_df[col_name] = full_df[f'{initial_dataset}_{initial_outcome}_{col_name}']
+    #    guides_df[col_name] = guides_df[f'{initial_dataset}_{initial_outcome}_{col_name}']
 
     color_list = [c for i, c in enumerate(bokeh.palettes.Category10[10]) if i != 7]
     grey = bokeh.palettes.Category10[10][7]
@@ -259,6 +282,7 @@ def compute_table(pool_and_outcomes,
         'pool_names': pool_names,
         'outcome_names': outcome_names,
         'nt_fractions': nt_fractions,
+        'nt_percentages': nt_percentages,
         'initial_dataset': initial_dataset,
         'initial_outcome': initial_outcome,
         'guides_df': guides_df,
@@ -271,42 +295,73 @@ def compute_table(pool_and_outcomes,
     
     return to_pickle
 
-def scatter(pickle_fn,
+def scatter(data_source,
             outcome_names=None,
             plot_width=2000,
             plot_height=800,
+            initial_guides=None,
+            initial_genes=None,
+            save_as=None,
            ):
-    with open(pickle_fn, 'rb') as fh:
-        data = pickle.load(fh)
+
+    if save_as is not None and save_as != 'layout':
+        bokeh.io.output_file(save_as)
+
+    if initial_guides is not None and initial_genes is not None:
+        raise ValueError('can only specify one of initial_guides or initial_genes')
+
+    if initial_guides is None:
+        initial_guides = []
+
+    if isinstance(data_source, str):
+        with open(data_source, 'rb') as fh:
+            data = pickle.load(fh)
+    else:
+        data = copy.deepcopy(data_source)
 
     pool_names = data['pool_names']
+
     if outcome_names is None:
         outcome_names = data['outcome_names']
-    full_df = data['full_df']
-    nt_fractions = data['nt_fractions']
+
+    guides_df = data['guides_df']
+    nt_fractions = data['nt_percentages']
     initial_dataset = data['initial_dataset']
     initial_outcome = data['initial_outcome']
 
-    full_df.columns = ['_'.join(t) if t[1] != '' else t[0] for t in data['full_df'].columns.values]
+    guides_df.columns = ['_'.join(t) if t[1] != '' else t[0] for t in data['guides_df'].columns.values]
 
-    for k in ['frequency', 'ys', 'total_UMIs', 'gene_p_up', 'gene_p_down']:
-        full_df[k] = full_df[f'{initial_dataset}_{initial_outcome}_{k}'] 
+    table_keys = [
+        'frequency',
+        'percentage',
+        'ys',
+        'total_UMIs',
+        'gene_p_up',
+        'gene_p_down',
+        'log2_fold_change',
+    ]
+    for key in table_keys:
+        guides_df[key] = guides_df[f'{initial_dataset}_{initial_outcome}_{key}'] 
 
-    scatter_source = bokeh.models.ColumnDataSource(data=full_df, name='scatter_source')
-    scatter_source.data[full_df.index.name] = full_df.index
+    scatter_source = bokeh.models.ColumnDataSource(data=guides_df, name='scatter_source')
+    scatter_source.data[guides_df.index.name] = guides_df.index
 
-    initial_indices = np.array(full_df.query('gene == "DNA2"')['x'])
+    if initial_genes is not None:
+        initial_indices = np.array(guides_df.query('gene in @initial_genes')['x'])
+    else:
+        initial_indices = np.array(guides_df.loc[initial_guides]['x'])
+
     scatter_source.selected = bokeh.models.Selection(indices=initial_indices)
-    scatter_source.selected.js_on_change('indices', build_js_callback('screen_scatter_selection'))
+    scatter_source.selected.js_on_change('indices', build_js_callback(__file__, 'screen_scatter_selection'))
 
     filtered_data = {k: [scatter_source.data[k][i] for i in initial_indices] for k in scatter_source.data}
     filtered_source = bokeh.models.ColumnDataSource(data=filtered_data, name='filtered_source')
 
     x_min = -1
-    x_max = len(full_df)
+    x_max = len(guides_df)
 
     y_min = 0
-    y_max = full_df['frequency'].max() * 1.2
+    y_max = guides_df['percentage'].max() * 1.2
 
     tools = [
         'reset',
@@ -325,21 +380,23 @@ def scatter(pickle_fn,
     fig.x_range = bokeh.models.Range1d(x_min, x_max, name='x_range')
     fig.y_range = bokeh.models.Range1d(y_min, y_max, name='y_range')
 
-    fig.x_range.callback = build_js_callback('screen_range', format_kwargs={'lower_bound': x_min, 'upper_bound': x_max})
-    fig.y_range.callback = build_js_callback('screen_range', format_kwargs={'lower_bound': 0, 'upper_bound': 1})
+    fig.x_range.callback = build_js_callback(__file__, 'screen_range', format_kwargs={'lower_bound': x_min, 'upper_bound': x_max})
+    fig.y_range.callback = build_js_callback(__file__, 'screen_range', format_kwargs={'lower_bound': 0, 'upper_bound': 100})
 
-    circles = fig.circle(x='x', y='frequency',
-                        source=scatter_source,
-                        color='color', selection_color='color', nonselection_color='color',
-                        alpha=0.8,
-                        selection_line_alpha=0, nonselection_line_alpha=0, line_alpha=0,
-                        size=5,
+    circles = fig.circle(x='x',
+                         y='percentage',
+                         source=scatter_source,
+                         color='color', selection_color='color', nonselection_color='color',
+                         alpha=0.8,
+                         selection_line_alpha=0, nonselection_line_alpha=0, line_alpha=0,
+                         size=5,
                         )
 
     tooltips = [
-        ('guide', '@guide'),
-        ('frequency of outcome', '@frequency'),
-        ('total UMIs', '@total_UMIs'),
+        ('CRISPRi sgRNA', '@guide'),
+        ('Frequency of outcome', '@frequency'),
+        ('Log2 fold change from nt', '@log2_fold_change'),
+        ('Total UMIs', '@total_UMIs'),
     ]
 
     hover = bokeh.models.HoverTool(renderers=[circles])
@@ -354,7 +411,7 @@ def scatter(pickle_fn,
                    name='confidence_intervals',
                 )
 
-    labels = bokeh.models.LabelSet(x='x', y='frequency', text='guide',
+    labels = bokeh.models.LabelSet(x='x', y='percentage', text='guide',
                                    source=filtered_source,
                                    level='glyph',
                                    x_offset=4, y_offset=0,
@@ -367,65 +424,70 @@ def scatter(pickle_fn,
     fig.xgrid.visible = False
     fig.ygrid.visible = False
 
-    dataset_menu = bokeh.models.widgets.MultiSelect(options=pool_names, value=[initial_dataset], name='dataset_menu', title='dataset', size=len(pool_names))
-    outcome_menu = bokeh.models.widgets.MultiSelect(options=outcome_names, value=[initial_outcome], name='outcome_menu', title='outcome', size=len(outcome_names))
+    dataset_menu = bokeh.models.widgets.MultiSelect(options=pool_names, value=[initial_dataset], name='dataset_menu', title='Screen condition:', size=len(pool_names) + 2, width=400)
+    outcome_menu = bokeh.models.widgets.MultiSelect(options=outcome_names, value=[initial_outcome], name='outcome_menu', title='Outcome category:', size=len(outcome_names) + 2, width=400)
 
-    menu_js = build_js_callback('screen_menu', format_kwargs={'nt_fractions': str(nt_fractions)})
+    menu_js = build_js_callback(__file__, 'screen_menu', format_kwargs={'nt_fractions': str(nt_fractions)})
     for menu in [dataset_menu, outcome_menu]:
         menu.js_on_change('value', menu_js)
 
     fig.add_layout(bokeh.models.Span(location=nt_fractions[f'{initial_dataset}_{initial_outcome}'], dimension='width', line_alpha=0.5, name='nt_fraction'))
 
-    interval_button = bokeh.models.widgets.Toggle(label='show confidence intervals', active=True)
-    interval_button.js_on_change('active', build_js_callback('screen_errorbars_button'))
+    interval_button = bokeh.models.widgets.Toggle(label='Show confidence intervals', active=True)
+    interval_button.js_on_change('active', build_js_callback(__file__, 'screen_errorbars_button'))
 
-    cutoff_slider = bokeh.models.Slider(start=-10, end=-2, value=-5, step=1, name='cutoff_slider', title='log10 p-val cutoff')
+    cutoff_slider = bokeh.models.Slider(start=-10, end=-2, value=-5, step=1, name='cutoff_slider', title='log10 p-value significance threshold')
 
-    down_button = bokeh.models.widgets.Button(label='filter significant down', name='filter_down')
-    up_button = bokeh.models.widgets.Button(label='filter significant up', name='filter_up')
+    down_button = bokeh.models.widgets.Button(label='Filter to genes that significantly decrease', name='filter_down')
+    up_button = bokeh.models.widgets.Button(label='Filter to genes that significantly increase', name='filter_up')
     for button in [down_button, up_button]:
-        button.js_on_click(build_js_callback('screen_significance_filter'))
+        button.js_on_click(build_js_callback(__file__, 'screen_significance_filter'))
 
-    text_input = bokeh.models.TextInput(title='Search:', name='search')
-    text_input.js_on_change('value', build_js_callback('screen_search'))
+    text_input = bokeh.models.TextInput(title='Search sgRNAs:', name='search')
+    text_input.js_on_change('value', build_js_callback(__file__, 'screen_search'))
 
     fig.outline_line_color = 'black'
-    first_letters = [g[0] for g in full_df.index]
+    first_letters = [g[0] for g in guides_df.index]
     x_tick_labels = {first_letters.index(c): c for c in string.ascii_uppercase if c in first_letters}
+    x_tick_labels[first_letters.index('n')] = 'nt'
     fig.xaxis.ticker = sorted(x_tick_labels)
     fig.xaxis.major_label_overrides = x_tick_labels
 
-    table_col_names = ['guide', 'gene', 'frequency', 'total_UMIs', 'gene_p_up', 'gene_p_down']
+    table_col_names = [
+        ('guide', 'CRISPRi sgRNA', 50),
+        ('gene', 'Gene', 50),
+        ('frequency', 'Frequency of outcome', 50),
+        ('log2_fold_change', 'Log2 fold change', 50),
+        ('total_UMIs', 'Total UMIs', 50),
+    ]
     columns = []
-    for col_name in table_col_names:
-        lengths = [len(str(v)) for v in scatter_source.data[col_name]]
-        mean_length = np.mean(lengths)
-
+    for col_name, col_label, width in table_col_names:
         width = 50
         if col_name == 'gene':
             formatter = bokeh.models.widgets.HTMLTemplateFormatter(template='<a href="https://www.genecards.org/cgi-bin/carddisp.pl?gene=<%= value %>" target="_blank"><%= value %></a>')
-        elif 'gene_p' in col_name:
-            formatter = bokeh.models.widgets.NumberFormatter(format='0.0000000')
-        elif col_name == 'frequency':
+        elif col_name == 'log2_fold_change':
             formatter = bokeh.models.widgets.NumberFormatter(format='0.00')
+        elif col_name == 'total_UMIs':
+            formatter = bokeh.models.widgets.NumberFormatter(format='0,0')
+        elif col_name == 'frequency':
+            formatter = bokeh.models.widgets.NumberFormatter(format='0.00%')
         else:
             formatter = None
-            width = min(500, int(12 * mean_length))
 
         column = bokeh.models.widgets.TableColumn(field=col_name,
-                                                  title=col_name,
+                                                  title=col_label,
                                                   formatter=formatter,
                                                   width=width,
                                                  )
         columns.append(column)
         
-    save_button = bokeh.models.widgets.Button(label='save table', name='save_button')
-    save_button.js_on_click(build_js_callback('scatter_save_button', format_kwargs={'column_names': table_col_names}))
+    save_button = bokeh.models.widgets.Button(label='Save table', name='save_button')
+    save_button.js_on_click(build_js_callback(__file__, 'scatter_save_button', format_kwargs={'column_names': table_col_names}))
 
     table = bokeh.models.widgets.DataTable(source=filtered_source,
                                            columns=columns,
-                                           width=800,
-                                           height=600,
+                                           width=600,
+                                           height=300,
                                            sortable=False,
                                            reorderable=False,
                                            name='table',
@@ -433,18 +495,46 @@ def scatter(pickle_fn,
                                           )
 
     fig.xaxis.axis_label = 'CRISPRi sgRNAs (ordered alphabetically)'
-    fig.yaxis.axis_label = 'frequency of outcome'
+    fig.yaxis.axis_label = 'Frequency of outcome'
     for axis in (fig.xaxis, fig.yaxis):
-        axis.axis_label_text_font_size = '16pt'
-        axis.axis_label_text_font_style = 'normal'
+        axis.axis_label_text_font_size = '14pt'
+        axis.axis_label_text_font_style = 'bold'
+
+    #fig.yaxis.formatter = bokeh.models.NumeralTickFormatter(format=' 0.00%')
+    fig.yaxis.formatter = bokeh.models.PrintfTickFormatter(format="%6.2f%%")
+    fig.yaxis.major_label_text_font = 'courier'
+    fig.yaxis.major_label_text_font_style = 'bold'
         
-    fig.title.name = 'title'
-    fig.title.text = f'{initial_dataset}      {initial_outcome}'
+    #fig.title.name = 'title'
+    #fig.title.text = f'{initial_dataset}\ntest      {initial_outcome}'
 
-    fig.title.text_font_size = '16pt'
+    #fig.title.text_font_size = '16pt'
+    fig.add_layout(bokeh.models.Title(text=f'Outcome category: {initial_outcome}', text_font_size='14pt', name='subtitle'), 'above')
+    fig.add_layout(bokeh.models.Title(text=f'Screen condition: {initial_dataset}', text_font_size='14pt', name='title'), 'above')
 
-    widgets = bokeh.layouts.column([dataset_menu, outcome_menu, interval_button, cutoff_slider, up_button, down_button, text_input, save_button])
-    bokeh.io.show(bokeh.layouts.column([fig, bokeh.layouts.row([table, bokeh.layouts.Spacer(width=40), widgets])]))
+    top_widgets = bokeh.layouts.column([bokeh.layouts.Spacer(height=70),
+                                        dataset_menu,
+                                        outcome_menu,
+                                        text_input,
+                                       ])
+
+    bottom_widgets = bokeh.layouts.column([interval_button,
+                                           cutoff_slider,
+                                           up_button,
+                                           down_button,
+                                           save_button,
+                                          ])
+
+    first_row = bokeh.layouts.row([fig, top_widgets])
+    second_row = bokeh.layouts.row([bokeh.layouts.Spacer(width=90), table, bottom_widgets])
+    final_layout = bokeh.layouts.column([first_row, bokeh.layouts.Spacer(height=50), second_row])
+    
+    if save_as == 'layout':
+        return final_layout
+    elif save_as is not None:
+        bokeh.io.save(final_layout)
+    else:
+        bokeh.io.show(final_layout)
 
 def gene_significance(pool, outcomes, draw_outcomes=False, p_val_threshold=0.05, as_percentage=False):
     df, nt_fraction, p_df = get_outcome_statistics(pool, outcomes)

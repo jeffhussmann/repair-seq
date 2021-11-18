@@ -15,15 +15,14 @@ memoized_property = hits.utilities.memoized_property
 
 import knock_knock.outcome
 
-import repair_seq.visualize
-import repair_seq.visualize.clustermap
-import repair_seq.visualize.outcome_diagrams
-import repair_seq.pooled_screen
+from . import visualize
+from .visualize import outcome_diagrams, clustermap
+from . import pooled_screen
 
-ALL_NON_TARGETING = repair_seq.pooled_screen.ALL_NON_TARGETING
+ALL_NON_TARGETING = pooled_screen.ALL_NON_TARGETING
 
 class ReplicatePair:
-    def __init__(self, pools, pn_pair):
+    def __init__(self, pools, pn_pair, use_high_frequency_counts=False):
         self.pools = pools
         self.pn_pair = pn_pair
         self.pn0 = pn_pair[0]
@@ -34,9 +33,15 @@ class ReplicatePair:
 
         self.target_info = self.pool0.target_info
 
+        self.use_high_frequency_counts = use_high_frequency_counts
+
     @memoized_property
     def average_nt_fractions(self):
-        nt_fracs = {pn: self.pools[pn].non_targeting_fractions() for pn in self.pn_pair}
+        if self.use_high_frequency_counts:
+            nt_fracs = {pn: self.pools[pn].high_frequency_outcome_fractions[ALL_NON_TARGETING] for pn in self.pn_pair}
+        else:
+            nt_fracs = {pn: self.pools[pn].non_targeting_fractions() for pn in self.pn_pair}
+
         return pd.concat(nt_fracs, axis=1).fillna(0).mean(axis=1).sort_values(ascending=False)
 
     @memoized_property
@@ -61,7 +66,7 @@ class ReplicatePair:
 
         for pn in self.pn_pair:
             pool = self.pools[pn]
-            top_guides = pool.top_n_active_guides(outcomes, n)
+            top_guides = pool.top_n_active_guides(outcomes, n, use_high_frequency_counts=self.use_high_frequency_counts)
             all_guides.update(top_guides)
 
         # Only consider guides that were present in both screens.
@@ -72,8 +77,13 @@ class ReplicatePair:
         return all_guides
 
     def log2_fold_changes(self, outcomes, guides):
-        return pd.concat({pn: self.pools[pn].log2_fold_changes().loc[outcomes, guides] for pn in self.pn_pair}, axis=1)
+        if self.use_high_frequency_counts:
+            data = {pn: self.pools[pn].high_frequency_log2_fold_changes.loc[outcomes, guides] for pn in self.pn_pair}
+        else:
+            data = {pn: self.pools[pn].log2_fold_changes().loc[outcomes, guides] for pn in self.pn_pair}
 
+        return pd.concat(data, axis=1)
+        
     def outcome_r_matrix(self, outcomes, guides):
         log2_fold_changes = self.log2_fold_changes(outcomes, guides)
         r_matrix = np.zeros((len(outcomes), len(outcomes)))
@@ -162,30 +172,34 @@ class ReplicatePair:
 
         return pd.Series(rs, index=guides, name='r').sort_values(ascending=False)
 
-    def plot_outcome_diagrams_with_correlations(self, threshold=5e-3, n_guides=100, window=(-20, 20), draw_heatmap=False):
+    def plot_outcome_diagrams_with_correlations(self,
+                                                threshold=5e-3,
+                                                n_guides=100,
+                                                window=(-20, 20),
+                                                draw_heatmap=False,
+                                               ):
         outcomes = self.outcomes_above_simple_threshold(threshold)
         guides = self.union_of_top_n_guides(outcomes, n_guides)
 
         r_series = self.outcome_r_series(guides=guides)
-        r_matrix, _ = self.outcome_r_matrix(outcomes, guides)
 
         inches_per_nt = 0.1
         text_size = 7
         inches_per_outcome = 0.2
         scale = 0.5
-        g = repair_seq.visualize.outcome_diagrams.DiagramGrid(outcomes,
-                                                       self.target_info,
-                                                       window=window,
-                                                       cut_color='PAM',
-                                                       draw_wild_type_on_top=True,
-                                                       flip_if_reverse=False,
-                                                       inches_per_nt=inches_per_nt * scale,
-                                                       text_size=text_size * scale,
-                                                       inches_per_outcome=inches_per_outcome * scale,
-                                                       line_widths=0.75,
-                                                       title=None,
-                                                       block_alpha=0.2,
-                                                      )
+        g = outcome_diagrams.DiagramGrid(outcomes,
+                                         self.target_info,
+                                         window=window,
+                                         cut_color='PAM',
+                                         draw_wild_type_on_top=True,
+                                         flip_if_reverse=False,
+                                         inches_per_nt=inches_per_nt * scale,
+                                         text_size=text_size * scale,
+                                         inches_per_outcome=inches_per_outcome * scale,
+                                         line_widths=0.75,
+                                         title=None,
+                                         block_alpha=0.2,
+                                        )
 
         g.add_ax('frequency',
                  width_multiple=10,
@@ -213,7 +227,7 @@ class ReplicatePair:
                 )
 
         norm = matplotlib.colors.Normalize(vmin=-1, vmax=1)
-        sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=repair_seq.visualize.correlation_cmap)
+        sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=visualize.correlation_cmap)
 
         g.plot_on_ax('correlation',
                      r_series,
@@ -244,13 +258,15 @@ class ReplicatePair:
         plt.setp(g.axs_by_name['correlation'].get_xticklabels(), size=6)
 
         if draw_heatmap:
+            r_matrix, _ = self.outcome_r_matrix(outcomes, guides)
+
             # Note reversing of row order.
             g.add_heatmap(r_matrix[::-1], 'r',
-                        cmap=repair_seq.visualize.correlation_cmap,
-                        draw_tick_labels=False,
-                        vmin=-1, vmax=1,
-                        gap_multiple=2,
-                        )
+                          cmap=visualize.correlation_cmap,
+                          draw_tick_labels=False,
+                          vmin=-1, vmax=1,
+                          gap_multiple=2,
+                         )
 
         g.draw_outcome_categories()
 
@@ -269,7 +285,7 @@ class ReplicatePair:
         
         fig, ax = plt.subplots(figsize=(8, 8))
 
-        ax.imshow(guide_r_matrix, cmap=repair_seq.visualize.clustermap.correlation_cmap, vmin=-1, vmax=1)
+        ax.imshow(guide_r_matrix, cmap=clustermap.correlation_cmap, vmin=-1, vmax=1)
 
         ax.set_xticks([])
         ax.set_yticks([])
@@ -338,7 +354,7 @@ class ReplicatePair:
 
         df['color'] = 'grey'
         to_highlight = df['outcome_1'].isin(relevant_indices) & df['outcome_2'].isin(relevant_indices)
-        df.loc[to_highlight, 'color'] = repair_seq.visualize.Cas9_category_colors[cat_to_highlight]
+        df.loc[to_highlight, 'color'] = visualize.Cas9_category_colors[cat_to_highlight]
 
         x = self.pn0
         y = self.pn1
@@ -356,7 +372,7 @@ class ReplicatePair:
                     textcoords='offset points',
                     ha='left',
                     va='top',
-                    color=repair_seq.visualize.Cas9_category_colors[cat_to_highlight],
+                    color=visualize.Cas9_category_colors[cat_to_highlight],
                     size=6,
                    )
 
@@ -383,8 +399,10 @@ class ReplicatePair:
         plt.setp(ax.spines.values(), linewidth=0.5)
         ax.tick_params(labelsize=6, width=0.5, length=2)
 
-        ax.set_ylabel('Correlation between distinct\noutcomes in replicate 2', size=6)
-        ax.set_xlabel('Correlation between distinct\noutcomes in replicate 1', size=6)
+        ax.set_ylabel('Replicate 2', size=6)
+        ax.set_xlabel('Replicate 1', size=6)
+
+        ax.set_title('Correlations between\ndistinct outcomes', size=7)
 
         return fig
 
@@ -396,7 +414,7 @@ class ReplicatePair:
 
         fig, ax = plt.subplots(figsize=(6, 6))
 
-        ax.imshow(outcome_r_matrix, cmap=repair_seq.visualize.correlation_cmap, vmin=-1, vmax=1)
+        ax.imshow(outcome_r_matrix, cmap=visualize.correlation_cmap, vmin=-1, vmax=1)
 
         ax.set_xticks([])
         ax.set_yticks([])
@@ -481,9 +499,9 @@ class ReplicatePair:
             else:
                 data_lims = (np.floor(df.min().min() - 0.1), np.ceil(df.max().max() + 0.1))
 
-            df['color'] = repair_seq.visualize.targeting_guide_color
+            df['color'] = visualize.targeting_guide_color
 
-            df.loc[self.common_non_targeting_guides, 'color'] = repair_seq.visualize.nontargeting_guide_color
+            df.loc[self.common_non_targeting_guides, 'color'] = visualize.nontargeting_guide_color
 
             df = df.dropna()
 
@@ -710,8 +728,10 @@ class ReplicatePair:
         ax.axhline(0, color='black', alpha=0.2)
         ax.axvline(0, color='black', alpha=0.2)
 
-        ax.set_xlabel('Correlation between\ndistinct CRISPRi guides,\nreplicate 1', size=6)
-        ax.set_ylabel('Correlation between\ndistinct CRISPRi guides,\nreplicate 2', size=6)
+        ax.set_xlabel('Replicate 1', size=6)
+        ax.set_ylabel('Replicate 2', size=6)
+
+        ax.set_title('Correlations between\ndistinct CIRSPRi sgRNAs', size=7, y=1.2)
 
         ax.tick_params(labelsize=6, width=0.5, length=2)
         ticks = [-1, -0.5, 0, 0.5, 1]
@@ -788,7 +808,7 @@ class PoolReplicates:
 
     @memoized_property
     def outcome_fractions(self):
-        return pd.concat({pool.group: pool.outcome_fractions('perfect')['none'] for pool in self.pools}, axis=1).fillna(0)
+        return pd.concat({pool.name: pool.outcome_fractions('perfect')['none'] for pool in self.pools}, axis=1).fillna(0)
     
     @memoized_property
     def outcome_fraction_means(self):
@@ -820,7 +840,7 @@ class PoolReplicates:
 
     @memoized_property
     def category_fractions(self):
-        all_fs = {pool.group: pool.category_fractions for pool in self.pools}
+        all_fs = {pool.name: pool.category_fractions for pool in self.pools}
         return pd.concat(all_fs, axis=1).fillna(0)
 
     @memoized_property
@@ -837,7 +857,7 @@ class PoolReplicates:
 
     @memoized_property
     def category_fraction_differences(self):
-        return pd.concat({pool.group: pool.category_fraction_differences for pool in self.pools}, axis=1).fillna(0)
+        return pd.concat({pool.name: pool.category_fraction_differences for pool in self.pools}, axis=1).fillna(0)
 
     @memoized_property
     def category_fraction_difference_means(self):
@@ -849,7 +869,7 @@ class PoolReplicates:
 
     @memoized_property
     def category_log2_fold_changes(self):
-        return pd.concat({pool.group: pool.category_log2_fold_changes for pool in self.pools}, axis=1).fillna(0)
+        return pd.concat({pool.name: pool.category_log2_fold_changes for pool in self.pools}, axis=1).fillna(0)
 
     @memoized_property
     def category_log2_fold_change_means(self):
@@ -861,7 +881,7 @@ class PoolReplicates:
 
     @memoized_property
     def gene_level_category_statistics(self):
-        return pd.concat({pool.group: pool.gene_level_category_statistics for pool in self.pools}, axis=1)
+        return pd.concat({pool.name: pool.gene_level_category_statistics for pool in self.pools}, axis=1)
 
     @memoized_property
     def gene_level_category_statistic_means(self):
@@ -869,7 +889,7 @@ class PoolReplicates:
 
     def plot_ranked_category_statistics(self, category, stat='extreme_2', top_n=3, bottom_n=3, y_lim=(-2, 2)):
         df = self.gene_level_category_statistics.xs([category, stat], level=[1, 2], axis=1).copy()
-        first, second = [pool.group for pool in self.pools]
+        first, second = [pool.name for pool in self.pools]
         df['color'] = 'black'
 
         df.loc[['MSH2', 'MSH6'], 'color'] = 'tab:green'

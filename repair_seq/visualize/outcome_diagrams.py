@@ -591,8 +591,9 @@ def plot(outcome_order,
             
         else:
             label = f'{category}, {subcategory}, {details}'
+
             if replacement_text_for_complex is not None:
-                label = replacement_text_for_complex
+                label = replacement_text_for_complex.get(label, label)
 
             ax.annotate(label,
                         xy=(0, y),
@@ -645,10 +646,12 @@ def plot(outcome_order,
     ax.set_ylim(-0.5, num_outcomes - 0.5)
     ax.set_frame_on(False)
 
-    if len(target_infos) > 1:
-        title_color = 'black'
-    else:
-        title_color = target_infos[single_source_name].PAM_color
+    title_color = kwargs.get('title_color')
+    if title_color is None:
+        if len(target_infos) > 1:
+            title_color = 'black'
+        else:
+            title_color = target_infos[single_source_name].PAM_color
 
     if title:
         ax.annotate(title,

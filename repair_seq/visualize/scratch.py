@@ -644,8 +644,11 @@ def parallel_coordinates_genes(data,
                                text_labels=None,
                                pn_to_name=None,
                                legend=True,
+                               gene_aliases=None,
                               ):
     gene_to_kwargs = {}
+    if gene_aliases is None:
+        gene_aliases = {}
 
     if pn_to_name is None:
         pn_to_name = {n.rsplit('_', 1)[0]: n.rsplit('_', 1)[0] for n in data.columns}
@@ -681,7 +684,7 @@ def parallel_coordinates_genes(data,
             continue
 
         common_kwargs = dict(
-            text=gene,
+            text=gene_aliases.get(gene, gene),
             color=kwargs['color'],
             textcoords='offset points',
             va='center',
@@ -711,7 +714,10 @@ def parallel_coordinates_genes(data,
                 loc='upper right',
                 )
         
-    ax.set_ylabel('log$_2$ fold-change from non-targeting', size=6)
+    ax.set_ylabel('Log$_2$ fold change from non-targeting',
+                  size=6,
+                  labelpad=16 if 'left' in text_labels else None,
+                 )
 
     num_columns = len(data.columns)
     ax.set_xlim(0, num_columns - 1)
@@ -757,17 +763,25 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
         'sgRNA-3': '2',
         'sgRNA-2': '3',
         'sgRNA-7': '4',
+        'SpCas9 target 1': '1',
+        'SpCas9 target 2': '2',
+        'SpCas9 target 3': '3',
+        'SpCas9 target 4': '4',
     }
 
     library_name_to_alias = {
         'DDR_library': '1.5k',
         'DDR_sublibrary': '366',
+        'AX227': '1.5k',
+        'AC001': '366',
     }
+
+    bottom_y = -0.25
         
-    label_y = 1.24
-    donor_y = 1.21
-    sgRNA_y = 1.14
-    library_y = 1.07
+    label_y = bottom_y + 0.17#1.24
+    donor_y = bottom_y + 0.14#1.21
+    sgRNA_y = bottom_y + 0.07#1.14
+    library_y = bottom_y#1.07
 
     donor_half_width = 0.3
 
@@ -788,9 +802,9 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
             # Draw donor.
             _, _, is_reverse_complement = ti.best_donor_target_alignment
                 
-            if 'sODN' in pn:
+            if 'sODN' in pn or ti.donor in ['oBA701', 'oJAH158', 'oBA701-PCR']:
                 donor_color = bokeh.palettes.Dark2[8][1]
-            elif 'all-SNVs' in pn:
+            elif 'all-SNVs' in pn or ti.donor in ['oJAH159', 'oJAH160']:
                 donor_color = bokeh.palettes.Set2[8][0]
             elif 'first-half' in pn:
                 donor_color = bokeh.palettes.Set2[8][1]
@@ -798,8 +812,19 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
                 donor_color = bokeh.palettes.Set2[8][2]
             else:
                 donor_color = 'black'
+
+            if 'PAGE' in pn:
+                ax.annotate('PAGE',
+                            xy=(x, donor_y),
+                            xycoords=('data', 'axes fraction'),
+                            xytext=(0, 3),
+                            textcoords='offset points',
+                            color=donor_color,
+                            size=5,
+                            ha='center',
+                           )
             
-            double_stranded = 'dsODN' in pn
+            double_stranded = 'dsODN' in pn or 'PCR' in pn
             
             common_kwargs = dict(
                 transform=ax.get_xaxis_transform(),
@@ -842,7 +867,7 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
                     va='center',
                     color=ti.PAM_color,
                     size=6,
-                )
+                   )
 
         library_alias = library_name_to_alias[pool.variable_guide_library.name]
         ax.annotate(library_alias,
@@ -852,7 +877,7 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
                     va='center',
                     color='black',
                     size=6,
-                )
+                   )
             
     common_kwargs = dict(
         xycoords='axes fraction',
@@ -867,17 +892,17 @@ def annotate_with_donors_and_sgRNAs(ax, data, pools, pn_to_name, show_text_label
         ax.annotate('donor:',
                     xy=(0, donor_y),
                     **common_kwargs,
-                )
+                   )
 
     ax.annotate('Cas9 target site:',
                 xy=(0, sgRNA_y),
                 **common_kwargs,
-            )
+               )
 
     ax.annotate('CRISPRi library:',
                 xy=(0, library_y),
                 **common_kwargs,
-            )
+               )
 
 def deletion_heatmap(pool, buffer, groups, grids, guide=None, log2_fold_change=False, min_MH=2, max_offset=30):
     def extract_grid(grids, key):

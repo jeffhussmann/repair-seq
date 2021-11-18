@@ -14,7 +14,7 @@ if cb_data.index.indices.length > 0
             filtered_corrs_source.data[key] = (values[i] for i in indices)
 
     second_scatter.outline_line_color = 'black'
-    second_scatter.outline_line_alpha = 0.75
+    second_scatter.outline_line_alpha = 0.5
 
     right_line_source.data['x'][0] = index
     right_line_source.data['x'][1] = index

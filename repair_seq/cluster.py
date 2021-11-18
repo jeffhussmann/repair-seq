@@ -18,7 +18,7 @@ import hits.visualize
 
 import knock_knock.outcome
 
-import repair_seq.visualize
+from . import visualize
 
 memoized_property = hits.utilities.memoized_property
 
@@ -51,8 +51,8 @@ class Clusterer:
         options.setdefault('guides_method', 'HDBSCAN')
         options.setdefault('guides_kwargs', {})
 
-        options.setdefault('guides_seed', 1)
-        options.setdefault('outcomes_seed', 1)
+        options.setdefault('guides_seed', 0)
+        options.setdefault('outcomes_seed', 0)
         options.setdefault('outcomes_min_dist', 0.2)
         options.setdefault('guides_min_dist', 0.2)
 
@@ -107,8 +107,12 @@ class Clusterer:
         return self.log2_fold_changes.index.values
 
     @memoized_property
+    def all_log2_fold_changes(self):
+        return self.guide_log2_fold_changes(self.guide_library.guides)
+
+    @memoized_property
     def all_guide_correlations(self):
-        all_l2fcs = self.guide_log2_fold_changes(self.guide_library.guides)
+        all_l2fcs = self.all_log2_fold_changes
         all_corrs = all_l2fcs.corr().stack()
 
         all_corrs.index.names = ['guide_1', 'guide_2']
@@ -202,6 +206,30 @@ class Clusterer:
         embedding['fraction'] = fractions
         embedding['log10_fraction'] = np.log10(embedding['fraction'])
 
+        effector = self.target_info.effector.name
+
+        categories = embedding.index.get_level_values('category')
+
+        combined_categories = []
+
+        for category, directionality in zip(categories, embedding['directionality']):
+            if category != 'deletion':
+                combined_category = category
+            else:
+                combined_category = f'{category}, {directionality}'
+
+            combined_categories.append(combined_category)
+
+        combined_categories = pd.Series(combined_categories, index=embedding.index)
+        categories_aliased = combined_categories.map(visualize.category_aliases[effector])
+
+        value_to_color = visualize.category_alias_colors[effector]
+        colors = categories_aliased.map(value_to_color)
+
+        embedding['combined_categories'] = combined_categories
+        embedding['categories_aliased'] = categories_aliased
+        embedding['category_colors'] = colors
+
         return embedding
 
     def plot_guide_embedding(self,
@@ -227,7 +255,7 @@ class Clusterer:
             min_gamma = -0.3
 
             values = self.guide_library.guides_df['gamma'].loc[data.index]
-            cmap = repair_seq.visualize.gamma_cmap
+            cmap = visualize.gamma_cmap
 
             norm = matplotlib.colors.Normalize(vmin=min_gamma, vmax=0)
             sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
@@ -269,7 +297,7 @@ class Clusterer:
             phase = color_by
 
             values = self.guide_library.cell_cycle_log2_fold_changes.loc[phase, data.index]
-            cmap = repair_seq.visualize.cell_cycle_cmap
+            cmap = visualize.cell_cycle_cmap
 
             norm = matplotlib.colors.Normalize(vmin=-1, vmax=1)
             sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
@@ -448,29 +476,12 @@ class Clusterer:
             elif color_by == 'category':
                 effector = self.target_info.effector.name
 
-                categories = data.index.get_level_values('category')
+                value_to_color = visualize.category_alias_colors[effector]
 
-                combined_categories = []
-
-                for category, directionality in zip(categories, data['directionality']):
-                    if category != 'deletion':
-                        combined_category = category
-                    else:
-                        combined_category = f'{category}, {directionality}'
-
-                    combined_categories.append(combined_category)
-
-                combined_categories = pd.Series(combined_categories, index=data.index)
-                categories_aliased = combined_categories.map(repair_seq.visualize.category_aliases[effector])
-
-                value_to_color = repair_seq.visualize.category_alias_colors[effector]
-                colors = categories_aliased.map(value_to_color)
-
-                data['color'] = colors
-                data['sort_by'] = categories_aliased
+                data['color'] = data['category_colors']
 
                 # Force insertions to be drawn on top.
-                data = data.sort_values(by='sort_by', key=lambda s: s == 'insertion')
+                data = data.sort_values(by='categories_aliased', key=lambda s: s == 'insertion')
 
                 needs_categorical_legend = True
 
@@ -582,7 +593,7 @@ class Clusterer:
 
                 values = values.loc[data.index]
                 norm = matplotlib.colors.Normalize(vmin=-2, vmax=2)
-                cmap = repair_seq.visualize.fold_changes_cmap
+                cmap = visualize.fold_changes_cmap
                 sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
 
                 colors = [tuple(row) for row in sm.to_rgba(values)]
@@ -622,7 +633,7 @@ class Clusterer:
                 colorbar.set_ticks(ticks)
                 colorbar.set_ticklabels(tick_labels)
                 colorbar.outline.set_alpha(0)
-                colorbar.set_label('log$_2$\nfold-change', size=legend_text_size)
+                colorbar.set_label('log$_2$ fold change\nfrom non-targeting', size=legend_text_size)
                 cax.tick_params(labelsize=6, width=0.5, length=2)
 
                 cax.annotate(guide,
@@ -919,7 +930,7 @@ class SinglePoolClusterer(Clusterer):
 
         elif selection_method == 'top_n':
             num_outcomes = self.options['outcomes_selection_kwargs']['n']
-            outcomes = self.pool.most_frequent_outcomes('none')[:num_outcomes]
+            outcomes = self.pool.most_frequent_outcomes(use_high_frequency_counts=self.options['use_high_frequency_counts'])[:num_outcomes]
 
         else:
             outcomes = self.pool.canonical_outcomes
@@ -937,7 +948,9 @@ class SinglePoolClusterer(Clusterer):
 
         elif self.options['guides_selection_method'] == 'chi_squared_top_n':
             n = self.options['guides_selection_kwargs']['n']
-            guides = self.pool.top_n_active_guides(self.outcomes, n)
+            guides = self.pool.top_n_active_guides(self.outcomes, n,
+                                                   use_high_frequency_counts=self.options['use_high_frequency_counts'],
+                                                  )
 
         else:
             guides = self.pool.canonical_active_guides
@@ -957,7 +970,11 @@ class SinglePoolClusterer(Clusterer):
         return l2fcs
 
     def guide_log2_fold_changes(self, guide):
-        l2fcs = self.pool.log2_fold_changes.loc[self.outcomes, guide]
+        if self.options['use_high_frequency_counts']:
+            l2fcs = self.pool.high_frequency_log2_fold_changes.loc[self.outcomes, guide]
+        else:
+            l2fcs = self.pool.log2_fold_changes().loc[self.outcomes, guide]
+
         index = pd.MultiIndex.from_tuples([(self.pool.short_name, *vs) for vs in l2fcs.index])
         index.names = ['pool_name'] + l2fcs.index.names
         l2fcs.index = index
@@ -1086,8 +1103,12 @@ class MultiplePoolClusterer(Clusterer):
         all_fcs = {}
 
         for pool in self.pools:
-            fcs = pool.log2_fold_changes.loc[self.pool_specific_outcomes[pool.short_name], guide]
-            all_fcs[pool.short_name] = fcs
+            if self.options['use_high_frequency_counts']:
+                fcs = pool.high_frequency_log2_fold_changes
+            else:
+                fcs = pool.log2_fold_changes()
+
+            all_fcs[pool.short_name] = fcs.loc[self.pool_specific_outcomes[pool.short_name], guide]
             
         all_fcs = pd.concat(all_fcs)
 

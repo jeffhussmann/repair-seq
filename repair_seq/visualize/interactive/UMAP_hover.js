@@ -24,10 +24,10 @@ if (cb_data.index.indices.length > 0) {
     }
   }
   second_scatter.outline_line_color = 'black';
-  second_scatter.outline_line_alpha = 0.75;
+  second_scatter.outline_line_alpha = 0.5;
   right_line_source.data['x'][0] = index;
   right_line_source.data['x'][1] = index;
-  right_line_source.data['y'][0] = corrs_source.data['y'][index] + 0.02;
+  right_line_source.data['y'][0] = corrs_source.data['y'][index] + 0.05;
   right_line.visible = true;
 } else {
   color_source.data['second_color'] = color_source.data['blank'];

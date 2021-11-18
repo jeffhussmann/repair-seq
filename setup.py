@@ -20,8 +20,13 @@ setup(
     python_requires='>=3.6',
 
     install_requires=[
+        'h5py==3.1.0',
+        'hdbscan==0.8.26',
         'hits==0.2.2',
         'knock_knock==0.3.2',
+        'numba==0.51.2',
+        'seaborn==0.11.0',
+        'umap-learn==0.4.6',
     ],
 
     setup_requires=['cython'],

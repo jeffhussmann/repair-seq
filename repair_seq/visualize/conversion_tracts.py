@@ -280,7 +280,7 @@ def conversion_tracts(pool,
                       ax_on_bottom=False,
                       **kwargs,
                      ):
-    fracs = pool.non_targeting_fractions_full_arguments('perfect', 'none')
+    fracs = pool.non_targeting_fractions()
     if outcomes is not None:
         fracs = fracs.reindex(outcomes, fill_value=0)
 
@@ -305,8 +305,6 @@ def conversion_tracts(pool,
     else:
         x_min = int(np.floor(min(xs))) - 2
         x_max = int(np.ceil(max(xs))) + 2
-
-    print(x_min, x_max)
 
     left = c_ax_p.x0 + ((x_min - c_ax_x_min) / data_width * c_ax_p.width)
     width = abs((x_max - x_min) / data_width * c_ax_p.width)
@@ -459,7 +457,7 @@ def conversion_tracts(pool,
                         side=kwargs.get('frequency_side', 'left'),
                         width_multiple=4,
                         gap_multiple=2.5,
-                        title='percentage of\noutcomes for\n non-targeting\nguides' if draw_labels else '',
+                        title='Percentage of\noutcomes for\n non-targeting\nsgRNAs' if draw_labels else '',
                         title_size=12,
                        )
     
@@ -467,11 +465,11 @@ def conversion_tracts(pool,
                         side='right',
                         width_multiple=7,
                         gap_multiple=1.5,
-                        title='log$_2$ fold-change\nfrom non-targeting' if draw_labels else '',
+                        title='Log$_2$ fold change\nfrom non-targeting' if draw_labels else '',
                         title_size=12,
                        )
 
-    log10_frequencies = np.log10(pool.non_targeting_fractions_full_arguments('perfect', 'none').loc[sorted_outcomes])
+    log10_frequencies = np.log10(pool.non_targeting_fractions().loc[sorted_outcomes])
     diagram_grid.plot_on_ax('log10 frequency', log10_frequencies, marker='o', markersize=2.5, linewidth=1, line_alpha=0.9, marker_alpha=0.9, color='black', clip_on=False)
 
     x_min, x_max = np.log10(0.95 * frequency_threshold), np.log10(0.21)
@@ -480,7 +478,7 @@ def conversion_tracts(pool,
     if kwargs.get('frequency_side', 'left') == 'left':
         diagram_grid.axs_by_name['log10 frequency'].invert_xaxis()
 
-    fcs = pool.log2_fold_changes_full_arguments('perfect', 'none')['none'].loc[sorted_outcomes]
+    fcs = pool.log2_fold_changes().loc[sorted_outcomes]
 
     for gene in plot_genes:
         if gene == 'DNA2':
@@ -503,8 +501,6 @@ def conversion_tracts(pool,
             print(guide)
 
         diagram_grid.plot_on_ax('log2 fold change', fcs[guide], marker='o', markersize=2.5, marker_alpha=0.9, line_alpha=0.9, linewidth=1, color=gene_to_color[gene], clip_on=False)
-        fracs = np.log10(pool.outcome_fractions('perfect')['none'].loc[sorted_outcomes, guide])
-        #diagram_grid.plot_on_ax('log10 frequency', fracs, marker='o', markersize=3, linewidth=1.5, color=gene_to_color[gene], clip_on=False, marker_alpha=0.8)
 
     diagram_grid.style_fold_change_ax('log2 fold change')
     diagram_grid.axs_by_name['log2 fold change'].set_xlim(*fc_xlims)

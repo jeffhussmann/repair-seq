@@ -36,9 +36,10 @@ systematic_name_fields = [
 
 systematic_names = set()
 
-if args.has_UMIs:
-    pool_sample_sheet = yaml.safe_load(Path(batch_dir / 'sample_sheet.yaml').read_text())
+# Report any sytematic_name_fields missing from any sample.
+missing_fields = defaultdict(set)
 
+if args.has_UMIs:
     pool_details = pd.read_csv(batch_dir / 'pool_details.csv',
                                dtype={'guide_library': str, 'replicate': str},
                                index_col='pool_name',
@@ -46,10 +47,8 @@ if args.has_UMIs:
     # Samples that had multiple indices are given as a semi-colon separated list.
     pool_details['index'] = [s.split(';') for s in pool_details['index']]
 
-    # Report any sytematic_name_fields missing from any sample.
-    missing_fields = defaultdict(set)
-
     sample_sheet_fn = batch_dir / 'sample_sheet.yaml'
+    pool_sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
 
     systematic_name_to_index = {}
 
@@ -75,11 +74,9 @@ if args.has_UMIs:
                 print(full_pool_name, systematic_name)
 
         else:
-            if not args.only_names:
-                print(f'Warning: {pool_name} is missing fields.')
-                for name_field in missing_fields[pool_name]:
-                    print(f'\t{name_field}')
-
+            print(f'Warning: {pool_name} is missing fields.')
+            for name_field in missing_fields[pool_name]:
+                print(f'\t{name_field}')
 
     sample_resolver = hits.utilities.get_one_mismatch_resolver(systematic_name_to_index).get
 
@@ -94,8 +91,12 @@ if args.has_UMIs:
         return sample
 
 else:
-    pool_details = pd.read_csv(batch_dir / 'gDNA_pool_details.csv', dtype={'guide_library': str, 'replicate': str})
+    pool_details = pd.read_csv(batch_dir / 'gDNA_pool_details.csv',
+                               dtype={'guide_library': str, 'replicate': str},
+                               index_col='pool_name',
+                              )
     sample_sheet_fn = batch_dir / 'gDNA_sample_sheet.yaml'
+    pool_sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
 
     systematic_name_to_I7 = {}
     systematic_name_to_I5 = {}
@@ -106,6 +107,34 @@ else:
             systematic_names.add(systematic_name)
             systematic_name_to_I7[systematic_name] = row['I7_index']
             systematic_name_to_I5[systematic_name] = row['I5_index']
+
+    for pool_name, row in pool_details.iterrows():
+        for name_field in systematic_name_fields:
+            if name_field not in row or pd.isna(row[name_field]):
+                missing_fields[pool_name].add(name_field)
+
+        if len(missing_fields[pool_name]) == 0:
+            systematic_name = '_'.join(map(str, row[systematic_name_fields]))
+            systematic_names.add(systematic_name)
+
+            # If systematic_name has been manually added back to sample sheet,
+            # confirm that it is consistent.
+            if 'systematic_name' in row:
+                if row['systematic_name'] != systematic_name:
+                    raise ValueError(row['systematic_name'], systematic_name)
+
+            systematic_names.add(systematic_name)
+            systematic_name_to_I7[systematic_name] = row['I7_index']
+            systematic_name_to_I5[systematic_name] = row['I5_index']
+
+            if args.only_names:
+                full_pool_name = f'{pool_sample_sheet["group_name"]}_{pool_name}'
+                print(full_pool_name, systematic_name)
+
+        else:
+            print(f'Warning: {pool_name} is missing fields.')
+            for name_field in missing_fields[pool_name]:
+                print(f'\t{name_field}')
 
     I7_resolver = hits.utilities.get_one_mismatch_resolver(systematic_name_to_I7).get
     I5_resolver = hits.utilities.get_one_mismatch_resolver(systematic_name_to_I5).get

@@ -127,21 +127,25 @@ for name, alias in Cpf1_category_aliases.items():
 category_aliases = {
     'SpCas9': Cas9_category_aliases,
     'Cpf1': Cpf1_category_aliases,
+    'AsCas12a': Cpf1_category_aliases,
 }
 
 category_colors = {
     'SpCas9': Cas9_category_colors,
     'Cpf1': Cpf1_category_colors,
+    'AsCas12a': Cpf1_category_colors,
 }
 
 category_alias_colors = {
     'SpCas9': Cas9_category_alias_colors,
     'Cpf1': Cpf1_category_alias_colors,
+    'AsCas12a': Cpf1_category_alias_colors,
 }
 
 category_display_order = {
     'SpCas9': Cas9_category_display_order,
     'Cpf1': Cpf1_category_display_order,
+    'AsCas12a': Cpf1_category_display_order,
 }
 def assign_category_colors(outcomes, target_info):
     combined_categories = knock_knock.outcome.add_directionalities_to_deletions(outcomes, target_info)

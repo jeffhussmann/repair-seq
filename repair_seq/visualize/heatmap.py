@@ -1,11 +1,8 @@
 import itertools
-from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
-import bokeh.io
-import bokeh.plotting
 import bokeh.palettes
 import scipy.cluster.hierarchy
 
@@ -16,10 +13,18 @@ import repair_seq.visualize
 idx = pd.IndexSlice
 ALL_NON_TARGETING = repair_seq.pooled_screen.ALL_NON_TARGETING
 
-bokeh.io.output_notebook()
-
-def add_fold_change_colorbar(fig, im, x0, y0, width, height, baseline_condition_name='non-targeting', label_interpretation=True, text_size=8):
-    cbar_ax = fig.add_axes((x0, y0, width, height)) 
+def add_fold_change_colorbar(fig, im,
+                             x0=None,
+                             y0=None,
+                             width=None,
+                             height=None,
+                             cbar_ax=None,
+                             baseline_condition_name='non-targeting',
+                             label_interpretation=True,
+                             text_size=8,
+                            ):
+    if cbar_ax is None:
+        cbar_ax = fig.add_axes((x0, y0, width, height)) 
 
     v_min, v_max = im.get_clim()
     ticks = np.arange(v_min, v_max + 1)
@@ -1184,169 +1189,6 @@ def big_heatmap(pool_list,
 
     return fig
 
-def bokeh_heatmap(pool, num_outcomes=50, num_guides=200, cmap='RdBu_r', **kwargs):
-    guide_order, outcome_order, correlations = cluster(pool, num_outcomes, num_guides, **kwargs)
-
-    c_map = plt.get_cmap(cmap)
-
-    normed = (correlations + 1) / 2
-    rgba_float = c_map(normed)
-    rgba_int = (rgba_float * 255).astype(np.uint8)[::-1] # flip row order for plotting
-
-    size = 1000
-    fig = bokeh.plotting.figure(height=size, width=size, active_scroll='wheel_zoom')
-    lower_bound = -0.5
-    upper_bound = lower_bound + len(guide_order)
-
-    fig.image_rgba(image=[rgba_int], x=lower_bound, y=lower_bound, dw=len(guide_order), dh=(len(guide_order)))
-
-    top_axis = bokeh.models.axes.LinearAxis()
-    right_axis = bokeh.models.axes.LinearAxis()
-    fig.add_layout(top_axis, 'above')
-    fig.add_layout(right_axis, 'right')
-
-    for axis in [fig.yaxis, fig.xaxis]:
-        axis.ticker = np.arange(len(guide_order))
-        axis.major_label_text_font_size = '0pt'
-
-    fig.xaxis.major_label_overrides = {i: guide for i, guide in enumerate(guide_order)}
-    fig.yaxis.major_label_overrides = {i: guide for i, guide in enumerate(guide_order[::-1])}
-
-    fig.xaxis.major_label_orientation = 'vertical'
-
-    fig.x_range = bokeh.models.Range1d(lower_bound, upper_bound, name='x_range', tags=[upper_bound - lower_bound])
-    fig.y_range = bokeh.models.Range1d(lower_bound, upper_bound, name='y_range')
-
-    fig.grid.visible = False
-
-    #range_callback = bokeh.models.CustomJS.from_coffeescript(code=Path('heatmap_range.coffee').read_text().format(lower_bound=lower_bound, upper_bound=upper_bound))
-    range_callback = bokeh.models.CustomJS.from_coffeescript(code=f'''
-models = cb_obj.document._all_models_by_name._dict
-size = cb_obj.end - cb_obj.start
-font_size = Math.round(3000 / size).toString() + '%'
-l.text_font_size = font_size for l in models['labels']
-cb_obj.start = {lower_bound} if cb_obj.start < {lower_bound}
-cb_obj.end = {upper_bound} if cb_obj.end > {upper_bound}
-''')
-
-    for r in (fig.x_range, fig.y_range):
-        r.callback = range_callback
-
-    fig.axis.major_tick_line_color = None
-    fig.axis.major_tick_out = 0
-    fig.axis.major_tick_in = 0
-    
-    quad_source = bokeh.models.ColumnDataSource(data={
-        'left': [],
-        'right': [],
-        'bottom': [],
-        'top': [],
-    }, name='quad_source',
-    )
-    fig.quad('left', 'right', 'top', 'bottom',
-             fill_alpha=0,
-             line_color='black',
-             source=quad_source,
-            )
-    
-    search_code_fn = Path.home() / 'projects' / 'repair_seq' / 'code' / 'repair_seq' / 'visualize' / 'heatmap_search.coffee'
-    search_code_template = Path(search_code_fn).read_text()
-    search_code = search_code_template.format(guides=list(guide_order), lower_bound=lower_bound, upper_bound=upper_bound)
-    search_callback = bokeh.models.CustomJS.from_coffeescript(search_code)
-    text_input = bokeh.models.TextInput(title='Search:', name='search')
-    text_input.js_on_change('value', search_callback)
-
-    label_fig_size = 100
-    label_figs = {
-        'left': bokeh.plotting.figure(width=label_fig_size, height=size, x_range=(-10, 10), y_range=fig.y_range),
-        'right': bokeh.plotting.figure(width=label_fig_size, height=size, x_range=(-10, 10), y_range=fig.y_range),
-        'top': bokeh.plotting.figure(height=label_fig_size, width=size, y_range=(-10, 10), x_range=fig.x_range),
-        'bottom': bokeh.plotting.figure(height=label_fig_size, width=size, y_range=(-10, 10), x_range=fig.x_range),
-    }
-
-    fig.min_border = 0
-    fig.outline_line_color = None
-    fig.axis.axis_line_color = None
-
-    for label_fig in label_figs.values():
-        label_fig.outline_line_color = None
-        label_fig.axis.visible = False
-        label_fig.grid.visible = False
-        label_fig.min_border = 0
-        label_fig.toolbar_location = None
-    
-    label_source = bokeh.models.ColumnDataSource(data={
-        'text': guide_order,
-        'smallest': [0]*len(guide_order),
-        'biggest': [label_fig_size]*len(guide_order),
-        'ascending': np.arange(len(guide_order)),
-        'descending': np.arange(len(guide_order))[::-1],
-        'alpha': [1]*len(guide_order),
-    }, name='label_source')
-
-    common_kwargs = {
-        'text': 'text',
-        'text_alpha': 'alpha',
-        'text_font_size': '{}%'.format(3000 // (upper_bound - lower_bound)),
-        'source': label_source, 
-        'text_baseline': 'middle',
-        'name': 'labels',
-    }
-    vertical_kwargs = {
-        'y': 'descending',
-        'x_units': 'screen',
-        'y_units': 'data',
-        **common_kwargs,
-    }
-    horizontal_kwargs = {
-        'x': 'ascending',
-        'x_units': 'data',
-        'y_units': 'screen',
-        **common_kwargs,
-    }
-
-    labels = {
-        'left': bokeh.models.LabelSet(x='biggest',
-                                      text_align='right',
-                                      x_offset=-5,
-                                      **vertical_kwargs,
-                                     ),
-        'right': bokeh.models.LabelSet(x='smallest',
-                                       text_align='left',
-                                       x_offset=5,
-                                       **vertical_kwargs,
-                                      ),
-        'top': bokeh.models.LabelSet(y='smallest',
-                                     text_align='left',
-                                     angle=np.pi / 2,
-                                     y_offset=5,
-                                     **horizontal_kwargs,
-                                    ),
-        'bottom': bokeh.models.LabelSet(y='biggest',
-                                        text_align='right',
-                                        angle=np.pi / 2,
-                                        y_offset=-5,
-                                        **horizontal_kwargs,
-                                       ),
-    }
-
-    for which in labels:
-        label_figs[which].add_layout(labels[which])
-    
-    fig.toolbar_location = None
-    toolbar = bokeh.models.ToolbarBox(toolbar=fig.toolbar)
-
-    rows = [
-        [bokeh.layouts.Spacer(width=label_fig_size), label_figs['top'], bokeh.layouts.Spacer(width=label_fig_size)],
-        [label_figs['left'], fig, label_figs['right'], toolbar, text_input],
-        [bokeh.layouts.Spacer(width=label_fig_size), label_figs['bottom']],
-    ]
-
-    layout = bokeh.layouts.column([bokeh.layouts.row(row) for row in rows])
-
-    bokeh.io.show(layout)
-    return guide_order, outcome_order
-
 def doubles_heatmap(pool, outcome, subtract_nt=False):
     if isinstance(outcome, int):
         outcomes = pool.most_frequent_outcomes(None)[:100]
@@ -1646,7 +1488,6 @@ def pooled_screen_categories(pool,
                              genes,
                              genes_to_plot=None,
                              group_genes=False,
-                             condition_to_sort_by=None,
                              manual_outcome_order=None,
                              top_n_outcomes=None,
                              draw_heatmaps=False,
@@ -1704,16 +1545,16 @@ def pooled_screen_categories(pool,
     fraction_differences = fraction_differences.loc[outcome_order]
     log2_fold_changes = log2_fold_changes.loc[outcome_order]
 
-    grid = repair_seq.visualize.outcome_diagrams.DiagramGrid(outcome_order,
-                                                      pool.target_info,
-                                                      title=title,
-                                                      window=(-10, 10),
-                                                      draw_all_sequence=False,
-                                                      label_aliases=label_aliases,
-                                                      inches_per_outcome=kwargs.get('inches_per_outcome', 0.3),
-                                                      outcome_ax_width=1,
-                                                      label_size=kwargs.get('label_size', 8),
-                                                     )
+    grid = outcome_diagrams.DiagramGrid(outcome_order,
+                                        pool.target_info,
+                                        title=title,
+                                        window=(-10, 10),
+                                        draw_all_sequence=False,
+                                        label_aliases=label_aliases,
+                                        inches_per_outcome=kwargs.get('inches_per_outcome', 0.3),
+                                        outcome_ax_width=1,
+                                        label_size=kwargs.get('label_size', 8),
+                                       )
 
     ax_kwargs = dict(
         width_multiple=5,
@@ -1722,13 +1563,13 @@ def pooled_screen_categories(pool,
     )
 
     if 'freq' in panels_to_show:
-        grid.add_ax('freq', title='percentage of reads\n(linear scale)', **ax_kwargs)
+        grid.add_ax('freq', title='Percentage of reads\n(linear scale)', **ax_kwargs)
     if 'log10_freq' in panels_to_show:
-        grid.add_ax('log10_freq', title='percentage of reads\n(log scale)', **ax_kwargs)
+        grid.add_ax('log10_freq', title='Percentage of reads\n(log scale)', **ax_kwargs)
     if 'diff' in panels_to_show:
-        grid.add_ax('diff', title=f'percentage change\nfrom non-targeting', **ax_kwargs)
+        grid.add_ax('diff', title=f'Percentage change\nfrom non-targeting', **ax_kwargs)
     if 'log2_fc' in panels_to_show:
-        grid.add_ax('log2_fc', title=f'log$_2$ fold-change\nfrom non-targeting', **ax_kwargs)
+        grid.add_ax('log2_fc', title=f'Log$_2$ fold change\nfrom non-targeting', **ax_kwargs)
 
     nt_guides = pool.variable_guide_library.non_targeting_guides
     nt_freqs = fractions[ALL_NON_TARGETING]
@@ -1746,9 +1587,11 @@ def pooled_screen_categories(pool,
         linewidth=1.5,
         line_alpha=0.6,
         marker_alpha=0.8,
+        clip_on=False,
         value_source=nt_freqs,
         interval_sources=interval_sources,
         zorder=6,
+        interval_alpha=0.3,
     )
 
     grid.plot_on_ax('freq', transform='percentage', **common_kwargs)
@@ -1766,7 +1609,7 @@ def pooled_screen_categories(pool,
         #grid.plot_on_ax('log2_fc', **common_kwargs)
         grid.axs_by_name['log2_fc'].axvline(0, color='black', linewidth=1.5)
 
-    freq_labels = []
+    freq_labels = [('sgRNAs:', 'black')]
 
     for i, gene in enumerate(genes):
         guide_order = pool.variable_guide_library.gene_guides(gene, only_best_promoter=True)
@@ -1787,7 +1630,7 @@ def pooled_screen_categories(pool,
         )
 
         if gene in genes_to_plot:
-            freq_labels.append((f'{gene} guides', color))
+            freq_labels.append((gene, color))
 
             if group_genes:
                 freqs = fractions[guide_order].mean(axis=1)
@@ -1798,7 +1641,6 @@ def pooled_screen_categories(pool,
                 }
                 grid.plot_on_ax('freq', freqs, interval_sources=interval_sources, transform='percentage', **common_kwargs)
                 grid.plot_on_ax('log10_freq', freqs, interval_sources=interval_sources, transform='log10', **common_kwargs)
-
 
                 l2fcs = log2_fold_changes[guide_order].mean(axis=1)
                 stds = log2_fold_changes[guide_order].std(axis=1)
@@ -1828,13 +1670,11 @@ def pooled_screen_categories(pool,
 
             grid.add_heatmap(vs, 'gene', gap_multiple=(1 if i == 0 else 0.5), color=color, vmin=vmin, vmax=vmax)
 
-    freq_labels.append(('non-targeting guides', manual_colors.get('negative_control', 'black')))
+    freq_labels.append(('non-targeting', manual_colors.get('negative_control', 'black')))
 
     if draw_heatmaps:
         grid.add_colorbar()
         
-    #grid.axs_by_name['freq'].legend(bbox_to_anchor=(0.5, 1), loc='lower center')
-
     grid.set_xlim('freq', freq_xlims)
     grid.axs_by_name['log10_freq'].set_xlim(*log10_freq_xlims)
 
@@ -1878,11 +1718,11 @@ def pooled_screen_categories(pool,
     elif ax_to_label == 'freq':
         for i, (label, color) in enumerate(freq_labels[::-1]):
             ax.annotate(label,
-                        xy=(1, 0),
+                        xy=(0.73, 0),
                         xycoords='axes fraction',
-                        xytext=(-3, 10 * i),
+                        xytext=(-3, 8.5 * i),
                         textcoords='offset points',
-                        ha='right',
+                        ha='center',
                         va='bottom',
                         color=color,
                         size=kwargs.get('guide_label_size', 8),
@@ -1893,9 +1733,9 @@ def pooled_screen_categories(pool,
             ax.annotate(label,
                         xy=(1, 0),
                         xycoords='axes fraction',
-                        xytext=(-3, -3 - 10 * i),
+                        xytext=(-3, -3 - 8 * i),
                         textcoords='offset points',
-                        ha='right',
+                        ha='center',
                         va='top',
                         color=color,
                         size=kwargs.get('guide_label_size', 8),

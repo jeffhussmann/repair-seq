@@ -12,6 +12,7 @@ import knock_knock.outcome
 import repair_seq.cluster
 import repair_seq.visualize
 import repair_seq.visualize.outcome_diagrams
+import repair_seq.visualize.heatmap
 
 memoized_property = hits.utilities.memoized_property
 
@@ -30,6 +31,7 @@ class Clustermap:
         options.setdefault('draw_guide_clusters', True)
         options.setdefault('draw_outcome_similarities', True)
         options.setdefault('draw_guide_similarities', True)
+        options.setdefault('draw_colorbars', True)
         options.setdefault('guide_library', None)
         options.setdefault('diagram_kwargs', {})
         options.setdefault('gene_text_size', 14)
@@ -54,6 +56,8 @@ class Clustermap:
         self.x1 = {}
         self.y0 = {}
         self.y1 = {}
+
+        self.ims = {}
 
         self.fig = fig
 
@@ -93,6 +97,9 @@ class Clustermap:
 
         if self.options['draw_outcome_clusters']:
             self.draw_outcome_clusters()
+
+        if self.options['draw_colorbars']:
+            self.draw_colorbars()
 
     def width(self, ax_name):
         return self.width_inches[ax_name] / self.fig_width_inches
@@ -142,10 +149,13 @@ class Clustermap:
         repair_seq.visualize.outcome_diagrams.plot(outcomes,
                                             self.clusterer.pn_to_target_info,
                                             ax=ax,
+                                            replacement_text_for_complex={
+                                                'genomic insertion, hg19, <=75 nts': 'capture of genomic sequence ≤75 nts',
+                                                'genomic insertion, hg19, >75 nts': 'capture of genomic sequence >75 nts',
+                                            },
                                             **self.options['diagram_kwargs'],
                                            )
 
-        ax.set_title('distance from cut site (nts)', size=10, pad=15)
         ax.set_position(self.rectangle('diagrams'))
 
     def draw_fold_changes(self):
@@ -164,6 +174,8 @@ class Clustermap:
                        vmin=-2, vmax=2,
                        interpolation='none',
                       )
+
+        self.ims['fold changes'] = im
 
         ax.axis('off')
 
@@ -207,6 +219,8 @@ class Clustermap:
                        interpolation='none',
                       )
 
+        self.ims['outcome similarities'] = im
+
         transform = matplotlib.transforms.Affine2D().rotate_deg(45) + ax.transData
         im.set_transform(transform)
 
@@ -242,6 +256,8 @@ class Clustermap:
                        vmax=1,
                        interpolation='none',
                       )
+
+        self.ims['guide similarities'] = im
 
         ax.set_xticks([])
         ax.set_yticks([])
@@ -545,6 +561,46 @@ class Clustermap:
                                 color=cluster_colors[cluster_id],
                                 size=self.options['gene_text_size'],
                                )
+
+    def draw_colorbars(self):
+
+        # Similary colorbar.
+
+        self.x0['similarity colorbar'] = self.x0['guide similarity']
+        self.y0['similarity colorbar'] = self.y0['guide similarity'] + 20 * self.height_per_guide
+
+        self.width_inches['similarity colorbar'] = self.inches_per_guide * 1.5
+        self.height_inches['similarity colorbar'] = self.inches_per_guide * 18
+
+        ax = self.add_axes('similarity colorbar')
+
+        cbar = plt.colorbar(self.ims['guide similarities'], cax=ax, orientation='vertical', ticks=[-1, 0, 1])
+
+        cbar.outline.set_alpha(0.1)
+
+        ax.annotate('correlation\nbetween\nrepair outcome\nredistribution\nprofiles',
+                    xy=(1, 0.5),
+                    xycoords='axes fraction',
+                    xytext=(18, 0),
+                    textcoords='offset points',
+                    ha='left',
+                    va='center',
+                    size=12,
+                   )
+
+        # Fold changes colorbar.
+
+        diagrams_position = self.get_position('diagrams')
+        self.x0['fold changes colorbar'] = diagrams_position.x0 + 10 * self.width_per_guide
+        self.y0['fold changes colorbar'] = diagrams_position.y1 + 10 * self.height_per_guide
+
+        self.width_inches['fold changes colorbar'] = self.inches_per_guide * 15
+        self.height_inches['fold changes colorbar'] = self.inches_per_guide * 1.5
+
+        ax = self.add_axes('fold changes colorbar')
+
+        repair_seq.visualize.heatmap.add_fold_change_colorbar(self.fig, self.ims['fold changes'], cbar_ax=ax, text_size=12)
+
 
 class SinglePoolClustermap(Clustermap):
     def __init__(self, pool, **kwargs):

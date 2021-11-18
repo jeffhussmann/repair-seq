@@ -26,8 +26,6 @@ class GuideLibrary:
             'non_targeting_guide_sets': self.full_dir / 'non_targeting_guide_sets.txt',
 
             'protospacers': self.full_dir / 'protospacers.fasta',
-            'protospacer_mappings_dir': self.full_dir / 'protospacers',
-            'protospacer_mappings_STAR_prefix': self.full_dir / 'protospacers' / 'mappings.',
             'perturbseq_STAR_index': self.full_dir / 'perturbseq_STAR_index',
 
             'cell_cycle_phase_fractions': self.full_dir / 'cell_cycle_phase_fractions.txt',
@@ -90,14 +88,6 @@ class GuideLibrary:
                 record = fasta.Record(name, seq)
                 fh.write(str(record))
 
-    def map_protospacers(self):
-        self.fns['protospacer_mappings_dir'].mkdir(exist_ok=True)
-
-        mapping_tools.map_STAR(self.fns['protospacers'],
-                               self.reference_STAR_index,
-                               self.fns['protospacer_mappings_STAR_prefix'],
-                               mode='guide_alignment',
-                              )
     @memoized_property
     def guides(self):
         guides = self.guides_df.index.values

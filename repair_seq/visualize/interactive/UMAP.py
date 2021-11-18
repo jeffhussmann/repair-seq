@@ -104,7 +104,7 @@ def plot(clusterer):
         fig.toolbar_location = None
         fig.toolbar.active_drag = None
         fig.outline_line_color = 'black'
-        fig.outline_line_alpha = 0.75
+        fig.outline_line_alpha = 0.5
 
         figs[name] = fig
 
@@ -251,7 +251,7 @@ def plot(clusterer):
             major_tick_line_color='black',
             ticker=bokeh.models.FixedTicker(ticks=[-2, -1, 0, 1, 2]),
             major_label_overrides={2: '≥2', -2: '≤-2'},
-            title=f'Log₂ fold change\nin outcome frequency\nfor {initial_guide}\nfrom non-targeting',
+            title=f'Log₂ fold change in outcome frequency\nfor the selected CRISPRi sgRNA',
             **common_colorbar_kwargs,
         ),
         'MH length': bokeh.models.ColorBar(
@@ -354,7 +354,7 @@ def plot(clusterer):
     tab_menu_height = 29 # Empirically determined
     gap_between = big_frame_size  + tab_menu_height - small_frame_size - gap_above - menu_height
     
-    final_layout = col(row(color_by, tabs, h_gap(20), col(v_gap(gap_above), color_menu, v_gap(gap_between), second_scatter)),
+    final_layout = col(row(col(v_gap(2), color_by), tabs, h_gap(20), col(v_gap(gap_above), color_menu, v_gap(gap_between), second_scatter)),
                        row(corrs_fig),
                       )
 

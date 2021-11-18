@@ -13,6 +13,7 @@ from matplotlib.lines import Line2D
 import hits.visualize
 import hits.utilities
 
+from repair_seq.pooled_screen import ALL_NON_TARGETING
 from . import outcome_diagrams
 
 def outcome(outcome,
@@ -47,6 +48,7 @@ def outcome(outcome,
             fig_size=10,
             marker_size=25,
             label_median_UMIs=True,
+            use_high_frequency_counts=False,
             **kwargs,
            ):
     if guide_aliases is None:
@@ -83,22 +85,31 @@ def outcome(outcome,
 
     quantity_to_axis = hits.utilities.reverse_dictionary(axis_to_quantity)
 
-    UMI_counts = pool.UMI_counts_for_all_fixed_guides(guide_status=guide_status)
-    max_cells = max(UMI_counts)
+    if use_high_frequency_counts:
+        UMI_counts = pool.UMI_counts_from_high_frequency_counts
 
-    granular_df = pool.outcome_counts(guide_status=guide_status).xs(fixed_guide, level=0, axis=1, drop_level=False)
-
-    if isinstance(outcome, pd.Series):
-        outcome_counts = outcome
-
-    elif isinstance(outcome, tuple):
-        nt_fraction = pool.non_targeting_fractions(guide_status=guide_status, fixed_guide=fixed_guide)[outcome]
-        outcome_counts = granular_df.loc[outcome]
+        if isinstance(outcome, tuple):
+            outcome_counts = pool.high_frequency_outcome_counts.loc[outcome]
+            nt_fraction = pool.high_frequency_outcome_fractions.loc[outcome, ALL_NON_TARGETING]
+        else:
+            outcome_counts = pool.high_frequency_outcome_counts.loc[outcome].sum()
+            nt_fraction = pool.high_frequency_outcome_fractions.loc[outcome, ALL_NON_TARGETING].sum()
 
     else:
-        nt_counts = pool.non_targeting_counts(guide_status, fixed_guide)
-        nt_fraction = nt_counts[outcome].sum() / nt_counts.sum()
-        outcome_counts = granular_df.loc[outcome].sum()
+        UMI_counts = pool.UMI_counts_for_all_fixed_guides(guide_status=guide_status)
+
+        granular_df = pool.outcome_counts(guide_status=guide_status).xs(fixed_guide, level=0, axis=1, drop_level=False)
+
+        if isinstance(outcome, tuple):
+            nt_fraction = pool.non_targeting_fractions(guide_status=guide_status, fixed_guide=fixed_guide)[outcome]
+            outcome_counts = granular_df.loc[outcome]
+
+        else:
+            nt_counts = pool.non_targeting_counts(guide_status, fixed_guide)
+            nt_fraction = nt_counts[outcome].sum() / nt_counts.sum()
+            outcome_counts = granular_df.loc[outcome].sum()
+
+    max_cells = max(UMI_counts)
 
     if p_val_method == 'binomial':
         boundary_cells = np.arange(0, 60000)
@@ -107,40 +118,6 @@ def outcome(outcome,
         boundary_lower = lower / boundary_cells
         boundary_upper = upper / boundary_cells
 
-    #with h5py.File(pool.fns['quantiles']) as f:
-    #    outcome_string = '_'.join(outcome)
-    #    num_samples = f.attrs['num_samples']
-
-    #    f_quantiles = f[outcome_string]['quantiles']
-    #    f_frequencies = f[outcome_string]['frequencies']
-
-    #    num_cells_list = f['num_cells'][:]
-    #    indices = num_cells_list.argsort()
-    #    num_cells_list = sorted(num_cells_list)
-    #    
-    #    geqs = {}
-    #    leqs = {}
-    #    quantiles = {}
-    #    for q_key, q in quantiles_module.quantiles_to_record(num_samples).items():
-    #        quantiles[q] = f_quantiles[q_key][:][indices]
-
-    #    medians = dict(zip(num_cells_list, f_quantiles['median'][:][indices]))
-
-    #    closest_sampled = np.zeros(40000, int)
-    #    for num_cells in num_cells_list:
-    #        closest_sampled[num_cells:] = num_cells
-
-    #    for num_cells in num_cells_list:
-    #        frequencies = f_frequencies[str(num_cells)][:]
-    #        full_frequencies = np.zeros(num_cells + 1, int)
-    #        full_frequencies[:len(frequencies)] = frequencies
-
-    #        leq = np.cumsum(full_frequencies)
-    #        geq = leq[-1] - leq + full_frequencies
-
-    #        leqs[num_cells] = leq
-    #        geqs[num_cells] = geq
-    
     data = {
         'num_cells': UMI_counts,
         'count': outcome_counts,
@@ -151,9 +128,14 @@ def outcome(outcome,
     df['fraction'] = df['count'] / df['num_cells']
     df['percentage'] = df['fraction'] * 100
 
-    df['fixed_gene'] = [pool.fixed_guide_library.guide_to_gene[f_g] for f_g, v_g in df.index.values]
-    df['variable_gene'] = [pool.variable_guide_library.guide_to_gene[v_g] for f_g, v_g in df.index.values]
-    df['variable_guide_best_promoter'] = [pool.variable_guide_library.guides_df.loc[v_g, 'best_promoter'] for f_g, v_g in df.index.values]
+    if use_high_frequency_counts:
+        df['fixed_gene'] = 'none'
+        df['variable_gene'] = [pool.variable_guide_library.guide_to_gene[v_g] for v_g in df.index.values]
+        df['variable_guide_best_promoter'] = [pool.variable_guide_library.guides_df.loc[v_g, 'best_promoter'] for v_g in df.index.values]
+    else:
+        df['fixed_gene'] = [pool.fixed_guide_library.guide_to_gene[f_g] for f_g, v_g in df.index.values]
+        df['variable_gene'] = [pool.variable_guide_library.guide_to_gene[v_g] for f_g, v_g in df.index.values]
+        df['variable_guide_best_promoter'] = [pool.variable_guide_library.guides_df.loc[v_g, 'best_promoter'] for f_g, v_g in df.index.values]
 
     if guide_subset is None:
         guide_subset = df.index
@@ -175,22 +157,6 @@ def outcome(outcome,
     else:
         df['alias'] = [convert_alias(g) for g in df.index]
 
-    #def direction_and_pval(actual_outcome_count, actual_num_cells):
-    #    num_cells = closest_sampled[actual_num_cells]
-    #    outcome_count = int(np.floor(actual_outcome_count * num_cells / actual_num_cells))
-
-    #    if num_cells > 0:
-    #        if outcome_count <= medians[num_cells]:
-    #            direction = 'down'
-    #            p = leqs[num_cells][outcome_count] / num_samples
-    #        else:
-    #            direction = 'up'
-    #            p = geqs[num_cells][outcome_count] / num_samples
-    #    else:
-    #        direction = None
-    #        p = 1
-
-    #    return direction, p
     if p_val_method == 'binomial':
         def direction_and_pval(actual_outcome_count, actual_num_cells):
             p = scipy.stats.binom.cdf(actual_outcome_count, actual_num_cells, nt_fraction)
@@ -209,9 +175,12 @@ def outcome(outcome,
 
     df['color'] = 'silver'
     df['label_color'] = 'black'
-    #df.loc[df.query('significant').index, 'color'] = 'C1'
-    df.loc[df.query('significant').index, 'color'] = 'silver'
-    nt_guide_pairs = [(fg, vg) for fg, vg in pool.guide_combinations if fg == fixed_guide and vg in pool.variable_guide_library.non_targeting_guides]
+
+    if use_high_frequency_counts:
+        nt_guide_pairs = pool.variable_guide_library.non_targeting_guides
+    else:
+        nt_guide_pairs = [(fg, vg) for fg, vg in pool.guide_combinations if fg == fixed_guide and vg in pool.variable_guide_library.non_targeting_guides]
+
     df.loc[nt_guide_pairs, 'color'] = nt_guide_color
 
     if gene_to_color is not None:
@@ -241,21 +210,21 @@ def outcome(outcome,
         fraction_key: (fraction_min, fraction_max),
     }
 
-    g = sns.JointGrid(x=axis_to_quantity['x'],
-                      y=axis_to_quantity['y'],
-                      data=df,
-                      height=fig_size,
-                      xlim=lims[axis_to_quantity['x']],
-                      ylim=lims[axis_to_quantity['y']],
-                      space=kwargs.get('JointGrid_space', 0.5),
-                      ratio=kwargs.get('JointGrid_ratio', 4),
-                     )
+    grid = sns.JointGrid(x=axis_to_quantity['x'],
+                         y=axis_to_quantity['y'],
+                         data=df,
+                         height=fig_size,
+                         xlim=lims[axis_to_quantity['x']],
+                         ylim=lims[axis_to_quantity['y']],
+                         space=kwargs.get('JointGrid_space', 0.5),
+                         ratio=kwargs.get('JointGrid_ratio', 4),
+                        )
 
     if draw_marginals:
 
         marg_axs_by_axis = {
-            'x': g.ax_marg_x,
-            'y': g.ax_marg_y,
+            'x': grid.ax_marg_x,
+            'y': grid.ax_marg_y,
         }
 
         marg_axs = {
@@ -264,30 +233,36 @@ def outcome(outcome,
         }
 
         if draw_marginals == 'kde':
-
-            vertical = {k: axis == 'y' for k, axis in quantity_to_axis.items()}
-
             fraction_kwargs = dict(
                 ax=marg_axs[fraction_key],
-                vertical=vertical[fraction_key],
                 legend=False,
                 linewidth=0,
                 shade=True,
             )
 
-            sns.kdeplot(df[fraction_key], color='grey', **fraction_kwargs)
+            values = df[fraction_key]
+            fraction_kwargs[quantity_to_axis[fraction_key]] = values
+
+            sns.kdeplot(color='grey', **fraction_kwargs)
+
             if draw_negative_control_marginal:
-                sns.kdeplot(df.query('variable_gene == "negative_control"')[fraction_key], color=nt_guide_color, alpha=0.5, **fraction_kwargs)
+                values = df.query('variable_gene == "negative_control"')[fraction_key]
+                fraction_kwargs[quantity_to_axis[fraction_key]] = values
+
+                sns.kdeplot(color=nt_guide_color, alpha=0.5, **fraction_kwargs)
 
             num_cells_kwargs = dict(
                 ax=marg_axs['num_cells'],
-                vertical=vertical['num_cells'],
                 legend=False,
                 linewidth=0,
                 shade=True,
+                color='grey',
             )
 
-            sns.kdeplot(df['num_cells'], color='grey', **num_cells_kwargs)
+            values = df['num_cells']
+            num_cells_kwargs[quantity_to_axis['num_cells']] = values
+
+            sns.kdeplot(**num_cells_kwargs)
 
         elif draw_marginals == 'hist':
             orientation = {k: 'horizontal' if axis == 'y' else 'vertical' for k, axis in quantity_to_axis.items()}
@@ -333,21 +308,6 @@ def outcome(outcome,
                                         **annotate_kwargs,
                                         )
 
-    #for q in [10**-p_cutoff, 1 - 10**-p_cutoff]:
-    #    ys = quantiles[q] / num_cells_list
-
-    #    g.ax_joint.plot(num_cells_list, ys, color='black', alpha=0.3)
-
-    #    x = min(1.01 * max_cells, max(num_cells_list))
-    #    g.ax_joint.annotate(str(q),
-    #                        xy=(x, ys[-1]),
-    #                        xytext=(-10, -5 if q < 0.5 else 5),
-    #                        textcoords='offset points',
-    #                        ha='right',
-    #                        va='top' if q < 0.5 else 'bottom',
-    #                        clip_on=False,
-    #                        size=6,
-    #                       )
     if draw_intervals:
         if p_val_method == 'binomial':
             # Draw grey lines at significance thresholds away from the bulk non-targeting fraction.
@@ -363,7 +323,7 @@ def outcome(outcome,
                 xs = vals[axis_to_quantity['x']]
                 ys = vals[axis_to_quantity['y']]
                 
-                g.ax_joint.plot(xs, ys, color='black', alpha=0.3)
+                grid.ax_joint.plot(xs, ys, color='black', alpha=0.3)
 
             # Annotate the lines with their significance level.
             x = int(np.floor(1.01 * max_cells))
@@ -390,7 +350,7 @@ def outcome(outcome,
                     va='bottom',
                 )
 
-            g.ax_joint.annotate(f'p = $10^{{-{p_cutoff}}}$\nsignificance\nthreshold',
+            grid.ax_joint.annotate(f'p = $10^{{-{p_cutoff}}}$\nsignificance\nthreshold',
                                 xy=(x, y),
                                 xycoords='data',
                                 textcoords='offset points',
@@ -413,7 +373,7 @@ def outcome(outcome,
                 #('{} p-value < 1e-{}'.format(p_val_method, p_cutoff), -25, 'C1'),
             ]
             for text, offset, color in floating_labels:
-                g.ax_joint.annotate(text,
+                grid.ax_joint.annotate(text,
                                     xy=(1, nt_fraction * fraction_scaling_factor),
                                     xycoords=('axes fraction', 'data'),
                                     xytext=(-5, offset),
@@ -449,7 +409,7 @@ def outcome(outcome,
                     va='bottom',
                 )
 
-            g.ax_joint.annotate(xy=(x, y),
+            grid.ax_joint.annotate(xy=(x, y),
                                 xycoords='data',
                                 textcoords='offset points',
                                 color=nt_guide_color,
@@ -486,7 +446,7 @@ def outcome(outcome,
             va='bottom',
         )
 
-    g.ax_joint.annotate(xy=(x, y),
+    grid.ax_joint.annotate(xy=(x, y),
                         xycoords='data',
                         textcoords='offset points',
                         color='black',
@@ -505,7 +465,7 @@ def outcome(outcome,
 
     for color_i, color in enumerate(color_order_to_plot):
         to_plot = df.query('color == @color')
-        g.ax_joint.scatter(x=axis_to_quantity['x'],
+        grid.ax_joint.scatter(x=axis_to_quantity['x'],
                         y=axis_to_quantity['y'],
                         data=to_plot,
                         s=marker_size,
@@ -521,7 +481,7 @@ def outcome(outcome,
         if only_best_promoter:
             query += ' and variable_guide_best_promoter'
 
-#        g.ax_joint.scatter(x=axis_to_quantity['x'],
+#        grid.ax_joint.scatter(x=axis_to_quantity['x'],
 #                        y=axis_to_quantity['y'],
 #                        data=df.query(query),
 #                        s=marker_size,
@@ -533,18 +493,18 @@ def outcome(outcome,
 #
         legend_elements = [Line2D([0], [0], marker='o', color=color, label=f'{gene} fixed guide', linestyle='none') for gene, color in gene_to_color.items()]
         legend_elements.append(Line2D([0], [0], marker='o', color='C0', label=f'non-targeting in both positions', linestyle='none'))
-        #g.ax_joint.legend(handles=legend_elements)
+        #grid.ax_joint.legend(handles=legend_elements)
 
     if quantity_to_axis[fraction_key] == 'y':
-        line_func = g.ax_joint.axhline
+        line_func = grid.ax_joint.axhline
     else:
-        line_func = g.ax_joint.axvline
+        line_func = grid.ax_joint.axvline
 
     line_func(nt_fraction * fraction_scaling_factor, color='black')
 
     axis_label_funcs = {
-        'x': g.ax_joint.set_xlabel,     
-        'y': g.ax_joint.set_ylabel,     
+        'x': grid.ax_joint.set_xlabel,     
+        'y': grid.ax_joint.set_ylabel,     
     }
 
     num_cells_label = 'number of UMIs per CRISPRi guide'
@@ -560,8 +520,8 @@ def outcome(outcome,
     axis_label_funcs[quantity_to_axis[fraction_key]](fraction_label, size=axis_label_size)
 
     if draw_diagram:
-        ax_marg_x_p = g.ax_marg_x.get_position()
-        ax_marg_y_p = g.ax_marg_y.get_position()
+        ax_marg_x_p = grid.ax_marg_x.get_position()
+        ax_marg_y_p = grid.ax_marg_y.get_position()
 
         diagram_width = ax_marg_x_p.width * 0.5 + ax_marg_y_p.width
         diagram_gap = ax_marg_x_p.height * 0.3
@@ -573,7 +533,7 @@ def outcome(outcome,
 
         diagram_height = ax_marg_x_p.height * 0.1 * len(outcomes_to_plot)
 
-        diagram_ax = g.fig.add_axes((ax_marg_y_p.x1 - diagram_width, ax_marg_x_p.y1 - diagram_gap - diagram_height, diagram_width, diagram_height))
+        diagram_ax = grid.fig.add_axes((ax_marg_y_p.x1 - diagram_width, ax_marg_x_p.y1 - diagram_gap - diagram_height, diagram_width, diagram_height))
         outcome_diagrams.plot(outcomes_to_plot,
                               pool.target_info,
                               window=(-50, 20),
@@ -599,7 +559,7 @@ def outcome(outcome,
         else:
             vector = ['upper right' if v == 'up' else 'lower right' for v in to_label['direction']]
 
-        hits.visualize.label_scatter_plot(g.ax_joint,
+        hits.visualize.label_scatter_plot(grid.ax_joint,
                                           axis_to_quantity['x'],
                                           axis_to_quantity['y'],
                                           'alias',
@@ -637,7 +597,7 @@ def outcome(outcome,
             label_kwargs = dict(color=None,
                          )
 
-        hits.visualize.label_scatter_plot(g.ax_joint,
+        hits.visualize.label_scatter_plot(grid.ax_joint,
                                           axis_to_quantity['x'],
                                           axis_to_quantity['y'],
                                           'alias',
@@ -654,14 +614,14 @@ def outcome(outcome,
                                           **label_kwargs,
                                          )
 
-    hits.visualize.add_commas_to_ticks(g.ax_joint, which=quantity_to_axis['num_cells'])
-    g.ax_joint.tick_params(labelsize=tick_label_size)
+    hits.visualize.add_commas_to_ticks(grid.ax_joint, which=quantity_to_axis['num_cells'])
+    grid.ax_joint.tick_params(labelsize=tick_label_size)
 
     if not draw_marginals:
-        g.fig.delaxes(g.ax_marg_x)
-        g.fig.delaxes(g.ax_marg_y)
+        grid.fig.delaxes(grid.ax_marg_x)
+        grid.fig.delaxes(grid.ax_marg_y)
 
-    return g, df
+    return grid, df
 
 def guide(pool, gene, number,
           ax=None,

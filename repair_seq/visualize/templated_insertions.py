@@ -74,7 +74,7 @@ def plot_length_distributions(pool,
         ax.set_xlim(0, x_max)
 
     axs['frequency'].set_ylabel('Percentage of\nrepair outcomes', size=7)
-    axs['log2_fc'].set_ylabel('Log$_2$ fold-change\nfrom non-targeting', size=7)
+    axs['log2_fc'].set_ylabel('Log$_2$ fold change\nfrom non-targeting', size=7)
     axs['log2_fc'].set_yticks(np.arange(-4, 6, 2))
 
     for ax in axs.values():

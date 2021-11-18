@@ -2,7 +2,6 @@ from collections import Counter, defaultdict
 from itertools import product
 
 import numpy as np
-import pandas as pd
 import pysam
 
 from hits import interval, sam, utilities, sw, fastq
