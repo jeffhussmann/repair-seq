@@ -1,8 +1,4 @@
-models = cb_obj.origin.document._all_models_by_name._dict
-
 column_names = {column_names}
-
-filtered_data = models['filtered_source'].data
 
 # learned from http://stackoverflow.com/questions/14964035/how-to-export-javascript-array-info-to-csv-on-client-side
 csv_content = "data:text/csv;charset=utf-8,"
@@ -10,10 +6,10 @@ csv_content = "data:text/csv;charset=utf-8,"
 lines = [column_names.join('\t')]
 
 first_name = column_names[0]
-length = filtered_data[first_name].length
+length = filtered_source.data[first_name].length
 
 for i in [0...length]
-    line = (filtered_data[name][i] for name in column_names).join('\t')
+    line = (filtered_source.data[name][i] for name in column_names).join('\t')
     lines.push line
 
 csv_content += lines.join('\n')

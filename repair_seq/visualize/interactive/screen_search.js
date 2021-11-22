@@ -1,7 +1,5 @@
-var all_matches, column, column_names, i, j, len, matches, models, query, t, targets,
+var all_matches, column, column_names, i, j, len, matches, query, t, targets,
   indexOf = [].indexOf;
-
-models = cb_obj.document._all_models_by_name._dict;
 
 column_names = ['gene'];
 
@@ -12,7 +10,7 @@ all_matches = [];
 if (query !== '') {
   for (j = 0, len = column_names.length; j < len; j++) {
     column = column_names[j];
-    targets = models['scatter_source'].data[column];
+    targets = scatter_source.data[column];
     matches = (function() {
       var k, len1, results;
       results = [];
@@ -28,6 +26,6 @@ if (query !== '') {
   }
 }
 
-models['scatter_source'].selected.indices = all_matches;
+scatter_source.selected.indices = all_matches;
 
-models['scatter_source'].change.emit();
+scatter_source.change.emit();

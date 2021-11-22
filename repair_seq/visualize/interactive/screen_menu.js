@@ -1,14 +1,10 @@
-var dataset_name, full_name, i, key, label_data, len, max, models, nt_fraction_values, outcome_name, ref, scatter_data;
+var dataset_name, full_name, i, key, len, max, nt_fraction_values, outcome_name, ref;
 
-models = cb_obj.document._all_models_by_name._dict;
+dataset_name = dataset_menu.value[0];
 
-scatter_data = models['scatter_source'].data;
+outcome_name = outcome_menu.value[0];
 
-label_data = models['filtered_source'].data;
-
-dataset_name = models['dataset_menu'].value[0];
-
-outcome_name = models['outcome_menu'].value[0];
+console.log('here');
 
 nt_fraction_values = {nt_fractions};
 
@@ -19,32 +15,32 @@ ref = ['frequency', 'percentage', 'ys', 'log2_fold_change', 'total_UMIs', 'gene_
 for (i = 0, len = ref.length; i < len; i++) {
   key = ref[i];
   full_name = dataset_name + '_' + outcome_name + '_' + key;
-  scatter_data[key] = scatter_data[full_name];
-  label_data[key] = label_data[full_name];
+  scatter_source.data[key] = scatter_source.data[full_name];
+  filtered_source.data[key] = filtered_source.data[full_name];
 }
 
 full_name = dataset_name + '_' + outcome_name;
 
-models['nt_fraction'].location = nt_fraction_values[full_name];
+nt_fraction.location = nt_fraction_values[full_name];
 
-models['title'].text = 'Screen condition: ' + dataset_name;
+title.text = 'Screen condition: ' + dataset_name;
 
-models['subtitle'].text = 'Outcome category: ' + outcome_name;
+subtitle.text = 'Outcome category: ' + outcome_name;
 
-max = Math.max(...scatter_data['percentage']);
+max = Math.max(...scatter_source.data['percentage']);
 
-models['y_range'].start = 0;
+y_range.start = 0;
 
-models['y_range'].end = max * 1.2;
+y_range.end = max * 1.2;
 
-models['y_range'].change.emit();
+y_range.change.emit();
 
-models['title'].change.emit();
+title.change.emit();
 
-models['subtitle'].change.emit();
+subtitle.change.emit();
 
-models['nt_fraction'].change.emit();
+nt_fraction.change.emit();
 
-models['scatter_source'].change.emit();
+scatter_source.change.emit();
 
-models['filtered_source'].change.emit();
+filtered_source.change.emit();

@@ -65,8 +65,7 @@ def scatter(data_source,
     else:
         initial_indices = np.array(guides_df.loc[initial_guides]['x'])
 
-    scatter_source.selected = bokeh.models.Selection(indices=initial_indices)
-    scatter_source.selected.js_on_change('indices', build_js_callback(__file__, 'screen_scatter_selection'))
+    scatter_source.selected.indices = initial_indices
 
     filtered_data = {k: [scatter_source.data[k][i] for i in initial_indices] for k in scatter_source.data}
     filtered_source = bokeh.models.ColumnDataSource(data=filtered_data, name='filtered_source')
@@ -91,11 +90,17 @@ def scatter(data_source,
     fig = bokeh.plotting.figure(plot_width=plot_width, plot_height=plot_height,
                                 tools=tools, active_drag='box_select', active_scroll='wheel_zoom',
                                )
+
+    fig.toolbar.logo = None
     fig.x_range = bokeh.models.Range1d(x_min, x_max, name='x_range')
     fig.y_range = bokeh.models.Range1d(y_min, y_max, name='y_range')
 
-    fig.x_range.callback = build_js_callback(__file__, 'screen_range', format_kwargs={'lower_bound': x_min, 'upper_bound': x_max})
-    fig.y_range.callback = build_js_callback(__file__, 'screen_range', format_kwargs={'lower_bound': 0, 'upper_bound': 100})
+    x_range_callback = build_js_callback(__file__, 'screen_range', format_kwargs={'lower_bound': x_min, 'upper_bound': x_max})
+    y_range_callback = build_js_callback(__file__, 'screen_range', format_kwargs={'lower_bound': 0, 'upper_bound': 100})
+
+    for prop in ['start', 'end']:
+        fig.x_range.js_on_change(prop, x_range_callback)
+        fig.y_range.js_on_change(prop, y_range_callback)
 
     circles = fig.circle(x='x',
                          y='percentage',
@@ -118,12 +123,18 @@ def scatter(data_source,
 
     fig.add_tools(hover)
 
-    fig.multi_line(xs='xs', ys='ys',
-                   source=scatter_source,
-                   color='color', selection_color='color', nonselection_color='color',
-                   alpha=0.4,
-                   name='confidence_intervals',
-                )
+    confidence_intervals = fig.multi_line(xs='xs', ys='ys',
+                                          source=scatter_source,
+                                          color='color',
+                                          selection_color='color',
+                                          nonselection_color='color',
+                                          alpha=0.4,
+                                         )
+
+    interval_button = bokeh.models.widgets.Toggle(label='Show confidence intervals', active=True)
+    # Slightly counterintuitive - directionality of link matters here.
+    # Add the link to the emitter of the signal, with the listener as the arg.
+    interval_button.js_link('active', confidence_intervals, 'visible')
 
     labels = bokeh.models.LabelSet(x='x', y='percentage', text='guide',
                                    source=filtered_source,
@@ -141,24 +152,16 @@ def scatter(data_source,
     dataset_menu = bokeh.models.widgets.MultiSelect(options=pool_names, value=[initial_dataset], name='dataset_menu', title='Screen condition:', size=len(pool_names) + 2, width=400)
     outcome_menu = bokeh.models.widgets.MultiSelect(options=outcome_names, value=[initial_outcome], name='outcome_menu', title='Outcome category:', size=len(outcome_names) + 2, width=400)
 
-    menu_js = build_js_callback(__file__, 'screen_menu', format_kwargs={'nt_fractions': str(nt_fractions)})
-    for menu in [dataset_menu, outcome_menu]:
-        menu.js_on_change('value', menu_js)
-
-    fig.add_layout(bokeh.models.Span(location=nt_fractions[f'{initial_dataset}_{initial_outcome}'], dimension='width', line_alpha=0.5, name='nt_fraction'))
-
-    interval_button = bokeh.models.widgets.Toggle(label='Show confidence intervals', active=True)
-    interval_button.js_on_change('active', build_js_callback(__file__, 'screen_errorbars_button'))
+    nt_fraction = bokeh.models.Span(location=nt_fractions[f'{initial_dataset}_{initial_outcome}'], dimension='width', line_alpha=0.5)
+    fig.add_layout(nt_fraction)
 
     cutoff_slider = bokeh.models.Slider(start=-10, end=-2, value=-5, step=1, name='cutoff_slider', title='log10 p-value significance threshold')
 
-    down_button = bokeh.models.widgets.Button(label='Filter to genes that significantly decrease', name='filter_down')
-    up_button = bokeh.models.widgets.Button(label='Filter to genes that significantly increase', name='filter_up')
-    for button in [down_button, up_button]:
-        button.js_on_click(build_js_callback(__file__, 'screen_significance_filter'))
+    filter_buttons = {}
+    filter_buttons['down'] = bokeh.models.widgets.Button(label='Filter to genes that significantly decrease')
+    filter_buttons['up'] = bokeh.models.widgets.Button(label='Filter to genes that significantly increase')
 
     text_input = bokeh.models.TextInput(title='Search sgRNAs:', name='search')
-    text_input.js_on_change('value', build_js_callback(__file__, 'screen_search'))
 
     fig.outline_line_color = 'black'
     first_letters = [g[0] for g in guides_df.index]
@@ -186,7 +189,7 @@ def scatter(data_source,
         elif col_name == 'frequency':
             formatter = bokeh.models.widgets.NumberFormatter(format='0.00%')
         else:
-            formatter = None
+            formatter = bokeh.models.widgets.StringFormatter()
 
         column = bokeh.models.widgets.TableColumn(field=col_name,
                                                   title=col_label,
@@ -196,7 +199,6 @@ def scatter(data_source,
         columns.append(column)
         
     save_button = bokeh.models.widgets.Button(label='Save table', name='save_button')
-    save_button.js_on_click(build_js_callback(__file__, 'scatter_save_button', format_kwargs={'column_names': table_col_names}))
 
     table = bokeh.models.widgets.DataTable(source=filtered_source,
                                            columns=columns,
@@ -214,17 +216,14 @@ def scatter(data_source,
         axis.axis_label_text_font_size = '14pt'
         axis.axis_label_text_font_style = 'bold'
 
-    #fig.yaxis.formatter = bokeh.models.NumeralTickFormatter(format=' 0.00%')
     fig.yaxis.formatter = bokeh.models.PrintfTickFormatter(format="%6.2f%%")
     fig.yaxis.major_label_text_font = 'courier'
     fig.yaxis.major_label_text_font_style = 'bold'
         
-    #fig.title.name = 'title'
-    #fig.title.text = f'{initial_dataset}\ntest      {initial_outcome}'
-
-    #fig.title.text_font_size = '16pt'
-    fig.add_layout(bokeh.models.Title(text=f'Outcome category: {initial_outcome}', text_font_size='14pt', name='subtitle'), 'above')
-    fig.add_layout(bokeh.models.Title(text=f'Screen condition: {initial_dataset}', text_font_size='14pt', name='title'), 'above')
+    title = bokeh.models.Title(text=f'Outcome category: {initial_outcome}', text_font_size='14pt', name='subtitle')
+    subtitle = bokeh.models.Title(text=f'Screen condition: {initial_dataset}', text_font_size='14pt', name='title')
+    fig.add_layout(title, 'above')
+    fig.add_layout(subtitle, 'above')
 
     top_widgets = bokeh.layouts.column([bokeh.layouts.Spacer(height=70),
                                         dataset_menu,
@@ -234,15 +233,67 @@ def scatter(data_source,
 
     bottom_widgets = bokeh.layouts.column([interval_button,
                                            cutoff_slider,
-                                           up_button,
-                                           down_button,
+                                           filter_buttons['up'],
+                                           filter_buttons['down'],
                                            save_button,
                                           ])
 
     first_row = bokeh.layouts.row([fig, top_widgets])
     second_row = bokeh.layouts.row([bokeh.layouts.Spacer(width=90), table, bottom_widgets])
     final_layout = bokeh.layouts.column([first_row, bokeh.layouts.Spacer(height=50), second_row])
+
+    menu_js = build_js_callback(__file__, 'screen_menu',
+                                args=dict(
+                                    dataset_menu=dataset_menu,
+                                    outcome_menu=outcome_menu,
+                                    scatter_source=scatter_source,
+                                    filtered_source=filtered_source,
+                                    y_range=fig.y_range,
+                                    title=title,
+                                    subtitle=subtitle,
+                                    nt_fraction=nt_fraction,
+                                ),
+                                format_kwargs={'nt_fractions': str(nt_fractions)},
+                               )
+    for menu in [dataset_menu, outcome_menu]:
+        menu.js_on_change('value', menu_js)
+
+    selection_callback = build_js_callback(__file__, 'screen_scatter_selection',
+                                           args=dict(
+                                               scatter_source=scatter_source,
+                                               filtered_source=filtered_source,
+                                           ),
+                                          )
+    scatter_source.selected.js_on_change('indices', selection_callback) 
+
+    search_callback = build_js_callback(__file__, 'screen_search',
+                                        args=dict(
+                                            scatter_source=scatter_source,
+                                        ),
+                                       )
     
+    text_input.js_on_change('value', search_callback)
+
+    for direction in filter_buttons:
+        callback = build_js_callback(__file__, 'screen_significance_filter',
+                                     args=dict(
+                                         scatter_source=scatter_source,
+                                         cutoff_slider=cutoff_slider,
+                                     ),
+                                     format_kwargs=dict(
+                                         direction=direction,
+                                     ),
+                                    )
+        filter_buttons[direction].js_on_click(callback)
+
+    save_callback = build_js_callback(__file__, 'scatter_save_button',
+                                      args=dict(
+                                          filtered_source=filtered_source,
+                                      ),
+                                      format_kwargs={'column_names': table_col_names},
+                                     )
+    save_button.js_on_click(save_callback)
+
     if save_as == 'layout':
         return final_layout
     elif save_as is not None:

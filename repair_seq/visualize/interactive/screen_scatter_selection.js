@@ -1,16 +1,11 @@
-var filtered_data, full_data, i, indices, key, models, values;
-
-models = cb_obj.document._all_models_by_name._dict;
+var i, indices, key, ref, values;
 
 indices = cb_obj.indices;
 
-full_data = models['scatter_source'].data;
-
-filtered_data = models['filtered_source'].data;
-
-for (key in full_data) {
-  values = full_data[key];
-  filtered_data[key] = (function() {
+ref = scatter_source.data;
+for (key in ref) {
+  values = ref[key];
+  filtered_source.data[key] = (function() {
     var j, len, results;
     results = [];
     for (j = 0, len = indices.length; j < len; j++) {
@@ -21,4 +16,4 @@ for (key in full_data) {
   })();
 }
 
-models['filtered_source'].change.emit();
+filtered_source.change.emit();
