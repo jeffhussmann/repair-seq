@@ -128,8 +128,8 @@ def get_outcome_statistics(pool, outcomes,
             n = len(sorted_ps)
             for k in range(1, max_k + 1):
                 ps[direction, k].append(p_k_of_n_less(n, k, sorted_ps))
-            
-    uncorrected_ps_df = pd.DataFrame(ps, index=gene_order).min(axis=1, level=0)
+
+    uncorrected_ps_df = pd.DataFrame(ps, index=gene_order).groupby(axis=1, level=0).min()
 
     guides_per_gene = guides_df.groupby('gene').size()
     bonferonni_factor = np.minimum(max_k, guides_per_gene)
@@ -154,7 +154,10 @@ def get_outcome_statistics(pool, outcomes,
 
     grouped_fcs = guides_df.groupby('gene')['log2_fold_change']
 
-    gene_log2_fold_changes = pd.DataFrame({'up': grouped_fcs.nlargest(2).mean(level=0), 'down': grouped_fcs.nsmallest(2).mean(level=0)})
+    gene_log2_fold_changes = pd.DataFrame({
+        'up': grouped_fcs.nlargest(2).groupby('gene').mean(),
+        'down': grouped_fcs.nsmallest(2).groupby('gene').mean(),
+    })
 
     gene_log2_fold_changes['relevant'] = gene_log2_fold_changes['down']
     gene_log2_fold_changes.loc[up_genes, 'relevant'] = gene_log2_fold_changes.loc[up_genes, 'up']

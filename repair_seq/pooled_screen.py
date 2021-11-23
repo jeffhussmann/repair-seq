@@ -1534,12 +1534,15 @@ class PooledScreen:
         ''' Necessary to avoid a depenency cycle in outcome_counts and UMI_counts '''
 
         if guide_status == 'all':
-            outcome_counts = self.outcome_counts_df(collapsed=True, snapshot_name=snapshot_name).sum(level=[1, 2, 3])
-        elif guide_status == 'perfect':
-            outcome_counts = self.outcome_counts_df(collapsed=True, snapshot_name=snapshot_name).loc[True]
+            outcome_counts = self.outcome_counts_df(collapsed=True, snapshot_name=snapshot_name).groupby(level=[1, 2, 3]).sum()
         else:
             perfect_guide = guide_status == 'perfect'
-            outcome_counts = self.outcome_counts_df(collapsed=True, snapshot_name=snapshot_name).loc[perfect_guide]
+            all_counts = self.outcome_counts_df(collapsed=True, snapshot_name=snapshot_name)
+            # 21.11.22: sometime between pandas 1.1.2 and 1.3.4, trying to use a boolean value
+            # in a .loc for a multiindex fails, apparently because the whole index is checked for
+            # a boolean dtype rather than just the relevant level. Unclear if this is intended
+            # behavior or not. Must use .xs with drop_level=True instead.
+            outcome_counts = all_counts.xs(perfect_guide)
 
         return outcome_counts
 

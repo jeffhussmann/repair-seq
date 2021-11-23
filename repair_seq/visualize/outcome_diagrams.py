@@ -938,6 +938,7 @@ class DiagramGrid:
                    marker_alpha=1,
                    line_alpha=1,
                    label='',
+                   marker='.',
                    **plot_kwargs,
                   ):
         # To simplify logic of excluding panels, do nothing if ax_name is not an existing ax.
@@ -966,8 +967,8 @@ class DiagramGrid:
 
         xs = [value_source.get(outcome, np.nan) for outcome in self.outcomes]
 
-        ax.plot(xs, ys, '.', alpha=marker_alpha, label=label, **plot_kwargs)
-        ax.plot(xs, ys, '-', alpha=line_alpha, **plot_kwargs)
+        ax.plot(xs, ys, marker=marker, linestyle='', alpha=marker_alpha, label=label, **plot_kwargs)
+        ax.plot(xs, ys, marker=None, linestyle='-', alpha=line_alpha, **plot_kwargs)
 
         if interval_sources is not None:
             interval_xs = {

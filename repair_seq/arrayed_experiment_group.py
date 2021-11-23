@@ -425,7 +425,7 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
     @memoized_property
     def outcome_fraction_condition_means(self):
-        return self.outcome_fractions.mean(axis='columns', level=self.condition_keys)
+        return self.outcome_fractions.groupby(axis='columns', level=self.condition_keys).mean()
 
     @memoized_property
     def outcome_fraction_baseline_means(self):
@@ -433,7 +433,7 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
     @memoized_property
     def outcome_fraction_condition_stds(self):
-        return self.outcome_fractions.std(axis='columns', level=self.condition_keys)
+        return self.outcome_fractions.groupby(axis='columns', level=self.condition_keys).std()
 
     @memoized_property
     def outcomes_by_baseline_frequency(self):
@@ -445,11 +445,11 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
     @memoized_property
     def outcome_fraction_difference_condition_means(self):
-        return self.outcome_fraction_differences.mean(axis='columns', level=self.condition_keys)
+        return self.outcome_fraction_differences.groupby(axis='columns', level=self.condition_keys).mean()
 
     @memoized_property
     def outcome_fraction_difference_condition_stds(self):
-        return self.outcome_fraction_differences.std(axis='columns', level=self.condition_keys)
+        return self.outcome_fraction_differences.groupby(axis='columns', level=self.condition_keys).std()
 
     @memoized_property
     def log2_fold_changes(self):
@@ -465,15 +465,15 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
     @memoized_property
     def log2_fold_change_condition_means(self):
-        return self.log2_fold_changes.mean(axis='columns', level=self.condition_keys)
+        return self.log2_fold_changes.groupby(axis='columns', level=self.condition_keys).mean()
 
     @memoized_property
     def log2_fold_change_condition_stds(self):
-        return self.log2_fold_changes.std(axis='columns', level=self.condition_keys)
+        return self.log2_fold_changes.groupby(axis='columns', level=self.condition_keys).std()
 
     @memoized_property
     def category_fractions(self):
-        fs = self.outcome_fractions.sum(level='category')
+        fs = self.outcome_fractions.groupby(level='category').sum()
 
         if self.category_groupings is not None:
             only_relevant_cats = pd.Index.difference(fs.index, self.category_groupings['not_relevant'])
@@ -500,7 +500,7 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
     @memoized_property
     def category_fraction_condition_means(self):
-        return self.category_fractions.mean(axis='columns', level=self.condition_keys)
+        return self.category_fractions.groupby(axis='columns', level=self.condition_keys).mean()
 
     @memoized_property
     def category_fraction_baseline_means(self):
@@ -508,7 +508,7 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
     @memoized_property
     def category_fraction_condition_stds(self):
-        return self.category_fractions.std(axis='columns', level=self.condition_keys)
+        return self.category_fractions.groupby(axis='columns', level=self.condition_keys).std()
 
     @memoized_property
     def categories_by_baseline_frequency(self):
@@ -520,11 +520,11 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
     @memoized_property
     def category_fraction_difference_condition_means(self):
-        return self.category_fraction_differences.mean(axis='columns', level=self.condition_keys)
+        return self.category_fraction_differences.groupby(axis='columns', level=self.condition_keys).mean()
 
     @memoized_property
     def category_fraction_difference_condition_stds(self):
-        return self.category_fraction_differences.std(axis='columns', level=self.condition_keys)
+        return self.category_fraction_differences.groupby(axis='columns', level=self.condition_keys).std()
 
     @memoized_property
     def category_log2_fold_changes(self):
@@ -559,11 +559,11 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
     @memoized_property
     def subcategory_fractions(self):
-        return self.outcome_fractions.sum(level=['category', 'subcategory'])
+        return self.outcome_fractions.groupby(level=['category', 'subcategory']).sum()
 
     @memoized_property
     def subcategory_fraction_condition_means(self):
-        return self.subcategory_fractions.mean(axis='columns', level=self.condition_keys)
+        return self.subcategory_fractions.groupby(axis='columns', level=self.condition_keys).mean()
 
     @memoized_property
     def subcategory_fraction_baseline_means(self):
@@ -571,7 +571,7 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
     @memoized_property
     def subcategory_fraction_condition_stds(self):
-        return self.subcategory_fractions.std(axis='columns', level=self.condition_keys)
+        return self.subcategory_fractions.groupby(axis='columns', level=self.condition_keys).std()
 
     @memoized_property
     def subcategories_by_baseline_frequency(self):
@@ -583,11 +583,11 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
     @memoized_property
     def subcategory_fraction_difference_condition_means(self):
-        return self.subcategory_fraction_differences.mean(axis='columns', level=self.condition_keys)
+        return self.subcategory_fraction_differences.groupby(axis='columns', level=self.condition_keys).mean()
 
     @memoized_property
     def subcategory_fraction_difference_condition_stds(self):
-        return self.subcategory_fraction_differences.std(axis='columns', level=self.condition_keys)
+        return self.subcategory_fraction_differences.groupby(axis='columns', level=self.condition_keys).std()
 
     @memoized_property
     def subcategory_log2_fold_changes(self):

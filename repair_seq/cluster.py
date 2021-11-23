@@ -230,6 +230,8 @@ class Clusterer:
         embedding['categories_aliased'] = categories_aliased
         embedding['category_colors'] = colors
 
+        embedding['sgRNA'] = embedding.index.get_level_values('pool_name').map(self.pn_to_sgRNA).values
+
         return embedding
 
     def plot_guide_embedding(self,
@@ -993,8 +995,7 @@ class MultiplePoolClusterer(Clusterer):
         super().__init__(**options)
 
     def sgRNA_colors(self):
-        sgRNAs = self.outcome_embedding.index.get_level_values('pool_name').map(self.pn_to_sgRNA)
-        outcome_colors, sgRNA_to_color = hits.visualize.assign_categorical_colors(sgRNAs)
+        outcome_colors, sgRNA_to_color = hits.visualize.assign_categorical_colors(self.outcome_embedding['sgRNA'])
         return outcome_colors, sgRNA_to_color
 
     @memoized_property
