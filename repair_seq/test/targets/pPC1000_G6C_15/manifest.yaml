@@ -5,14 +5,13 @@ sources:
   - pegrna_g6c_15
 
 features_to_show:
+  - [pPC1000, sgRNA]
   - [pPC1000, HA_RT_G6_15]
   - [pPC1000, HA_PBS]
   - [pPC1000, sgRNA_-50]
   - [pPC1000, sgRNA_+50]
   - [pPC1000, gDNA_reverse_primer]
   - [pPC1000, gDNA_forward_primer]
-  - [pPC1000, reverse_primer]
-  - [pPC1000, forward_primer]
   - [pPC1000, protospacer]
   - [pPC1000, sgRNA constant region E+F]
   - [pPC1000, G6C]

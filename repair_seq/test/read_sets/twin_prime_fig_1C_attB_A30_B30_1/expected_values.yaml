@@ -1,0 +1,23 @@
+experiment_type: twin_prime
+target_info: HEK3_attB_A30_B30
+expected_values:
+  017171720:0000000006:
+    category: wild type
+    subcategory: mismatches
+    note: has an N
+  017171720:0000000003:
+    category: intended edit
+    subcategory: replacement
+    note: no UMI at the beginning of the read
+  017171720:0000000001:
+    category: intended edit
+    subcategory: replacement
+    note: has UMI at the beginning of the read
+  017171720:0000000162:
+    category: unintended annealing of RT'ed sequence
+    subcategory: left pegRNA
+    note: covers whole read, rejoins at right nick
+  017171720:0000000072:
+    category: unintended annealing of RT'ed sequence
+    subcategory: right pegRNA
+    note: covers whole read, rejoins roughly halfway between nicks

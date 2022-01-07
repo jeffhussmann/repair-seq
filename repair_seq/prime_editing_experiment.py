@@ -8,7 +8,7 @@ import numpy as np
 import hits.visualize
 from hits import fastq, utilities, adapters
 from knock_knock import experiment, svg
-from repair_seq import prime_editing_layout, pooled_layout
+from repair_seq import prime_editing_layout, twin_prime_layout, pooled_layout
 
 from hits.utilities import memoized_property
 
@@ -89,15 +89,24 @@ class PrimeEditingExperiment(experiment.Experiment):
         return max(outcome.inferred_amplicon_length for outcome in outcomes)
     
     def make_nonredundant_sequence_fastq(self):
-        pass
-               
-    def trim_reads(self):
-        ''' Trim a random length barcode from the beginning by searching for the expected starting sequence.
-        '''
+        # This is overloaded by ArrayedExperiment.
+        fn = self.fns_by_read_type['fastq']['nonredundant']
+        with gzip.open(fn, 'wt', compresslevel=1) as fh:
+            for read in self.reads_by_type(self.preprocessed_read_type):
+                fh.write(str(read))
+
+    @property
+    def reads(self):
         fastq_fn = self.data_dir / self.description['fastq_fn']
 
         # Standardizing names is important for sorting.
         reads = fastq.reads(fastq_fn, standardize_names=True)
+
+        return reads
+
+    def trim_reads(self):
+        ''' Trim a random length barcode from the beginning by searching for the expected starting sequence.
+        '''
 
         ti = self.target_info
 
@@ -112,7 +121,7 @@ class PrimeEditingExperiment(experiment.Experiment):
 
         trimmed_fn = self.fns_by_read_type['fastq']['trimmed']
         with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
-            for read in self.progress(reads, desc='Trimming reads'):
+            for read in self.progress(self.reads, desc='Trimming reads'):
                 try:
                     start = read.seq.index(prefix, 0, 20)
                 except ValueError:
@@ -173,19 +182,19 @@ class PrimeEditingExperiment(experiment.Experiment):
 
         return qname_to_inferred_length
 
-    def generate_length_range_figures(self, outcome=None, num_examples=1):
+    def generate_length_range_figures(self, specific_outcome=None, num_examples=1):
         by_length = defaultdict(lambda: utilities.ReservoirSampler(num_examples))
 
         #al_groups = self.alignment_groups(outcome=outcome, read_type='trimmed')
-        al_groups = self.alignment_groups(outcome=outcome)
+        al_groups = self.alignment_groups(outcome=specific_outcome)
         for name, als in al_groups:
             length = self.qname_to_inferred_length[name]
             by_length[length].add((name, als))
 
-        if outcome is None:
+        if specific_outcome is None:
             fns = self.fns
         else:
-            fns = self.outcome_fns(outcome)
+            fns = self.outcome_fns(specific_outcome)
 
         fig_dir = fns['length_ranges_dir']
             
@@ -193,12 +202,12 @@ class PrimeEditingExperiment(experiment.Experiment):
             shutil.rmtree(str(fig_dir))
         fig_dir.mkdir()
 
-        if outcome is not None:
-            description = ': '.join(outcome)
+        if specific_outcome is not None:
+            description = ': '.join(specific_outcome)
         else:
             description = 'Generating length-specific diagrams'
 
-        items = self.progress(by_length.items(), desc=description, total=len(by_length))
+        items = self.progress(by_length.items(), desc=description, total=len(by_length), leave=False)
 
         for length, sampler in items:
             diagrams = self.alignment_groups_to_diagrams(sampler.sample,
@@ -214,17 +223,14 @@ class PrimeEditingExperiment(experiment.Experiment):
         
         lists = defaultdict(list)
 
-        with open(self.fns['outcome_list']) as outcomes_fh:
-            for line in outcomes_fh:
-                outcome = self.final_Outcome.from_line(line)
-            
-                if outcome.category == 'unintended donor integration':
-                    insertion_outcome = prime_editing_layout.LongTemplatedInsertionOutcome.from_string(outcome.details)
-                    
-                    for field in fields: 
-                        value = getattr(insertion_outcome, field)
-                        key = f'{outcome.category}/{outcome.subcategory}/{field}'
-                        lists[key].append(value)
+        for outcome in self.outcome_iter():
+            if outcome.category == 'unintended donor integration':
+                insertion_outcome = prime_editing_layout.LongTemplatedInsertionOutcome.from_string(outcome.details)
+                
+                for field in fields: 
+                    value = getattr(insertion_outcome, field)
+                    key = f'{outcome.category}/{outcome.subcategory}/{field}'
+                    lists[key].append(value)
                             
         with h5py.File(self.fns['templated_insertion_details'], 'w') as hdf5_file:
             cat_and_subcats = {key.rsplit('/', 1)[0] for key in lists}
@@ -285,3 +291,14 @@ class PrimeEditingExperiment(experiment.Experiment):
         ys = np.array([counts[x] for x in xs])
 
         return xs, ys
+
+class TwinPrimeExperiment(PrimeEditingExperiment):
+    def __init__(self, base_dir, group, sample_name, **kwargs):
+        super().__init__(base_dir, group, sample_name, **kwargs)
+
+        self.target_info.infer_pegRNA_features()
+        self.target_info.infer_twin_pegRNA_overlap()
+
+    @memoized_property
+    def categorizer(self):
+        return twin_prime_layout.Layout

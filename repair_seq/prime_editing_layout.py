@@ -3,7 +3,6 @@ import copy
 from collections import Counter, defaultdict
 
 import numpy as np
-import pandas as pd
 import pysam
 
 from hits import interval, sam, utilities, sw, fastq
@@ -18,8 +17,8 @@ class Layout(layout.Categorizer):
     category_order = [
         ('wild type',
             ('clean',
-            'short indel far from cut',
-            'mismatches',
+             'short indel far from cut',
+             'mismatches',
             ),
         ),
         ('intended edit',
@@ -65,12 +64,6 @@ class Layout(layout.Categorizer):
         ('insertion',
             ('clean',
              'mismatches',
-            ),
-        ),
-        ('SD-MMEJ',
-            ('loop-out',
-             'snap-back',
-             'multi-step',
             ),
         ),
         ('duplication',
@@ -160,6 +153,7 @@ class Layout(layout.Categorizer):
         
         self.relevant_alignments = self.alignments
 
+        # 220104: This should probably be 1 - only makes sense to be >1 for DSBs.
         self.ins_size_to_split_at = 3
         self.del_size_to_split_at = 2
 
@@ -372,10 +366,7 @@ class Layout(layout.Categorizer):
                                                                self.del_size_to_split_at,
                                                               )
 
-            if al.reference_name == self.target_info.target:
-                seq_bytes = self.target_info.target_sequence_bytes
-            else:
-                seq_bytes = self.target_info.donor_sequence_bytes
+            seq_bytes = self.target_info.reference_sequence_bytes[al.reference_name]
 
             extended = [sw.extend_alignment(split_al, seq_bytes) for split_al in split_als]
 
@@ -416,11 +407,11 @@ class Layout(layout.Categorizer):
             all_split_als = []
             for al in alignments:
                 split_als = layout.comprehensively_split_alignment(al,
-                                                                self.target_info,
-                                                                'illumina',
-                                                                self.ins_size_to_split_at,
-                                                                self.del_size_to_split_at,
-                                                                )
+                                                                   self.target_info,
+                                                                   'illumina',
+                                                                   self.ins_size_to_split_at,
+                                                                   self.del_size_to_split_at,
+                                                                  )
                 
                 target_seq_bytes = self.target_info.reference_sequences[al.reference_name].encode()
                 extended = [sw.extend_alignment(split_al, target_seq_bytes) for split_al in split_als]
@@ -1032,180 +1023,6 @@ class Layout(layout.Categorizer):
         left_edge, right_edge = self.perfect_edge_alignment_reference_edges 
         return abs(left_edge - al_edges[5]), abs(right_edge - al_edges[3])
 
-    def perfect_gap_covering_alignments(self, required_MH_start, required_MH_end, only_close=False):
-        def close_enough(al):
-            if not only_close:
-                return True
-            else:
-                return min(*self.reference_distances_from_perfect_edge_alignments(al)) < 100
-
-        longest_edge_als, gap_interval = self.perfect_edge_alignments_and_gap
-        gap_query_start = gap_interval.start - required_MH_start
-        # Note: interval end is the last base, but seed_and_extend wants one past
-        gap_query_end = gap_interval.end + 1 + required_MH_end
-        gap_covering_als = self.seed_and_extend('target', gap_query_start, gap_query_end)
-        gap_covering_als = [al for al in gap_covering_als if close_enough(al)]
-        
-        return gap_covering_als
-    
-    def partial_gap_perfect_alignments(self, required_MH_start, required_MH_end, on='target', only_close=True):
-        def close_enough(al):
-            if not only_close:
-                return True
-            else:
-                return min(*self.reference_distances_from_perfect_edge_alignments(al)) < 100
-
-        edge_als, gap_interval = self.perfect_edge_alignments_and_gap
-        if gap_interval is None:
-            return [], []
-
-        # Note: interval end is the last base, but seed_and_extend wants one past
-        start = gap_interval.start - required_MH_start
-        end = gap_interval.end + 1 + required_MH_end
-
-        from_start_gap_als = []
-        while (end > start) and not from_start_gap_als:
-            end -= 1
-            from_start_gap_als = self.seed_and_extend(on, start, end)
-            from_start_gap_als = [al for al in from_start_gap_als if close_enough(al)]
-            
-        start = gap_interval.start - required_MH_start
-        end = gap_interval.end + 1 + required_MH_end
-        from_end_gap_als = []
-        while (end > start) and not from_end_gap_als:
-            start += 1
-            from_end_gap_als = self.seed_and_extend(on, start, end)
-            from_end_gap_als = [al for al in from_end_gap_als if close_enough(al)]
-
-        return from_start_gap_als, from_end_gap_als
-
-    @memoized_property
-    def multi_step_SD_MMEJ_gap_cover(self):
-        partial_als = {}
-        partial_als['start'], partial_als['end'] = self.partial_gap_perfect_alignments(2, 2)
-        def is_valid(al):
-            close_enough = min(self.reference_distances_from_perfect_edge_alignments(al)) < 50
-            return close_enough and not self.target_info.overlaps_cut(al)
-
-        valid_als = {side: [al for al in partial_als[side] if is_valid(al)] for side in ('start', 'end')}
-        intervals = {side: [interval.get_covered(al) for al in valid_als[side]] for side in ('start', 'end')}
-
-        part_of_cover = {'start': set(), 'end': set()}
-
-        valid_cover_found = False
-        for s, start_interval in enumerate(intervals['start']):
-            for e, end_interval in enumerate(intervals['end']):
-                if len((start_interval & end_interval)) >= 2:
-                    valid_cover_found = True
-                    part_of_cover['start'].add(s)
-                    part_of_cover['end'].add(e)
-
-        if valid_cover_found:
-            final_als = {side: [valid_als[side][i] for i in part_of_cover[side]] for side in ('start', 'end')}
-            return final_als
-        else:
-            return None
-
-    @memoized_property
-    def SD_MMEJ(self):
-        details = {}
-
-        best_edge_als, gap_interval = self.perfect_edge_alignments_and_gap
-        overlaps_cut = self.target_info.overlaps_cut
-
-        if best_edge_als['left'] is None or best_edge_als['right'] is None:
-            details['failed'] = 'missing edge alignment'
-            return details
-
-        details['edge alignments'] = best_edge_als
-        details['alignments'] = list(best_edge_als.values())
-        details['all alignments'] = list(best_edge_als.values())
-        
-        if best_edge_als['left'] == best_edge_als['right']:
-            details['failed'] = 'perfect wild type'
-            return details
-        elif sam.get_strand(best_edge_als['left']) != sam.get_strand(best_edge_als['right']):
-            details['failed'] = 'edges align to different strands'
-            return details
-        else:
-            edge_als_strand = sam.get_strand(best_edge_als['left'])
-        
-        details['left edge'], details['right edge'] = self.perfect_edge_alignment_reference_edges
-
-        # Require resection on both sides of the cut.
-        for edge in ['left', 'right']:
-            if overlaps_cut(best_edge_als[edge]):
-                details['failed'] = f'{edge} edge alignment extends over cut'
-                return details
-
-        if gap_interval is None:
-            details['failed'] = 'no gap' 
-            return details
-
-        details['gap length'] = len(gap_interval)
-
-        # Insist on at least 2 nt of MH on each side.
-        gap_covering_als = self.perfect_gap_covering_alignments(2, 2)
-
-        min_distance = np.inf
-        closest_gap_covering = None
-
-        for al in gap_covering_als:
-            left_distance, right_distance = self.reference_distances_from_perfect_edge_alignments(al)
-            distance = min(left_distance, right_distance)
-            if distance < 100:
-                details['all alignments'].append(al)
-
-            # A valid gap covering alignment must lie entirely on one side of the cut site in the target.
-            if distance < min_distance and not overlaps_cut(al):
-                min_distance = distance
-                closest_gap_covering = al
-
-        # Empirically, the existence of any gap alignments that cover cut appears to be from overhang duplication, not SD-MMEJ.
-        # but not comfortable excluding these yet
-        #if any(overlaps_cut(al) for al in gap_covering_als):
-        #    details['failed'] = 'gap alignment overlaps cut'
-        #    return details
-        
-        if min_distance <= 50:
-            details['gap alignment'] = closest_gap_covering
-            gap_edges = sam.reference_edges(closest_gap_covering)
-            details['gap edges'] = {'left': gap_edges[5], 'right': gap_edges[3]}
-
-            if closest_gap_covering is not None:
-                gap_covering_strand = sam.get_strand(closest_gap_covering)
-                if gap_covering_strand == edge_als_strand:
-                    details['kind'] = 'loop-out'
-                else:
-                    details['kind'] = 'snap-back'
-
-            details['alignments'].append(closest_gap_covering)
-
-            gap_covered = interval.get_covered(closest_gap_covering)
-            edge_covered = {side: interval.get_covered(best_edge_als[side]) for side in ['left', 'right']}
-            homology_lengths = {side: len(gap_covered & edge_covered[side]) for side in ['left', 'right']}
-
-            details['homology lengths'] = homology_lengths
-            
-        else:
-            # Try to cover with multi-step.
-            multi_step_als = self.multi_step_SD_MMEJ_gap_cover
-            if multi_step_als is not None:
-                for side in ['start', 'end']:
-                    details['alignments'].extend(multi_step_als[side])
-                details['kind'] = 'multi-step'
-                details['gap edges'] = {'left': 'PH', 'right': 'PH'}
-                details['homology lengths'] = {'left': 'PH', 'right': 'PH'}
-            else:
-                details['failed'] = 'no valid alignments cover gap' 
-                return details
-
-        return details
-
-    @memoized_property
-    def is_valid_SD_MMEJ(self):
-        return 'failed' not in self.SD_MMEJ
-
     @memoized_property
     def realigned_target_alignments(self):
         return [al for al in self.sw_alignments if al.reference_name == self.target_info.target]
@@ -1441,25 +1258,6 @@ class Layout(layout.Categorizer):
             matches = shares_both_HAs and overlaps_feature and no_big_indels
         
         return matches
-
-    def register_SD_MMEJ(self):
-        details = self.SD_MMEJ
-
-        self.category = 'SD-MMEJ'
-        self.subcategory = details['kind']
-
-        fields = [
-            details['left edge'],
-            details['gap edges']['left'],
-            details['gap edges']['right'],
-            details['right edge'],
-            details['gap length'],
-            details['homology lengths']['left'],
-            details['homology lengths']['right'],
-        ]
-        self.details = ','.join(str(f) for f in fields)
-
-        self.relevant_alignments = self.SD_MMEJ['alignments']
 
     @memoized_property
     def donor_deletions_seen(self):
@@ -1902,7 +1700,12 @@ class Layout(layout.Categorizer):
 
         if len(self.seq) <= self.target_info.combined_primer_length + 10:
             self.category = 'nonspecific amplification'
-            self.subcategory = 'unknown'
+            
+            if self.non_primer_nts <= 2:
+                self.subcategory = 'primer dimer'
+            else:
+                self.subcategory = 'unknown'
+
             self.details = 'n/a'
             self.relevant_alignments = self.uncategorized_relevant_alignments
 
@@ -2163,22 +1966,6 @@ class Layout(layout.Categorizer):
             self.details = str(self.outcome.perform_anchor_shift(self.target_info.anchor))
 
         return self.category, self.subcategory, self.details, self.outcome
-
-    @memoized_property
-    def target_multiple_gap_covering_alignments(self):
-        initial_target_als = copy.copy(self.split_target_alignments)
-
-        if self.perfect_edge_alignments['right'] is not None:
-            initial_target_als.append(self.perfect_edge_alignments['right'])
-
-        initial_uncovered = self.whole_read - interval.get_disjoint_covered(initial_target_als)
-        gap_covers = []
-        for uncovered_interval in initial_uncovered.intervals:
-            # Don't try to explain tiny gaps.
-            if len(uncovered_interval) > 4:
-                # Note the + 1 on end here.
-                gap_covers.extend(self.seed_and_extend('target', uncovered_interval.start, uncovered_interval.end + 1))
-        return interval.make_parsimonious(initial_target_als + gap_covers)
 
     @memoized_property
     def gap_covering_alignments(self):
