@@ -45,8 +45,6 @@ def build_pooled_screen_read_sets():
 
         shutil.copytree(existing_target_info_dir, new_target_info_dir)
 
-        continue
-
         alignment_sorter = hits.sam.AlignmentSorter(read_set.bam_fn, exp.combined_header, by_name=True)
 
         read_info = {
@@ -80,8 +78,22 @@ def build_arrayed_group_read_sets():
         read_set.dir.mkdir(exist_ok=True, parents=True)
 
         exps = repair_seq.arrayed_experiment_group.get_all_experiments(manual_details['base_dir'])
-        exp = exps[manual_details['batch_name'], manual_details['exp_name']]
+        exp = exps[manual_details['batch_name'], manual_details['group_name'], manual_details['exp_name']]
         exp_type = exp.experiment_group.description['experiment_type']
+
+        # Experiments may specify specialized values for some target_info
+        # parameters that need to be passed along.
+        possible_target_info_kwargs_keys = [
+            'pegRNAs',
+            'sequencing_start_feature_name',
+            'primer_names',
+        ]
+
+        target_info_kwargs = {
+            key: exp.description[key]
+            for key in possible_target_info_kwargs_keys
+            if key in exp.description
+        }
 
         new_target_info_dir = base_dir / 'targets' / exp.target_info.name
         existing_target_info_dir = exp.target_info.dir
@@ -98,6 +110,7 @@ def build_arrayed_group_read_sets():
         read_info = {
             'experiment_type': exp_type,
             'target_info': exp.target_info.name,
+            'target_info_kwargs': target_info_kwargs,
             'expected_values': {},
         }
 

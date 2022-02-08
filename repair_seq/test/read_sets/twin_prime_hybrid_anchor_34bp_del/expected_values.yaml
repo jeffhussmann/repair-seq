@@ -1,0 +1,28 @@
+experiment_type: twin_prime
+target_info: pPC1655
+target_info_kwargs:
+  pegRNAs: sample14_pegRNA1;sample14_pegRNA2
+  sequencing_start_feature_name: forward_primer
+  primer_names: forward_primer;gDNA_reverse_primer
+expected_values:
+  01:01101:001897:013623:
+    category: wild type
+    subcategory: clean
+    note: n/a
+  01:01101:010087:016644:
+    category: intended edit
+    subcategory: deletion
+    note: n/a
+  01:01101:002008:015620:
+    category: unintended annealing of RT'ed sequence
+    subcategory: left pegRNA
+    note: should maybe be both pegRNAs - an extension al for right involves more MH
+      than target.
+  01:01101:003084:013264:
+    category: unintended annealing of RT'ed sequence
+    subcategory: both pegRNAs
+    note: n/a
+  01:01101:004767:017579:
+    category: unintended annealing of RT'ed sequence
+    subcategory: right pegRNA
+    note: n/a

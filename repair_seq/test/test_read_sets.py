@@ -46,10 +46,11 @@ class ReadSet:
         supplemental_index_names = ['hg19', 'bosTau7', 'e_coli']
         supplemental_indices = knock_knock.target_info.locate_supplemental_indices(base_dir)
         supplemental_indices = {name: supplemental_indices[name] for name in supplemental_index_names}
-        target_info = knock_knock.target_info.TargetInfo(base_dir, target_info_name, supplemental_indices=supplemental_indices)
-
-        if self.details['experiment_type'] == 'twin_prime':
-            target_info.infer_twin_pegRNA_overlap()
+        target_info = knock_knock.target_info.TargetInfo(base_dir,
+                                                         target_info_name,
+                                                         supplemental_indices=supplemental_indices,
+                                                         **self.details.get('target_info_kwargs', {}),
+                                                        )
 
         return target_info
 
