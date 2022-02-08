@@ -1,8 +1,14 @@
 target: pPC1000
-donor: pegRNA_G6C_15
+
+pegRNAs: 
+  - pegRNA_G6C_15
+
 sources: 
   - ppc1000
-  - pegrna_g6c_15
+
+primer_names:
+  - gDNA_forward_primer
+  - gDNA_reverse_primer
 
 features_to_show:
   - [pPC1000, sgRNA]

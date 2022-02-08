@@ -4,7 +4,6 @@ for regression testing purposes.
 '''
 
 import shutil
-from pathlib import Path
 
 import yaml
 
@@ -46,9 +45,9 @@ def build_pooled_screen_read_sets():
 
         shutil.copytree(existing_target_info_dir, new_target_info_dir)
 
-        header = hits.sam.get_header(exp.fns_by_read_type['bam_by_name']['collapsed_uncommon_R2'])
-        
-        alignment_sorter = hits.sam.AlignmentSorter(read_set.bam_fn, header, by_name=True)
+        continue
+
+        alignment_sorter = hits.sam.AlignmentSorter(read_set.bam_fn, exp.combined_header, by_name=True)
 
         read_info = {
             'experiment_type': pool.sample_sheet['layout_module'],
@@ -94,8 +93,7 @@ def build_arrayed_group_read_sets():
 
         shutil.copytree(existing_target_info_dir, new_target_info_dir)
 
-        header = hits.sam.get_header(exp.fns_by_read_type['bam_by_name']['nonredundant'])
-        alignment_sorter = hits.sam.AlignmentSorter(read_set.bam_fn, header, by_name=True)
+        alignment_sorter = hits.sam.AlignmentSorter(read_set.bam_fn, exp.combined_header, by_name=True)
         
         read_info = {
             'experiment_type': exp_type,

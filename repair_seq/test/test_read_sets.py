@@ -27,6 +27,19 @@ class ReadSet:
     def expected_values(self):
         return self.details['expected_values']
 
+    def get_read_layout(self, read_id):
+        layout = None
+
+        for qname, als in hits.sam.grouped_by_name(self.bam_fn):
+            if qname == read_id:
+                layout = self.categorizer(als, self.target_info)
+                break
+
+        if layout is None:
+            raise ValueError(read_id)
+        
+        return layout
+
     @memoized_property
     def target_info(self):
         target_info_name = self.details['target_info']
@@ -36,7 +49,6 @@ class ReadSet:
         target_info = knock_knock.target_info.TargetInfo(base_dir, target_info_name, supplemental_indices=supplemental_indices)
 
         if self.details['experiment_type'] == 'twin_prime':
-            target_info.infer_pegRNA_features()
             target_info.infer_twin_pegRNA_overlap()
 
         return target_info
@@ -54,46 +66,15 @@ class ReadSet:
 
         return categorizer
     
-    #def expected_values(self):
-    #    expected_values = {}
-    #    with open(self.expected_values_fn) as expected_values_fh:
-    #        for line in expected_values_fh:
-    #            read_id, category, subcategory, description = line.strip().split('\t')
-    #            expected_values[read_id] = {
-    #                'category': category,
-    #                'subcategory': subcategory,
-    #                'description': description,
-    #            }
-    #    return expected_values
-
-#def test_read_sets():
-#    with open(base_dir / 'read_set_details.txt') as set_details_fh:
-#        for set_details_line in set_details_fh:
-#            set_name, target_info_name = set_details_line.strip().split('\t')
-#            read_set = ReadSet(set_name, target_info_name)
-#
-#            actual_values = {}
-#            for qname, als in hits.sam.grouped_by_name(read_set.bam_fn):
-#                l = repair_seq.prime_editing_layout.Layout(als, read_set.target_info)
-#                l.categorize()
-#                actual_values[qname] = {
-#                    'category': l.category,
-#                    'subcategory': l.subcategory,
-#                }
-#
-#            for qname, expected in read_set.expected_values().items():
-#                actual = actual_values[qname]
-#                assert (expected['category'], expected['subcategory']) == (actual['category'], actual['subcategory']), f'{set_name} {expected["description"]}'
-
 def test_read_sets():
-    read_set_dirs = [p for p in (base_dir / 'read_sets').iterdir() if p.is_dir()]
+    read_set_dirs = sorted([p for p in (base_dir / 'read_sets').iterdir() if p.is_dir()])
 
     # Ensure that at least one read set was found. 
     assert len(read_set_dirs) > 0
 
     for read_set_dir in read_set_dirs:
-        print(read_set_dir)
         set_name = read_set_dir.name
+        print(f'Testing {set_name}') 
 
         read_set = ReadSet(set_name)
 

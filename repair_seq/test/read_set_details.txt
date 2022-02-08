@@ -1,3 +1,0 @@
-PE2_screen	pPC1000_G6C_15
-PE3+50_screen	pPC1000_G6C_15
-PE3+50_screen	pPC1000_G6C_15

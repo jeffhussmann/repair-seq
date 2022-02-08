@@ -44,8 +44,3 @@ pPC1000	.	misc_feature	7260	7265	.	+	.	ID=poly%20A%20signal;color=%23f8d3a9
 pPC1000	.	rep_origin	7411	8093	.	-	.	ID=ColE1%20origin;color=%23d59687
 pPC1000	.	CDS	8191	8850	.	-	.	ID=AmpR;color=%23faac61
 pPC1000	.	promoter	9090	9118	.	-	.	ID=AmpR%20promoter;color=%23b7e6d7
-pegRNA_G6C_15	.	misc_feature	1	23	.	+	.	ID=protospacer;color=%2375c6a9
-pegRNA_G6C_15	.	misc_feature	24	107	.	+	.	ID=scaffold;color=%23b4abac
-pegRNA_G6C_15	.	misc_feature	108	122	.	-	.	ID=HA_RT_G6_15;color=%23f8d3a9
-pegRNA_G6C_15	.	misc_feature	117	117	.	-	.	ID=SNP_G6;color=%23f58a5e
-pegRNA_G6C_15	.	misc_feature	123	131	.	-	.	ID=HA_PBS;color=%23faac61
