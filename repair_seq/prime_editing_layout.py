@@ -8,6 +8,7 @@ import pysam
 from hits import interval, sam, utilities, sw, fastq
 from hits.utilities import memoized_property
 
+import knock_knock.pegRNAs
 from knock_knock.target_info import DegenerateDeletion, DegenerateInsertion, SNV, SNVs
 from knock_knock import layout
 
@@ -154,6 +155,7 @@ class Layout(layout.Categorizer):
         self.relevant_alignments = self.alignments
 
         # 220104: This should probably be 1 - only makes sense to be >1 for DSBs.
+        # 220203: doing so breaks current extension from intended annealing logic.
         self.ins_size_to_split_at = 3
         self.del_size_to_split_at = 2
 
@@ -161,6 +163,8 @@ class Layout(layout.Categorizer):
         self.mode = mode
 
         self.trust_inferred_length = True
+
+        self.categorized = False
 
     @classmethod
     def from_read(cls, read, target_info):
@@ -188,17 +192,133 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def donor_alignments(self):
+        ''' pegRNAs are considered donor.
+        For temporary backward compatibility, allow explicit donor specification as well.
+        '''
+
+        if self.target_info.donor is not None:
+            valid_names = [self.target_info.donor]
+        else:
+            valid_names = self.target_info.pegRNA_names
+
         d_als = [
             al for al in self.alignments
-            if al.reference_name == self.target_info.donor
+            if al.reference_name in valid_names
         ]
         
         return d_als
-    
+
+    @memoized_property
+    def pegRNA_alignments(self):
+        ''' pegRNAs are considered donor.
+        For temporary backward compatibility, allow explicit donor specification as well.
+        '''
+        if self.target_info.donor is not None:
+            pegRNA_names = [self.target_info.donor]
+        else:
+            pegRNA_names = self.target_info.pegRNA_names
+
+        pegRNA_alignments = {
+            pegRNA_name: [
+                al for al in self.split_target_and_donor_alignments
+                if al.reference_name == pegRNA_name
+            ]
+            for pegRNA_name in pegRNA_names
+        }
+        
+        return pegRNA_alignments
+
+    @memoized_property
+    def possible_pegRNA_extension_als(self):
+        ''' Identify pegRNA alignments that extend into the RTT and explain
+        the observed sequence better than alignment to the target does.
+        '''
+        ti = self.target_info
+
+        extension_als = {
+            'definite': {},
+            'ambiguous': {},
+        }
+
+        for side, pegRNA_name in ti.pegRNA_names_by_side_of_read.items():
+            pegRNA_seq = ti.reference_sequences[pegRNA_name]
+            PBS_name = ti.PBS_names_by_side_of_read[side]
+
+            after_first_difference_feature = ti.features[pegRNA_name, f'after_first_difference_{pegRNA_name}']
+
+            # Note: can't use parsimonious here.
+            pegRNA_als = self.pegRNA_alignments[pegRNA_name]
+            target_al = self.target_edge_alignments[side]
+
+            candidate_als = {
+                'definite': [],
+                'ambiguous': [],
+            }
+            for pegRNA_al in pegRNA_als:
+                if self.share_feature(target_al, PBS_name, pegRNA_al, 'PBS'):
+                    # If the target edge alignment extends past the candidate pegRNA extension alignment,
+                    # ensure that the RTT part of the candidate pegRNA extension alignment isn't explained
+                    # better by the target edge alignment.
+                    if side == 'right':
+                        target_al_start = interval.get_covered(target_al).start
+                        pegRNA_al_start = interval.get_covered(pegRNA_al).start
+
+                        # Include +2 wiggle room here in case pegRNA alignments extends slightly farther by chance.
+                        if target_al_start <= pegRNA_al_start + 2:
+                            # Find the farthest right left point from the target al to the pegRNA al.
+                            switch_results = sam.find_best_query_switch_after(target_al, pegRNA_al, ti.target_sequence, pegRNA_seq, min)
+                            cropped_pegRNA_extension_al = sam.crop_al_to_query_int(pegRNA_al, switch_results['switch_after'] + 1, len(self.seq))
+                        else:
+                            cropped_pegRNA_extension_al = pegRNA_al
+
+                    else:
+                        target_al_end = interval.get_covered(target_al).end
+                        pegRNA_al_end = interval.get_covered(pegRNA_al).end
+
+                        if target_al_end >= pegRNA_al_end:
+                            # Find the farthest left switch point from the pegRNA al to the target al.
+                            switch_results = sam.find_best_query_switch_after(pegRNA_al, target_al, pegRNA_seq, ti.target_sequence, max)
+                            cropped_pegRNA_extension_al = sam.crop_al_to_query_int(pegRNA_al, 0, switch_results['switch_after'])
+                        else:
+                            cropped_pegRNA_extension_al = pegRNA_al
+
+                    # If the cropped pegRNA alignment doesn't extend past the point where
+                    # pegRNA and target diverge, this is not an extension alignment that
+                    # best explains this part of the read.
+                    past_first_difference_length = sam.feature_overlap_length(cropped_pegRNA_extension_al, after_first_difference_feature)
+                    if past_first_difference_length > 0:
+                        candidate_als['definite'].append(cropped_pegRNA_extension_al)
+                    else:
+                        candidate_als['ambiguous'].append(cropped_pegRNA_extension_al)
+                    
+            for status, als in candidate_als.items():
+                if len(als) == 1:
+                    extension_als[status][side] = als[0]
+                else:
+                    extension_als[status][side] = None
+
+        return extension_als['definite'], extension_als['ambiguous']
+
+    @memoized_property
+    def possible_pegRNA_extension_als_list(self):
+        ''' For plotting/adding to relevant_als '''
+        definite_als, ambiguous_als = self.possible_pegRNA_extension_als
+        return [al for al in list(definite_als.values()) + list(ambiguous_als.values()) if al is not None]
+
+    @memoized_property
+    def pegRNA_extension_als(self):
+        definite_als, ambiguous_als = self.possible_pegRNA_extension_als
+        return definite_als
+
+    @memoized_property
+    def ambiguous_pegRNA_extension_als(self):
+        definite_als, ambiguous_als = self.possible_pegRNA_extension_als
+        return ambiguous_als
+
     @memoized_property
     def extra_alignments(self):
         ti = self.target_info
-        extra_ref_names = {n for n in ti.reference_sequences if n not in [ti.target, ti.donor]}
+        extra_ref_names = {n for n in ti.reference_sequences if n not in [ti.target, *ti.pegRNA_names]}
         als = [al for al in self.alignments if al.reference_name in extra_ref_names]
         return als
     
@@ -376,7 +496,16 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def split_donor_alignments(self):
-        return [al for al in self.split_target_and_donor_alignments if al.reference_name == self.target_info.donor]
+        ''' pegRNAs are considered donor.
+        For temporary backward compatibility, allow explicit donor specification as well.
+        '''
+
+        if self.target_info.donor is not None:
+            valid_names = [self.target_info.donor]
+        else:
+            valid_names = self.target_info.pegRNA_names
+
+        return [al for al in self.split_target_and_donor_alignments if al.reference_name in valid_names]
     
     @memoized_property
     def split_target_alignments(self):
@@ -456,12 +585,23 @@ class Layout(layout.Categorizer):
         return interval.Interval(edge_length, len(self.seq) - 1 - edge_length)
     
     @memoized_property
-    def single_read_covering_target_alignment(self):
+    def single_read_covering_target_alignment_old(self):
         target_als = self.parsimonious_target_alignments
         covering_als = [al for al in target_als if self.alignment_covers_read(al)]
         
         if len(covering_als) == 1:
             return covering_als[0]
+        else:
+            return None
+
+    @memoized_property
+    def single_read_covering_target_alignment(self):
+        edge_als = self.target_edge_alignments
+        covered = {side: interval.get_covered(al) for side, al in edge_als.items()}
+
+        if covered['right'].start <= covered['left'].end + 1:
+            covering_al = sam.merge_adjacent_alignments(edge_als['left'], edge_als['right'], self.target_info.reference_sequences)
+            return covering_al
         else:
             return None
 
@@ -493,12 +633,14 @@ class Layout(layout.Categorizer):
             return False
         else:
             not_too_much = {
-                'start': missing_from['start'] <= 5 or (no_indels and self.overlaps_primer(al, 'left')),
+                'start': (missing_from['start'] <= 5) or (no_indels and self.overlaps_primer(al, 'left')),
                 'end': (missing_from['end'] <= 5) or (no_indels and self.overlaps_primer(al, 'right')),
-                'middle': missing_from['middle'] <= 5,
+                'middle': (missing_from['middle'] <= 5),
             }
 
-            return all(not_too_much.values())
+            starts_at_expected_location = self.overlaps_primer(al, 'left')
+
+            return all(not_too_much.values()) and starts_at_expected_location
 
     @memoized_property
     def target_reference_edges(self):
@@ -535,7 +677,7 @@ class Layout(layout.Categorizer):
             position_to_name = {SNPs['target'][name]['position']: name for name in SNPs['target']}
             donor_SNV_locii = {name: [] for name in SNPs['target']}
 
-        other_locii = []
+        non_donor_SNVs = []
 
         for al in self.parsimonious_target_alignments:
             for true_read_i, read_b, ref_i, ref_b, qual in sam.aligned_tuples(al, self.target_info.target_sequence):
@@ -547,19 +689,24 @@ class Layout(layout.Categorizer):
 
                     donor_SNV_locii[name].append((read_b, qual))
 
-                else:
-                    if read_b != '-' and ref_b != '-' and read_b != ref_b:
+                if read_b != '-' and ref_b != '-' and read_b != ref_b:
+                    donor_base = self.target_info.simple_donor_SNVs.get((self.target_info.target, ref_i))
+
+                    if donor_base is not None and donor_base == read_b:
+                        # Matches donor SNV.
+                        pass
+                    else:
                         snv = SNV(ref_i, read_b, qual)
-                        other_locii.append(snv)
+                        non_donor_SNVs.append(snv)
 
-        other_locii = SNVs(other_locii)
+        non_donor_SNVs = SNVs(non_donor_SNVs)
 
-        return donor_SNV_locii, other_locii
+        return donor_SNV_locii, non_donor_SNVs
 
     @memoized_property
     def non_donor_SNVs(self):
-        _, other_locii = self.SNVs_summary
-        return other_locii
+        _, non_donor_SNVs = self.SNVs_summary
+        return non_donor_SNVs
 
     def donor_al_SNV_summary(self, donor_al):
         ti = self.target_info
@@ -677,7 +824,14 @@ class Layout(layout.Categorizer):
 
     def alignment_scaffold_overlap(self, al):
         ti = self.target_info
-        scaffold_feature = ti.features[ti.donor, 'scaffold']
+
+        if len(ti.pegRNA_names) != 1:
+            raise ValueError(ti.pegRNA_names)
+
+        pegRNA_name = ti.pegRNA_names[0]
+        pegRNA_seq = ti.reference_sequences[pegRNA_name]
+
+        scaffold_feature = ti.features[pegRNA_name, 'scaffold']
         cropped = sam.crop_al_to_ref_int(al, scaffold_feature.start, scaffold_feature.end)
         if cropped is None:
             scaffold_overlap = 0
@@ -685,12 +839,12 @@ class Layout(layout.Categorizer):
             scaffold_overlap = cropped.query_alignment_length
 
             # Try to filter out junk alignments.
-            edits = sam.edit_distance_in_query_interval(cropped, ref_seq=ti.donor_sequence)
+            edits = sam.edit_distance_in_query_interval(cropped, ref_seq=pegRNA_seq)
             if edits / scaffold_overlap > 0.2:
                 scaffold_overlap = 0
 
-            # Insist on overlapping HA_RT to prevent false positive from protospacer alignment.            
-            if not sam.overlaps_feature(al, self.HA_RT, require_same_strand=False):
+            # Insist on overlapping HA_RTT to prevent false positive from protospacer alignment.            
+            if not sam.overlaps_feature(al, self.HA_RTT, require_same_strand=False):
                 scaffold_overlap = 0
 
         return scaffold_overlap
@@ -700,18 +854,16 @@ class Layout(layout.Categorizer):
         return max([self.alignment_scaffold_overlap(al) for al in self.donor_alignments], default=0)
 
     @memoized_property
-    def HA_RT(self):
-        ti = self.target_info
-        HA_RT_name = [feature_name for seq_name, feature_name in ti.features if seq_name == ti.donor and feature_name.startswith('HA_RT')][0]
-        HA_RT = ti.homology_arms[HA_RT_name]['donor']
-        return HA_RT
+    def HA_RTT(self):
+        pegRNA_name = self.target_info.pegRNA_names[0]
+        return self.target_info.features[pegRNA_name, f'HA_RTT_{pegRNA_name}']
 
-    def deletion_overlaps_HA_RT(self, deletion):
-        HA_RT_interval = interval.Interval.from_feature(self.HA_RT)
+    def deletion_overlaps_HA_RTT(self, deletion):
+        HA_RTT_interval = interval.Interval.from_feature(self.HA_RTT)
 
         deletion_interval = interval.Interval(min(deletion.starts_ats), max(deletion.ends_ats))
 
-        return not interval.are_disjoint(HA_RT_interval, deletion_interval)
+        return not interval.are_disjoint(HA_RTT_interval, deletion_interval)
 
     def interesting_and_uninteresting_indels(self, als):
         indels = self.extract_indels_from_alignments(als)
@@ -1214,7 +1366,7 @@ class Layout(layout.Categorizer):
                 self.category = 'edit + indel'
                 self.subcategory = 'edit + deletion'
 
-                HDR_outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
+                HDR_outcome = HDROutcome(self.donor_SNV_string, [])
                 deletion_outcome = DeletionOutcome(details['longest_edge_deletion'])
                 outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
 
@@ -1260,16 +1412,23 @@ class Layout(layout.Categorizer):
         return matches
 
     @memoized_property
-    def donor_deletions_seen(self):
-        seen = [d for d, _ in self.indels if d.kind == 'D' and d in self.target_info.donor_deletions]
-        return seen
+    def intended_deletion(self):
+        return None
 
-    @memoized_property
-    def non_donor_deletions(self):
-        non_donor_deletions = [d for d, _ in self.indels if d.kind == 'D' and d not in self.target_info.donor_deletions]
-        return non_donor_deletions
+    #@memoized_property
+    #def intended_deletion(self):
+    #    ti = self.target_info
+    #    pegRNA_names_string = '_'.join(sorted(ti.pegRNA_names))
+    #    intended_deletion_feature = ti.features.get((ti.target, f'intended_deletion_{pegRNA_names_string}'))
+    #    if intended_deletion_feature is None:
+    #        return None
+    #    else:
+    #        intended_deletion = DegenerateDeletion([intended_deletion_feature.start], len(intended_deletion_feature))
+    #        intended_deletion = ti.expand_degenerate_indel(intended_deletion)
+    #        return intended_deletion
 
     def shared_HAs(self, donor_al, target_edge_als):
+        pegRNA_seq = self.target_info.reference_sequences[self.target_info.pegRNA_names[0]]
         q_to_HA_offsets = defaultdict(lambda: defaultdict(set))
 
         if self.target_info.homology_arms is None:
@@ -1308,7 +1467,7 @@ class Layout(layout.Categorizer):
         if donor_al is None or donor_al.is_unmapped:
             pass
         else:
-            for q, read_b, ref_i, ref_b, qual in sam.aligned_tuples(donor_al, self.target_info.donor_sequence):
+            for q, read_b, ref_i, ref_b, qual in sam.aligned_tuples(donor_al, pegRNA_seq):
                 if q is None:
                     continue
                 for side in ['left', 'right']:
@@ -1410,7 +1569,7 @@ class Layout(layout.Categorizer):
             details = {'source': source}
 
             if source == 'donor':
-                candidate_ref_seq = ti.donor_sequence
+                candidate_ref_seq = ti.reference_sequences[ti.pegRNA_names[0]]
             else:
                 candidate_ref_seq = None
             
@@ -1724,7 +1883,7 @@ class Layout(layout.Categorizer):
                 if self.has_donor_SNV:
                     self.category = 'intended edit'
 
-                    HDR_outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
+                    HDR_outcome = HDROutcome(self.donor_SNV_string, [])
                     self.outcome = HDR_outcome
 
                     if len(self.non_donor_SNVs) == 0 and len(uninteresting_indels) == 0:
@@ -1741,7 +1900,7 @@ class Layout(layout.Categorizer):
                         self.subcategory = 'SNV + mismatches'
 
                     self.details = str(self.outcome)
-                    self.relevant_alignments = [target_alignment] + self.donor_alignments
+                    self.relevant_alignments = [target_alignment] + list(self.pegRNA_extension_als.values())
 
                 else:
                     if self.starts_at_expected_location:
@@ -1785,7 +1944,7 @@ class Layout(layout.Categorizer):
             elif len(interesting_indels) == 1:
                 indel = interesting_indels[0]
 
-                if len(self.donor_deletions_seen) == 1:
+                if self.intended_deletion is not None and indel == self.intended_deletion:
                     self.category = 'intended edit'
                     if len(self.non_donor_SNVs) > 0:
                         self.subcategory = 'deletion + unintended mismatches'
@@ -1793,7 +1952,7 @@ class Layout(layout.Categorizer):
                         self.subcategory = 'deletion + SNV'
                     else:
                         self.subcategory = 'deletion'
-                    self.outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
+                    self.outcome = HDROutcome(self.donor_SNV_string, [indel])
                     self.details = str(self.outcome)
 
                     self.relevant_alignments = [target_alignment] + self.donor_alignments
@@ -1801,24 +1960,26 @@ class Layout(layout.Categorizer):
                 else: # one indel, not a donor deletion
                     if self.has_donor_SNV:
                         if indel.kind == 'D':
-                            # If the deletion overlaps with HA_RT on the target, consider this an unintended donor integration.                            
-                            #if self.deletion_overlaps_HA_RT(indel) and self.donor_insertion is not None:
+                            # If the deletion overlaps with HA_RTT on the target, consider this an unintended donor integration.                            
+                            #if self.deletion_overlaps_HA_RTT(indel) and self.donor_insertion is not None:
                             #    self.register_donor_insertion()
                             self.category = 'edit + indel'
                             self.subcategory = 'edit + deletion'
-                            HDR_outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
+                            HDR_outcome = HDROutcome(self.donor_SNV_string, [])
                             deletion_outcome = DeletionOutcome(indel)
                             self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
                             self.details = str(self.outcome)
-                            self.relevant_alignments = self.parsimonious_target_alignments + self.donor_alignments
+                            self.relevant_alignments = self.parsimonious_target_alignments + list(self.pegRNA_extension_als.values())
+
                         elif indel.kind == 'I' and indel.length == 1:
                             self.category = 'edit + indel'
                             self.subcategory = 'edit + insertion'
-                            HDR_outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
+                            HDR_outcome = HDROutcome(self.donor_SNV_string, [])
                             insertion_outcome = InsertionOutcome(indel)
                             self.outcome = HDRPlusInsertionOutcome(HDR_outcome, insertion_outcome)
                             self.details = str(self.outcome)
                             self.relevant_alignments = self.parsimonious_target_alignments + self.donor_alignments
+
                         else:
                             self.category = 'uncategorized'
                             self.subcategory = 'donor SNV with non-donor indel'
@@ -1857,11 +2018,11 @@ class Layout(layout.Categorizer):
                     self.relevant_alignments = self.uncategorized_relevant_alignments
 
                 elif len(self.indels) == 2:
-                    if len(self.donor_deletions_seen) == 1 and len(self.non_donor_deletions) == 1:
+                    if self.intended_deletion is not None and self.intended_deletion in self.indels:
                         self.category = 'edit + indel'
                         self.subcategory = 'edit + deletion'
-                        HDR_outcome = HDROutcome(self.donor_SNV_string, self.donor_deletions_seen)
-                        indel = self.non_donor_deletions[0]
+                        HDR_outcome = HDROutcome(self.donor_SNV_string, [self.intended_deletion])
+                        indel = [indel for indel in self.indels if indel != self.intended_deletion][0]
                         deletion_outcome = DeletionOutcome(indel)
                         self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
                         self.details = str(self.outcome)
@@ -1904,7 +2065,7 @@ class Layout(layout.Categorizer):
 
             elif len(indels) == 1 and indels[0].kind == 'D':
                 indel = indels[0]
-                if indel in self.target_info.donor_deletions:
+                if self.intended_deletion is not None and indel == self.intended_deletion:
                     self.category = 'edit + duplication'
                 else:
                     self.category = 'deletion + duplication'
@@ -1964,6 +2125,8 @@ class Layout(layout.Categorizer):
             # Translate positions to be relative to a registered anchor
             # on the target sequence.
             self.details = str(self.outcome.perform_anchor_shift(self.target_info.anchor))
+
+        self.categorized = True
 
         return self.category, self.subcategory, self.details, self.outcome
 
@@ -2124,27 +2287,77 @@ class Layout(layout.Categorizer):
     def uncategorized_relevant_alignments(self):
         return self.gap_covering_alignments + self.donor_alignments + interval.make_parsimonious(self.nonredundant_supplemental_alignments + self.extra_alignments)
 
-    @memoized_property
+    @property
     def inferred_amplicon_length(self):
         if self.seq  == '':
             return 0
 
-        right_al = self.get_target_edge_alignments(self.target_gap_covering_alignments)['right']
+        right_al = self.target_edge_alignments['right']
+        right_primer = self.target_info.primers_by_side_of_read['right']
 
         if right_al is None or not self.trust_inferred_length:
-            inferred_length = len(self.seq)
+            inferred_length = -1
         else:
-            right_al_edge = sam.reference_edges(right_al)[3]
-
-            right_primer = self.target_info.primers_by_side_of_read['right']
+            right_al_edge_in_query = sam.query_interval(right_al)[1]
+            right_al_edge_in_target = sam.reference_edges(right_al)[3]
 
             if self.target_info.sequencing_direction == '+':
                 right_primer_edge = right_primer.end
-                inferred_extra = right_primer_edge - right_al_edge
+                inferred_extra = right_primer_edge - right_al_edge_in_target
+
             else:
                 right_primer_edge = right_primer.start
-                inferred_extra = right_al_edge - right_primer_edge
+                inferred_extra = right_al_edge_in_target - right_primer_edge
 
-            inferred_length = len(self.seq) + max(inferred_extra, 0)
+            length_seen = right_al_edge_in_query + 1 
+            inferred_length = length_seen + max(inferred_extra, 0)
 
         return inferred_length
+
+    def plot(self, relevant=True, **manual_diagram_kwargs):
+        if not self.categorized:
+            self.categorize()
+
+        ti = self.target_info
+
+        # temp for backwards compatibility
+        if ti.donor is not None:
+            pegRNA_name = ti.donor
+        else:
+            pegRNA_name = ti.pegRNA_names[0]
+
+        PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
+        PBS_strand = ti.features[ti.target, PBS_name].strand
+
+        flip_target = ti.sequencing_direction == '-'
+
+        if (flip_target and PBS_strand == '-') or (not flip_target and PBS_strand == '+'):
+            flip_donor = True
+        else:
+            flip_donor = False
+
+        diagram_kwargs = dict(
+            draw_sequence=True,
+            flip_target=flip_target,
+            flip_donor=flip_donor,
+            split_at_indels=True,
+            label_offsets={feature_name: 1 for _, feature_name in ti.PAM_features},
+            features_to_show=ti.features_to_show,
+            refs_to_draw={ti.target, *ti.pegRNA_names},
+            label_overrides={name: 'protospacer' for name in ti.sgRNAs},
+            inferred_amplicon_length=self.inferred_amplicon_length,
+        )
+
+        diagram_kwargs.update(**manual_diagram_kwargs)
+
+        if relevant:
+            als_to_plot = self.relevant_alignments
+        else:
+            als_to_plot = self.uncategorized_relevant_alignments
+
+        diagram = knock_knock.visualize.ReadDiagram(als_to_plot,
+                                                    ti,
+                                                    **diagram_kwargs,
+                                                   )
+
+        return diagram

@@ -41,7 +41,7 @@ class PrimeEditingExperiment(experiment.Experiment):
             elif feature_name.startswith('HA_RT'):
                 label_offsets[feature_name] = 1
 
-        label_offsets[f'{self.target_info.primary_sgRNA}_PAM'] = 2
+        label_offsets[f'{self.target_info.primary_sgRNA}_PAM'] = 1
         other_sgRNAs = [sgRNA for sgRNA in self.target_info.sgRNAs if sgRNA != self.target_info.primary_sgRNA]
         for sgRNA in other_sgRNAs:
             label_offsets[f'{sgRNA}_PAM'] = 1
@@ -78,6 +78,7 @@ class PrimeEditingExperiment(experiment.Experiment):
     @property
     def read_types_to_align(self):
         return ['nonredundant']
+        #return ['trimmed_by_name']
 
     @memoized_property
     def categorizer(self):
@@ -185,10 +186,13 @@ class PrimeEditingExperiment(experiment.Experiment):
     def generate_length_range_figures(self, specific_outcome=None, num_examples=1):
         by_length = defaultdict(lambda: utilities.ReservoirSampler(num_examples))
 
-        #al_groups = self.alignment_groups(outcome=outcome, read_type='trimmed')
         al_groups = self.alignment_groups(outcome=specific_outcome)
         for name, als in al_groups:
             length = self.qname_to_inferred_length[name]
+
+            if length == -1:
+                length = self.length_to_store_unknown
+
             by_length[length].add((name, als))
 
         if specific_outcome is None:
@@ -217,6 +221,18 @@ class PrimeEditingExperiment(experiment.Experiment):
             im = hits.visualize.make_stacked_Image([d.fig for d in diagrams])
             fn = fns['length_range_figure'](length, length)
             im.save(fn)
+
+    def alignment_groups_to_diagrams(self, alignment_groups, num_examples, **diagram_kwargs):
+        subsample = utilities.reservoir_sample(alignment_groups, num_examples)
+
+        for qname, als in subsample:
+            layout = self.categorizer(als, self.target_info, mode=self.layout_mode)
+
+            layout.categorize()
+            
+            diagram = layout.plot(title='', **diagram_kwargs)
+                
+            yield diagram
 
     def extract_templated_insertion_info(self):
         fields = prime_editing_layout.LongTemplatedInsertionOutcome.int_fields
@@ -295,9 +311,6 @@ class PrimeEditingExperiment(experiment.Experiment):
 class TwinPrimeExperiment(PrimeEditingExperiment):
     def __init__(self, base_dir, group, sample_name, **kwargs):
         super().__init__(base_dir, group, sample_name, **kwargs)
-
-        self.target_info.infer_pegRNA_features()
-        self.target_info.infer_twin_pegRNA_overlap()
 
     @memoized_property
     def categorizer(self):
