@@ -11,21 +11,23 @@ setup(
 
     packages=[
         'repair_seq',
+        'repair_seq/visualize',
+        'repair_seq/test',
     ],
 
     scripts=[
         'repair_seq/repair-seq',
     ],
 
-    python_requires='>=3.6',
+    python_requires='>=3.7',
 
     install_requires=[
-        'h5py==3.1.0',
+        'h5py>=3.1.0',
         'hdbscan==0.8.26',
-        'hits==0.3.0',
-        'knock_knock==0.3.3',
+        'hits>=0.3.0',
+        'knock_knock>=0.3.3',
         'numba==0.51.2',
-        'seaborn==0.11.0',
+        'seaborn>=0.11.0',
         'umap-learn==0.4.6',
     ],
 
