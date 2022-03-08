@@ -845,7 +845,7 @@ class PoolReplicates:
 
     @memoized_property
     def category_fraction_means(self):
-        return self.category_fractions.mean(axis=1, level=1)
+        return self.category_fractions.groupby(axis=1, level=1).mean()
 
     @memoized_property
     def category_fraction_stds(self):
@@ -861,7 +861,7 @@ class PoolReplicates:
 
     @memoized_property
     def category_fraction_difference_means(self):
-        return self.category_fraction_differences.mean(axis=1, level=1)
+        return self.category_fraction_differences.groupby(axis=1, level=1).mean()
 
     @memoized_property
     def category_fraction_difference_stds(self):
@@ -873,7 +873,7 @@ class PoolReplicates:
 
     @memoized_property
     def category_log2_fold_change_means(self):
-        return self.category_log2_fold_changes.mean(axis=1, level=1)
+        return self.category_log2_fold_changes.groupby(axis=1, level=1).mean()
 
     @memoized_property
     def cateogry_log2_fold_change_stds(self):
@@ -885,7 +885,7 @@ class PoolReplicates:
 
     @memoized_property
     def gene_level_category_statistic_means(self):
-        return self.gene_level_category_statistics.mean(axis=1, level=[1, 2])
+        return self.gene_level_category_statistics.groupby(axis=1, level=[1, 2]).mean()
 
     def plot_ranked_category_statistics(self, category, stat='extreme_2', top_n=3, bottom_n=3, y_lim=(-2, 2)):
         df = self.gene_level_category_statistics.xs([category, stat], level=[1, 2], axis=1).copy()
