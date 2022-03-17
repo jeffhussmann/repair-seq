@@ -8,7 +8,7 @@ expected_values:
     note: clean
   017171944:0000000003:
     category: intended edit
-    subcategory: replacement
+    subcategory: partial replacement
     note: has a mismatch in the overlap region
   017171944:0000000028:
     category: unintended annealing of RT'ed sequence

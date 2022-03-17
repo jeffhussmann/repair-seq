@@ -1,19 +1,11 @@
 ##gff-version 3
 PAH_E7	.	misc_feature	501	521	.	+	.	ID=reverse_primer;color=%239eafd2
+PAH_E7	.	misc_feature	638	657	.	+	.	ID=PAH_E7.5_34_EvoPreQ1_protospacer;color=%2385dae9
 PAH_E7	.	sgRNA	638	657	.	+	.	ID=sgRNA_PAH_E7.5_34_EvoPreQ1;color=%23c6c9d1;effector=SpCas9H840A
 PAH_E7	.	misc_feature	642	654	.	+	.	ID=PAH_E7.5_34_EvoPreQ1_PBS;color=%2385dae9
+PAH_E7	.	misc_feature	698	717	.	-	.	ID=PAH_E7.2_34_EvoPreQ1_protospacer;color=%2385dae9
 PAH_E7	.	sgRNA	698	717	.	-	.	ID=sgRNA_PAH_E7.2_34_EvoPreQ1;color=%23c6c9d1;effector=SpCas9H840A
 PAH_E7	.	misc_feature	701	710	.	-	.	ID=PAH_E7.2_34_EvoPreQ1_PBS;color=%2385dae9
 PAH_E7	.	misc_feature	775	796	.	-	.	ID=forward_primer;color=%2375C6A9
 PAH_E7	.	misc_feature	792	796	.	-	.	ID=sequencing_start
 PAH_E7	.	misc_feature	792	796	.	-	.	ID=anchor
-PAH_E7.2_34_EvoPreQ1	.	misc_feature	1	21	.	+	.	ID=protospacer;color=%23ff9ccd
-PAH_E7.2_34_EvoPreQ1	.	misc_feature	22	97	.	+	.	ID=scaffold;color=%23b7e6d7
-PAH_E7.2_34_EvoPreQ1	.	misc_feature	98	131	.	-	.	ID=RTT;color=%23c7b0e3
-PAH_E7.2_34_EvoPreQ1	.	misc_feature	98	191	.	+	.	ID=extension;color=%23777777
-PAH_E7.2_34_EvoPreQ1	.	misc_feature	132	141	.	-	.	ID=PBS;color=%2385dae9
-PAH_E7.5_34_EvoPreQ1	.	misc_feature	1	21	.	+	.	ID=protospacer;color=%23ff9ccd
-PAH_E7.5_34_EvoPreQ1	.	misc_feature	22	97	.	+	.	ID=scaffold;color=%23b7e6d7
-PAH_E7.5_34_EvoPreQ1	.	misc_feature	98	131	.	-	.	ID=RTT;color=%23c7b0e3
-PAH_E7.5_34_EvoPreQ1	.	misc_feature	98	194	.	+	.	ID=extension;color=%23777777
-PAH_E7.5_34_EvoPreQ1	.	misc_feature	132	144	.	-	.	ID=PBS;color=%2385dae9

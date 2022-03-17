@@ -1,3 +1,4 @@
+import textwrap
 from pathlib import Path
 
 import yaml
@@ -73,21 +74,48 @@ def test_read_sets():
     # Ensure that at least one read set was found. 
     assert len(read_set_dirs) > 0
 
+    discrepancies = []
+
     for read_set_dir in read_set_dirs:
         set_name = read_set_dir.name
-        print(f'Testing {set_name}') 
 
         read_set = ReadSet(set_name)
 
-        actual_values = {}
-        for qname, als in hits.sam.grouped_by_name(read_set.bam_fn):
-            l = read_set.categorizer(als, read_set.target_info)
-            l.categorize()
-            actual_values[qname] = {
-                'category': l.category,
-                'subcategory': l.subcategory,
-            }
+        num_tested = 0
 
-        for qname, expected in read_set.expected_values.items():
-            actual = actual_values[qname]
-            assert (expected['category'], expected['subcategory']) == (actual['category'], actual['subcategory']), f'{read_set.set_name} {qname} {expected["note"]}'
+        for qname, als in hits.sam.grouped_by_name(read_set.bam_fn):
+            try:
+                layout = read_set.categorizer(als, read_set.target_info)
+                layout.categorize()
+
+                category = layout.category
+                subcategory = layout.subcategory
+
+            except:
+                category = 'error'
+                subcategory = 'error'
+
+            expected = read_set.expected_values[qname]
+
+            if expected['category'] != category or expected['subcategory'] != subcategory:
+                discrepancies.append((set_name, qname, expected, category, subcategory))
+
+            num_tested += 1
+
+        print(f'Tested {num_tested: >3d} sequences for {set_name}.') 
+
+    diagnostic_messages = []
+    for set_name, qname, expected, category, subcategory in discrepancies:
+
+        diagnostic_message = f'''
+            set name: {set_name}
+            query name: {qname}
+            expected: ({expected["category"]}, {expected["subcategory"]})
+            actual: ({category}, {subcategory})
+            note: {expected["note"]}
+        '''
+
+        diagnostic_messages.append(textwrap.dedent(diagnostic_message))
+    
+    full_diagnostic_message = '\n'.join(diagnostic_messages)
+    assert len(discrepancies) == 0, full_diagnostic_message

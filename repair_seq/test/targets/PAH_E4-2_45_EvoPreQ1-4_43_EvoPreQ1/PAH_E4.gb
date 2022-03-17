@@ -26,8 +26,14 @@ FEATURES             Location/Qualifiers
      misc_feature    complement(613..625)
                      /label="PAH_E4.2_45_EvoPreQ1_PBS"
                      /ApEinfo_fwdcolor="#85dae9"
+     misc_feature    complement(610..629)
+                     /label="PAH_E4.2_45_EvoPreQ1_protospacer"
+                     /ApEinfo_fwdcolor="#85dae9"
      misc_feature    537..548
                      /label="PAH_E4.4_43_EvoPreQ1_PBS"
+                     /ApEinfo_fwdcolor="#85dae9"
+     misc_feature    532..551
+                     /label="PAH_E4.4_43_EvoPreQ1_protospacer"
                      /ApEinfo_fwdcolor="#85dae9"
 ORIGIN
         1 attctcatac ttaatgcacc aaccagtcat tcccacagta ttgtggatgc ttccaagact

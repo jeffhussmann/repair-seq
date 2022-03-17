@@ -26,8 +26,14 @@ FEATURES             Location/Qualifiers
      misc_feature    665..677
                      /label="HEK3_attB_A_30_PBS"
                      /ApEinfo_fwdcolor="#85dae9"
+     misc_feature    661..680
+                     /label="HEK3_attB_A_30_protospacer"
+                     /ApEinfo_fwdcolor="#85dae9"
      misc_feature    complement(768..779)
                      /label="HEK3_attB_B_30_PBS"
+                     /ApEinfo_fwdcolor="#85dae9"
+     misc_feature    complement(765..784)
+                     /label="HEK3_attB_B_30_protospacer"
                      /ApEinfo_fwdcolor="#85dae9"
 ORIGIN
         1 agagtctgtg ggaggaacag ccagtgtttc aggatggcta aagcagaggt tgtgaagggc

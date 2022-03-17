@@ -16,12 +16,13 @@ pPC1655	.	misc_feature	3063	3068	.	+	.	ID=arrayed_sequencing_start;color=%23b1ff
 pPC1655	.	misc_feature	3063	3089	.	+	.	ID=forward_primer;color=%2375c6a9
 pPC1655	.	primer	3063	3089	.	+	.	ID=PC1014;color=%23f58a5e;note=sequence%3A%20ACACTCTTTCCCTACACGACGCTCTTCCGATCTNNNNNGCCTTTAGTGATGGCCTGGCTCACCTG
 pPC1655	.	sgRNA	3186	3207	.	+	.	ID=SaCas9%20target%20left;color=%23c6c9d1;effector=SaCas9H840A
+pPC1655	.	misc_feature	3204	3253	.	+	.	ID=intended_deletion_sample01_pegRNA1_sample01_pegRNA2;color=%23c6c9d1
 pPC1655	.	sgRNA	3252	3273	.	-	.	ID=SaCas9%20target%20right;color=%23c6c9d1;effector=SaCas9H840A
 pPC1655	.	misc_feature	3329	3348	.	-	.	ID=reverse_primer;color=%23d59687
 pPC1655	.	primer	3329	3348	.	-	.	ID=PC1015;color=%23f58a5e;note=sequence%3A%20TGGAGTTCAGACGTGTGCTCTTCCGATCTTAGGCGGCCGCTGCACGTAG
 pPC1655	.	misc_feature	3338	3345	.	+	.	ID=NotI%20site;color=%23ff9ccd
-pPC1655	.	misc_feature	3353	3373	.	-	.	ID=gDNA_reverse_primer;color=%23b7e6d7
 pPC1655	.	misc_feature	3353	3373	.	-	.	ID=sequencing_start;color=%23b1ff67
+pPC1655	.	misc_feature	3353	3373	.	-	.	ID=gDNA_reverse_primer;color=%23b7e6d7
 pPC1655	.	promoter	3408	4579	.	+	.	ID=EF1a%20promoter;color=%23ffef86
 pPC1655	.	primer_bind	3889	3917	.	-	.	ID=PC0043;color=%23b7e6d7
 pPC1655	.	gene	4591	5187	.	+	.	ID=PURO%20resistance%20gene;color=%23faac61

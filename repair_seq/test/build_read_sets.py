@@ -13,11 +13,6 @@ import repair_seq.pooled_screen
 import repair_seq.arrayed_experiment_group
 from repair_seq.test.test_read_sets import ReadSet, base_dir
 
-dsb_pools = repair_seq.pooled_screen.get_all_pools('/lab/solexa_weissman/jah/projects/ddr')
-
-dsb_manual_read_sets = [
-]
-
 def build_pooled_screen_read_sets():
     src_read_sets_dir = base_dir / 'manual_read_sets' / 'pooled_screens'
     read_set_fns = src_read_sets_dir.glob('*.yaml')
@@ -65,7 +60,7 @@ def build_pooled_screen_read_sets():
 
         read_set.expected_values_fn.write_text(yaml.safe_dump(read_info, sort_keys=False))
         
-def build_arrayed_group_read_sets():
+def build_arrayed_group_read_sets(only_new=False):
     src_read_sets_dir = base_dir / 'manual_read_sets' / 'arrayed_groups'
     read_set_fns = src_read_sets_dir.glob('*.yaml')
 
@@ -75,6 +70,10 @@ def build_arrayed_group_read_sets():
         manual_details = yaml.safe_load(read_set_fn.read_text())
 
         read_set = ReadSet(set_name)
+
+        if read_set.dir.is_dir() and only_new:
+            continue
+
         read_set.dir.mkdir(exist_ok=True, parents=True)
 
         exps = repair_seq.arrayed_experiment_group.get_all_experiments(manual_details['base_dir'])
