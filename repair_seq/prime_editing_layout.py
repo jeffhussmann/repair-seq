@@ -290,6 +290,15 @@ class Layout(layout.Categorizer):
                         candidate_als['definite'].append(cropped_pegRNA_extension_al)
                     else:
                         candidate_als['ambiguous'].append(cropped_pegRNA_extension_al)
+
+                else:
+                    # If a reasonably long pegRNA alignment reaches the end of the read before switching back to target,
+                    # parsimoniously assume that it eventually does so.
+                    covered = interval.get_covered(pegRNA_al)
+                    if side == 'right' and covered.end == self.whole_read.end and len(covered) > 20:
+                        candidate_als['definite'].append(pegRNA_al)
+                    elif side == 'left' and covered.start == 0 and len(covered) > 20:
+                        candidate_als['definite'].append(pegRNA_al)
                     
             for status, als in candidate_als.items():
                 if len(als) == 1:
@@ -843,8 +852,8 @@ class Layout(layout.Categorizer):
             if edits / scaffold_overlap > 0.2:
                 scaffold_overlap = 0
 
-            # Insist on overlapping HA_RTT to prevent false positive from protospacer alignment.            
-            if not sam.overlaps_feature(al, self.HA_RTT, require_same_strand=False):
+            # Insist on overlapping HA_RT to prevent false positive from protospacer alignment.            
+            if not sam.overlaps_feature(al, self.HA_RT, require_same_strand=False):
                 scaffold_overlap = 0
 
         return scaffold_overlap
@@ -854,16 +863,16 @@ class Layout(layout.Categorizer):
         return max([self.alignment_scaffold_overlap(al) for al in self.donor_alignments], default=0)
 
     @memoized_property
-    def HA_RTT(self):
+    def HA_RT(self):
         pegRNA_name = self.target_info.pegRNA_names[0]
-        return self.target_info.features[pegRNA_name, f'HA_RTT_{pegRNA_name}']
+        return self.target_info.features[pegRNA_name, f'HA_RT_{pegRNA_name}']
 
-    def deletion_overlaps_HA_RTT(self, deletion):
-        HA_RTT_interval = interval.Interval.from_feature(self.HA_RTT)
+    def deletion_overlaps_HA_RT(self, deletion):
+        HA_RT_interval = interval.Interval.from_feature(self.HA_RT)
 
         deletion_interval = interval.Interval(min(deletion.starts_ats), max(deletion.ends_ats))
 
-        return not interval.are_disjoint(HA_RTT_interval, deletion_interval)
+        return not interval.are_disjoint(HA_RT_interval, deletion_interval)
 
     def interesting_and_uninteresting_indels(self, als):
         indels = self.extract_indels_from_alignments(als)
@@ -1402,7 +1411,7 @@ class Layout(layout.Categorizer):
         donor_al = self.donor_insertion['candidate_alignment']
         indels = self.extract_indels_from_alignments([donor_al])
 
-        for feature in self.target_info.donor_insertions:
+        for feature in self.target_info.pegRNA_programmed_insertions:
             shares_both_HAs = (self.donor_insertion['shared_HAs'] == {'left', 'right'})
             overlaps_feature = sam.overlaps_feature(donor_al, feature, require_same_strand=False)
             no_big_indels = not any(indel.length > 1 for indel, _ in indels)
@@ -1960,8 +1969,8 @@ class Layout(layout.Categorizer):
                 else: # one indel, not a donor deletion
                     if self.has_donor_SNV:
                         if indel.kind == 'D':
-                            # If the deletion overlaps with HA_RTT on the target, consider this an unintended donor integration.                            
-                            #if self.deletion_overlaps_HA_RTT(indel) and self.donor_insertion is not None:
+                            # If the deletion overlaps with HA_RT on the target, consider this an unintended donor integration.                            
+                            #if self.deletion_overlaps_HA_RT(indel) and self.donor_insertion is not None:
                             #    self.register_donor_insertion()
                             self.category = 'edit + indel'
                             self.subcategory = 'edit + deletion'
@@ -2346,6 +2355,7 @@ class Layout(layout.Categorizer):
             refs_to_draw={ti.target, *ti.pegRNA_names},
             label_overrides={name: 'protospacer' for name in ti.sgRNAs},
             inferred_amplicon_length=self.inferred_amplicon_length,
+            center_on_primers=True,
         )
 
         diagram_kwargs.update(**manual_diagram_kwargs)

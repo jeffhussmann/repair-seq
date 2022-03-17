@@ -4,6 +4,7 @@ import datetime
 import gzip
 import heapq
 import itertools
+import multiprocessing
 import os
 import pickle
 import resource
@@ -1017,9 +1018,12 @@ class CommonSequenceExperiment(SingleGuideExperiment):
         return outcome_record.CommonSequenceOutcomeRecord
 
 def collapse_categories(df):
+    # Collapse details, retaining subcategories.
     possibly_collapse = [
         'genomic insertion',
         'donor misintegration',
+        'wild type',
+        'unintended annealing of RT\'ed sequence',
     ]
     to_collapse = [cat for cat in possibly_collapse if cat in df.index.levels[0]]
 
@@ -1031,6 +1035,7 @@ def collapse_categories(df):
             to_add = df.loc[category, subcat]
             new_rows[category, subcat, 'collapsed'] = to_add.sum()
 
+    # Collapse subcategories, retaining details.
     if any(c == 'donor' for c, s, d in df.index.values):
         all_details = set(d for s, d in df.loc['donor'].index.values)
 
@@ -1040,7 +1045,13 @@ def collapse_categories(df):
         to_collapse.append('donor')
 
     df = df.drop(to_collapse, level=0, errors='ignore')
-    new_rows = pd.DataFrame.from_dict(new_rows, orient='index')
+
+    if isinstance(df, pd.DataFrame):
+        new_rows = pd.DataFrame.from_dict(new_rows, orient='index')
+    elif isinstance(df, pd.Series):
+        new_rows = pd.Series(new_rows)
+    else:
+        raise ValueError
 
     return pd.concat((df, new_rows))
 
@@ -1085,6 +1096,7 @@ class PooledScreen:
 
         self.sgRNA = self.sample_sheet.get('sgRNA')
         self.donor = self.sample_sheet.get('donor')
+        self.pegRNAs = self.sample_sheet.get('pegRNAs')
 
         if 'R1_primer' in self.sample_sheet and 'R2_primer' in self.sample_sheet:
             primer_names = [self.sample_sheet['R1_primer'], self.sample_sheet['R2_primer']]
@@ -1166,17 +1178,20 @@ class PooledScreen:
 
     @memoized_property
     def target_info(self):
-        return target_info.TargetInfo(self.base_dir,
-                                      self.target_name,
-                                      donor=self.donor,
-                                      sgRNA=self.sgRNA,
-                                      primer_names=self.primer_names,
-                                      sequencing_start_feature_name=self.sequencing_start_feature_name,
-                                      supplemental_indices=self.supplemental_indices,
-                                      infer_homology_arms=self.sample_sheet.get(
-                                          'infer_homology_arms', False),
-                                     )
+        ti = target_info.TargetInfo(self.base_dir,
+                                    self.target_name,
+                                    donor=self.donor,
+                                    sgRNA=self.sgRNA,
+                                    pegRNAs=self.pegRNAs,
+                                    primer_names=self.primer_names,
+                                    sequencing_start_feature_name=self.sequencing_start_feature_name,
+                                    supplemental_indices=self.supplemental_indices,
+                                    infer_homology_arms=self.sample_sheet.get(
+                                        'infer_homology_arms', False),
+                                   )
 
+        return ti
+        
     @memoized_property
     def diagram_kwargs(self):
         label_offsets = {}

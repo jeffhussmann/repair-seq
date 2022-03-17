@@ -38,6 +38,7 @@ def build_guide_specific_target(original_target,
 
     fns_to_copy = [f'{source}.gb' for source in original_target.sources if source != original_genbank_name]
     fns_to_copy.append('manifest.yaml')
+    fns_to_copy.append('pegRNAs.csv')
 
     relative_original_dir = Path(os.path.relpath(original_target.dir, new_dir))
 
@@ -200,14 +201,8 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    if args.vector == 'PE_singles_sub':
-        original_target = 'pPC1000_G6C_15'
-        original_genbank_name = 'ppc1000'
-        guide_library_names = ['DDR_library']
-        build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)
-
-    if args.vector == 'PE_singles_ins':
-        original_target = 'pPC1000_1044'
+    if args.vector == 'PE_singles':
+        original_target = 'pPC1000'
         original_genbank_name = 'ppc1000'
         guide_library_names = ['DDR_library']
         build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)

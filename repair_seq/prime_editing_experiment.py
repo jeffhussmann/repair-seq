@@ -30,39 +30,36 @@ class PrimeEditingExperiment(experiment.Experiment):
         self.length_plot_smooth_window = 0
         self.x_tick_multiple = 50
 
-        label_offsets = {}
-        for (seq_name, feature_name), feature in self.target_info.features.items():
-            if feature.feature.startswith('donor_insertion'):
-                label_offsets[feature_name] = 2
-                #self.target_info.features_to_show.add((seq_name, feature_name))
-            elif feature.feature.startswith('donor_deletion'):
-                label_offsets[feature_name] = 3
-                #self.target_info.features_to_show.add((seq_name, feature_name))
-            elif feature_name.startswith('HA_RT'):
-                label_offsets[feature_name] = 1
-
-        label_offsets[f'{self.target_info.primary_sgRNA}_PAM'] = 1
-        other_sgRNAs = [sgRNA for sgRNA in self.target_info.sgRNAs if sgRNA != self.target_info.primary_sgRNA]
-        for sgRNA in other_sgRNAs:
-            label_offsets[f'{sgRNA}_PAM'] = 1
-
-        self.target_info.features_to_show.update(set(self.target_info.PAM_features))
-        
-        self.diagram_kwargs.update(draw_sequence=True,
-                                   flip_target=self.target_info.sequencing_direction == '-',
-                                   flip_donor=self.target_info.sgRNA_feature.strand == self.target_info.sequencing_direction,
-                                   highlight_SNPs=True,
-                                   center_on_primers=True,
-                                   split_at_indels=True,
-                                   force_left_aligned=False,
-                                   label_offsets=label_offsets,
-                                  )
 
         self.read_types = [
             'trimmed',
             'trimmed_by_name',
             'nonredundant',
         ]
+
+    @memoized_property
+    def diagram_kwargs(self):
+        label_offsets = {}
+
+        label_offsets[f'{self.target_info.primary_sgRNA}_PAM'] = 1
+        other_sgRNAs = [sgRNA for sgRNA in self.target_info.sgRNAs if sgRNA != self.target_info.primary_sgRNA]
+        for sgRNA in other_sgRNAs:
+            label_offsets[f'{sgRNA}_PAM'] = 1
+
+        features_to_show = {*self.target_info.features_to_show, *set(self.target_info.PAM_features)}
+        
+        diagram_kwargs = dict(
+            ref_centric=True,
+            center_on_primers=True,
+            flip_target=self.target_info.sequencing_direction == '-',
+            flip_donor=self.target_info.sgRNA_feature.strand == self.target_info.sequencing_direction,
+            highlight_SNPs=True,
+            split_at_indels=True,
+            label_offsets=label_offsets,
+            features_to_show=features_to_show,
+        )
+
+        return diagram_kwargs
 
     def __repr__(self):
         return f'PrimeEditingExperiment: sample_name={self.sample_name}, group={self.group}, base_dir={self.base_dir}'
@@ -230,7 +227,11 @@ class PrimeEditingExperiment(experiment.Experiment):
 
             layout.categorize()
             
-            diagram = layout.plot(title='', **diagram_kwargs)
+            try:
+                diagram = layout.plot(title='', **diagram_kwargs)
+            except:
+                print(self.sample_name, qname)
+                raise
                 
             yield diagram
 

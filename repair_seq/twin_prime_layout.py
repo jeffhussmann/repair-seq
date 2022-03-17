@@ -19,6 +19,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         ),
         ('intended edit',
             ('replacement',
+             'partial replacement',
              'deletion',
             ),
         ),
@@ -84,8 +85,44 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         return {side for side in ['left', 'right'] if self.pegRNA_extension_als[side] is not None}
 
     @memoized_property
-    def is_intended_edit(self):
-        return self.share_feature(self.pegRNA_extension_als['left'], 'overlap', self.pegRNA_extension_als['right'], 'overlap')
+    def has_intended_pegRNA_overlap(self):
+        als = self.pegRNA_extension_als
+        share_overlap = self.share_feature(als['left'], 'overlap', als['right'], 'overlap')
+        return share_overlap
+
+    @memoized_property
+    def intended_SNVs_replaced(self):
+        als = self.pegRNA_extension_als
+        positions_not_replaced = {side: self.alignment_SNV_summary(als[side])['mismatches'] for side in als}
+        positions_replaced = {side: self.alignment_SNV_summary(als[side])['matches'] for side in als}
+
+        any_positions_not_replaced = any(len(ps) > 0 for side, ps in positions_not_replaced.items())
+        any_positions_replaced = any(len(ps) > 0 for side, ps in positions_replaced.items())
+
+        if not any_positions_replaced:
+            fraction_replaced = 'none'
+        else:
+            if any_positions_not_replaced:
+                fraction_replaced = 'partial replacement'
+            else:
+                fraction_replaced = 'replacement'
+
+        return fraction_replaced
+
+    @memoized_property
+    def is_intended_replacement(self):
+        if self.target_info.twin_pegRNA_intended_deletion is not None:
+            status = False
+        else:
+            if not self.has_intended_pegRNA_overlap:
+                status = False
+            else:
+                if self.intended_SNVs_replaced == 'none':
+                    status = False
+                else:
+                    status = self.intended_SNVs_replaced
+
+        return status
 
     @memoized_property
     def nonspecific_amplification(self):
@@ -110,11 +147,38 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         else:
             covering_als = interval.make_parsimonious(covering_als)
 
-        # If a single-end read doesn't reach the right prime, the amplicon length is unknown.
-        if not sam.overlaps_feature(self.target_edge_alignments['right'], self.target_info.primers_by_side_of_read['right']):
-            self.trust_inferred_length = False
-            
         return covering_als
+
+    def alignment_SNV_summary(self, al):
+        ''' Identifies any positions in al that correspond to sequence differences
+        between the target and pegRNAs and separates them based on whether they
+        agree with al's reference sequence or not.
+        ''' 
+
+        ti = self.target_info
+        SNPs = ti.pegRNA_SNVs
+        
+        positions_seen = {
+            'matches': set(),
+            'mismatches': set(),
+        }
+
+        if al is None or al.is_unmapped:
+            return positions_seen
+
+        ref_seq = ti.reference_sequences[al.reference_name]
+
+        pegRNA_SNP_positions = {SNPs[al.reference_name][name]['position'] for name in SNPs[al.reference_name]}
+
+        for true_read_i, read_b, ref_i, ref_b, qual in sam.aligned_tuples(al, ref_seq):
+            # Note: read_b and ref_b are as if the read is the forward strand
+            if ref_i in pegRNA_SNP_positions:
+                if read_b != ref_b:
+                    positions_seen['mismatches'].add(ref_i)
+                else:
+                    positions_seen['matches'].add(ref_i)
+
+        return positions_seen
 
     def categorize(self):
         self.outcome = None
@@ -144,33 +208,41 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
             if len(interesting_indels) == 0:
                 if self.starts_at_expected_location:
-                    self.category = 'wild type'
-
-                    if len(self.non_donor_SNVs) == 0 and len(uninteresting_indels) == 0:
-                        self.subcategory = 'clean'
+                    # Need to check in case the intended replacements only involves minimal changes. 
+                    if self.is_intended_replacement:
+                        self.category = 'intended edit'
+                        self.subcategory = self.is_intended_replacement
                         self.outcome = Outcome('n/a')
-
-                    elif len(uninteresting_indels) == 1:
-                        self.subcategory = 'short indel far from cut'
-
-                        indel = uninteresting_indels[0]
-                        if indel.kind == 'D':
-                            self.outcome = DeletionOutcome(indel)
-                        elif indel.kind == 'I':
-                            self.outcome = InsertionOutcome(indel)
-                        else:
-                            raise ValueError(indel.kind)
-
-                    elif len(uninteresting_indels) > 1:
-                        self.category = 'uncategorized'
-                        self.subcategory = 'uncategorized'
-                        self.outcome = Outcome('n/a')
+                        self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
 
                     else:
-                        self.subcategory = 'mismatches'
-                        self.outcome = MismatchOutcome(self.non_donor_SNVs)
+                        self.category = 'wild type'
 
-                    self.relevant_alignments = [target_alignment]
+                        if len(self.non_donor_SNVs) == 0 and len(uninteresting_indels) == 0:
+                            self.subcategory = 'clean'
+                            self.outcome = Outcome('n/a')
+
+                        elif len(uninteresting_indels) == 1:
+                            self.subcategory = 'short indel far from cut'
+
+                            indel = uninteresting_indels[0]
+                            if indel.kind == 'D':
+                                self.outcome = DeletionOutcome(indel)
+                            elif indel.kind == 'I':
+                                self.outcome = InsertionOutcome(indel)
+                            else:
+                                raise ValueError(indel.kind)
+
+                        elif len(uninteresting_indels) > 1:
+                            self.category = 'uncategorized'
+                            self.subcategory = 'uncategorized'
+                            self.outcome = Outcome('n/a')
+
+                        else:
+                            self.subcategory = 'mismatches'
+                            self.outcome = MismatchOutcome(self.non_donor_SNVs)
+
+                        self.relevant_alignments = [target_alignment]
 
                 else:
                     self.category = 'uncategorized'
@@ -226,32 +298,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                     self.details = 'n/a'
                     self.relevant_alignments = self.uncategorized_relevant_alignments
 
-        elif len(self.has_any_pegRNA_extension_al) > 0:
-            if self.is_intended_edit:
-                if self.target_info.twin_pegRNA_intended_deletion is None:
-                    self.category = 'intended edit'
-                    self.subcategory = 'replacement'
-                    self.outcome = Outcome('n/a')
-                    self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
-                else:
-                    self.category = 'uncategorized'
-                    self.subcategory = 'uncategorized'
-                    self.details = 'n/a'
-                    self.relevant_alignments = self.uncategorized_relevant_alignments
-
-            else:
-                self.category = 'unintended annealing of RT\'ed sequence'
-                if len(self.has_any_pegRNA_extension_al) == 1:
-                    side = sorted(self.has_any_pegRNA_extension_al)[0]
-                    self.subcategory = f'{side} pegRNA'
-                elif len(self.has_any_pegRNA_extension_al) == 2:
-                    self.subcategory = f'both pegRNAs'
-                else:
-                    raise ValueError(len(self.has_any_pegRNA_extension_al))
-
-                self.outcome = Outcome('n/a')
-                self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
-
         elif self.long_duplication is not None:
             subcategory, ref_junctions, indels, als_with_donor_SNVs, merged_als = self.long_duplication
             if len(indels) == 0:
@@ -272,6 +318,26 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                 self.details = 'n/a'
                 self.relevant_alignments = self.uncategorized_relevant_alignments
 
+        elif len(self.has_any_pegRNA_extension_al) > 0:
+            if self.is_intended_replacement:
+                self.category = 'intended edit'
+                self.subcategory = self.is_intended_replacement
+                self.outcome = Outcome('n/a')
+                self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
+
+            else:
+                self.category = 'unintended annealing of RT\'ed sequence'
+                if len(self.has_any_pegRNA_extension_al) == 1:
+                    side = sorted(self.has_any_pegRNA_extension_al)[0]
+                    self.subcategory = f'{side} pegRNA'
+                elif len(self.has_any_pegRNA_extension_al) == 2:
+                    self.subcategory = f'both pegRNAs'
+                else:
+                    raise ValueError(len(self.has_any_pegRNA_extension_al))
+
+                self.outcome = Outcome('n/a')
+                self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
+
         elif self.non_primer_nts <= 50:
             self.category = 'nonspecific amplification'
             self.subcategory = 'unknown'
@@ -283,7 +349,11 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             organism, _ = self.target_info.remove_organism_from_alignment(self.nonspecific_amplification[0])
             self.subcategory = organism
             self.details = 'n/a'
-            self.relevant_alignments = self.uncategorized_relevant_alignments
+            self.relevant_alignments = self.target_edge_alignments_list + self.nonspecific_amplification
+
+            # If a single-end read doesn't reach the right primer, the amplicon length is unknown.
+            if not sam.overlaps_feature(self.target_edge_alignments['right'], self.target_info.primers_by_side_of_read['right'], require_same_strand=False):
+                self.trust_inferred_length = False
 
         else:
             self.category = 'uncategorized'
