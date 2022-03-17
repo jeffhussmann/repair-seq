@@ -2644,6 +2644,49 @@ class PooledScreen:
         highest_gene_gene = pd.Series(highest_gene_gene).sort_index()
         highest_gene_gene.to_csv(self.fns['highest_guide_correlations'])
 
+    def process(self, num_processes=18):
+        # Note: in old GNU parallel-based design, environment needed to be
+        # passed via subprocess to prevent numpy/pandas from greedily consuming
+        # cores:
+        #    env = os.environ
+        #    env['OPENBLAS_NUM_THREADS'] = '1'
+        # Unclear if equivalent is needed for multiprocessing design.
+
+        def process_stage(stage):
+            with multiprocessing.Pool(num_processes) as process_pool:
+                arg_tuples = []
+
+                for fixed_guide, variable_guide in self.guide_combinations_by_read_count:
+                    arg_tuple = (self.base_dir, self.name, fixed_guide, variable_guide, stage, None, True)
+                    arg_tuples.append(arg_tuple)
+
+                process_pool.starmap(process_single_guide_experiment_stage, arg_tuples)
+
+        def process_common_sequences():
+            self.make_common_sequences()
+
+            with multiprocessing.Pool(num_processes) as process_pool:
+                arg_tuples = [(self.base_dir, self.name, chunk_name) for chunk_name in self.common_sequence_chunk_exp_names]
+                process_pool.starmap(process_common_sequences_chunk, arg_tuples)
+
+            self.merge_common_sequence_outcomes()
+            self.merge_common_sequence_special_alignments()
+
+        process_stage('preprocess')
+        process_common_sequences()
+        process_stage('align')
+        process_stage('categorize')
+
+        self.generate_outcome_counts()
+        self.merge_templated_insertion_details()
+        self.extract_genomic_insertion_length_distributions()
+        self.extract_category_counts()
+        self.generate_high_frequency_outcome_counts()
+        #self.compute_deletion_boundaries()
+        #self.merge_deletion_ranges()
+        #self.merge_templated_insertion_details(fn_key='filtered_duplication_details')
+        #self.merge_special_alignments()
+
 class PooledScreenNoUMI(PooledScreen):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -2815,105 +2858,14 @@ def get_all_pools(base_dir=Path.home() / 'projects' / 'repair_seq', category_gro
 
     return pools
 
-def parallel(base_dir, pool_name, max_procs, show_progress_bars=False, preload_indices=False):
-    if show_progress_bars:
-        progress = tqdm.tqdm
-        possibly_progress = ['--bar']
-        num_args = '4'
-    else:
-        progress = None
-        possibly_progress = []
-        num_args = '5'
-
-    pool = get_pool(base_dir, pool_name, progress=progress)
-
-    if preload_indices:
-        for organism in pool.supplemental_indices:
-            index_dir = pool.supplemental_indices[organism]['STAR']
-            print(f'Loading {organism} index at {index_dir}...')
-            mapping_tools.load_STAR_index(index_dir)
-
-    def process_stage(stage):
-        parallel_command = [
-            'parallel',
-            '-n', num_args,
-        ] + possibly_progress + [
-            '--max-procs', str(max_procs),
-            'repair_seq',
-            '--base_dir', str(base_dir),
-            'process', ':::',
-        ]
-
-        arg_tuples = []
-
-        for fixed_guide, variable_guide in pool.guide_combinations_by_read_count:
-            arg_tuple = (pool_name, fixed_guide, variable_guide, stage)
-            if not show_progress_bars:
-                arg_tuple += ('--timestamp',)
-
-            arg_tuples.append(arg_tuple)
-
-        for t in arg_tuples:
-            parallel_command.extend(t)
-
-        env = os.environ
-        env['OPENBLAS_NUM_THREADS'] = '1'
-
-        completed_process = subprocess.run(parallel_command, env=env)
-        if completed_process.returncode != 0:
-            print('error in parallel')
-            sys.exit(1)
-        
-    process_stage('preprocess')
-    pool.make_common_sequences()
-    parallel_common_sequences(pool, max_procs, show_progress_bars)
-
-    pool.merge_common_sequence_special_alignments()
-
-    process_stage('align')
-    process_stage('categorize')
-
-    pool.generate_outcome_counts()
-    pool.merge_templated_insertion_details()
-    pool.extract_genomic_insertion_length_distributions()
-    pool.extract_category_counts()
-    pool.generate_high_frequency_outcome_counts()
-    #pool.compute_deletion_boundaries()
-    ##pool.merge_deletion_ranges()
-    ##pool.merge_templated_insertion_details(fn_key='filtered_duplication_details')
-    ##pool.merge_special_alignments()
-
-def parallel_common_sequences(pool, max_procs, show_progress_bars=False):
-    if show_progress_bars:
-        possibly_progress = ['--progress']
-    else:
-        possibly_progress = []
-
-    parallel_command = [
-        'parallel',
-        '-n', '2',
-    ] + possibly_progress + [
-        '--max-procs', str(max_procs),
-        'repair_seq',
-        '--base_dir', str(pool.base_dir),
-        'process_common_sequences', ':::',
-    ]
-
-    arg_pairs = [(pool.name, chunk_name) for chunk_name in pool.common_sequence_chunk_exp_names]
-    for pair in sorted(arg_pairs):
-        parallel_command.extend(pair)
-    
-    env = os.environ
-    env['OPENBLAS_NUM_THREADS'] = '1'
-
-    completed_process = subprocess.run(parallel_command, env=env)
-    if completed_process.returncode != 0:
-        print('error in parallel')
-        sys.exit(1)
-
-    pool.merge_common_sequence_outcomes()
-
-def process(base_dir, pool_name, fixed_guide, variable_guide, stage, progress=None, print_timestamps=False):
+def process_single_guide_experiment_stage(base_dir,
+                                          pool_name,
+                                          fixed_guide,
+                                          variable_guide,
+                                          stage,
+                                          progress=None,
+                                          print_timestamps=False,
+                                         ):
     pool = get_pool(base_dir, pool_name, progress=progress)
     exp = pool.single_guide_experiment(fixed_guide, variable_guide)
 
@@ -2925,7 +2877,7 @@ def process(base_dir, pool_name, fixed_guide, variable_guide, stage, progress=No
     if print_timestamps:
         print(f'{utilities.current_time_string()} Finished {fixed_guide}-{variable_guide} {stage}')
 
-def process_common_sequences(base_dir, pool_name, chunk, progress=None):
+def process_common_sequences_chunk(base_dir, pool_name, chunk, progress=None):
     pool = get_pool(base_dir, pool_name, progress=progress)
     exp = pool.common_sequence_chunk_exp_from_name(chunk)
 
