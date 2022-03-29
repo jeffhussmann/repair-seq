@@ -298,8 +298,8 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                     self.details = 'n/a'
                     self.relevant_alignments = self.uncategorized_relevant_alignments
 
-        elif self.long_duplication is not None:
-            subcategory, ref_junctions, indels, als_with_donor_SNVs, merged_als = self.long_duplication
+        elif self.duplication is not None:
+            subcategory, ref_junctions, indels, als_with_donor_SNVs, merged_als = self.duplication
             if len(indels) == 0:
                 self.outcome = DuplicationOutcome(ref_junctions)
 
@@ -468,7 +468,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                                                    )
 
         # Draw the pegRNAs.
-        if any(al.reference_name in ti.pegRNA_names for al in self.relevant_alignments):
+        if any(al.reference_name in ti.pegRNA_names for al in als_to_plot):
             ref_ys = {}
             ref_ys['left'] = diagram.max_y + diagram.target_and_donor_y_gap
             ref_ys['right'] = ref_ys['left'] + 7 * diagram.gap_between_als
@@ -482,7 +482,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
             ref_p_to_xs = {}
 
-            #if any(al.reference_name == ti.pegRNA_names_by_side_of_read['left'] for al in self.relevant_alignments):
             left_name = ti.pegRNA_names_by_side_of_read['left']
             ref_p_to_xs['left'] = diagram.draw_reference(left_name, ref_ys['left'], True, label_features=False)
 
@@ -491,20 +490,10 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
             diagram.max_x = max(old_max_x, ref_p_to_xs['left'](0))
 
-            #else:
-            #    diagram.max_x = old_max_x
-
-
-            #if any(al.reference_name == ti.pegRNA_names_by_side_of_read['right'] for al in self.relevant_alignments):
             right_name = ti.pegRNA_names_by_side_of_read['right']
             ref_p_to_xs['right'] = diagram.draw_reference(right_name, ref_ys['right'], False)
 
-            #offset_to_ref_ps = ti.feature_offset_to_ref_p(ti.pegRNA_names_by_side_of_read['right'], 'overlap')
-            #overlap_xs = sorted([ref_p_to_xs['right'](offset_to_ref_ps[0]), ref_p_to_xs['right'](offset_to_ref_ps[max(offset_to_ref_ps)])])
-
             diagram.min_x = min(old_min_x, ref_p_to_xs['right'](0))
-            #else:
-            #    diagram.min_x = old_min_x
 
             diagram.ax.set_xlim(diagram.min_x, diagram.max_x)
 

@@ -1,11 +1,9 @@
-import shutil
 import gzip
 from collections import defaultdict, Counter
 
 import h5py
 import numpy as np
 
-import hits.visualize
 from hits import fastq, utilities, adapters
 from knock_knock import experiment, svg
 from repair_seq import prime_editing_layout, twin_prime_layout, pooled_layout
@@ -30,7 +28,6 @@ class PrimeEditingExperiment(experiment.Experiment):
         self.length_plot_smooth_window = 0
         self.x_tick_multiple = 50
 
-
         self.read_types = [
             'trimmed',
             'trimmed_by_name',
@@ -39,12 +36,10 @@ class PrimeEditingExperiment(experiment.Experiment):
 
     @memoized_property
     def diagram_kwargs(self):
-        label_offsets = {}
+        label_offsets = {feature_name: 1 for _, feature_name in self.target_info.PAM_features}
 
-        label_offsets[f'{self.target_info.primary_sgRNA}_PAM'] = 1
-        other_sgRNAs = [sgRNA for sgRNA in self.target_info.sgRNAs if sgRNA != self.target_info.primary_sgRNA]
-        for sgRNA in other_sgRNAs:
-            label_offsets[f'{sgRNA}_PAM'] = 1
+        for pegRNA in self.target_info.pegRNA_names:
+            label_offsets[f'insertion_{pegRNA}'] = 1
 
         features_to_show = {*self.target_info.features_to_show, *set(self.target_info.PAM_features)}
         
@@ -52,7 +47,6 @@ class PrimeEditingExperiment(experiment.Experiment):
             ref_centric=True,
             center_on_primers=True,
             flip_target=self.target_info.sequencing_direction == '-',
-            flip_donor=self.target_info.sgRNA_feature.strand == self.target_info.sequencing_direction,
             highlight_SNPs=True,
             split_at_indels=True,
             label_offsets=label_offsets,
@@ -60,9 +54,6 @@ class PrimeEditingExperiment(experiment.Experiment):
         )
 
         return diagram_kwargs
-
-    def __repr__(self):
-        return f'PrimeEditingExperiment: sample_name={self.sample_name}, group={self.group}, base_dir={self.base_dir}'
 
     @property
     def default_read_type(self):
@@ -171,53 +162,6 @@ class PrimeEditingExperiment(experiment.Experiment):
         except:
             print(self.group, self.sample_name)
             raise
-
-    @memoized_property
-    def qname_to_inferred_length(self):
-        qname_to_inferred_length = {}
-        for outcome in self.outcome_iter():
-            qname_to_inferred_length[outcome.query_name] = outcome.inferred_amplicon_length
-
-        return qname_to_inferred_length
-
-    def generate_length_range_figures(self, specific_outcome=None, num_examples=1):
-        by_length = defaultdict(lambda: utilities.ReservoirSampler(num_examples))
-
-        al_groups = self.alignment_groups(outcome=specific_outcome)
-        for name, als in al_groups:
-            length = self.qname_to_inferred_length[name]
-
-            if length == -1:
-                length = self.length_to_store_unknown
-
-            by_length[length].add((name, als))
-
-        if specific_outcome is None:
-            fns = self.fns
-        else:
-            fns = self.outcome_fns(specific_outcome)
-
-        fig_dir = fns['length_ranges_dir']
-            
-        if fig_dir.is_dir():
-            shutil.rmtree(str(fig_dir))
-        fig_dir.mkdir()
-
-        if specific_outcome is not None:
-            description = ': '.join(specific_outcome)
-        else:
-            description = 'Generating length-specific diagrams'
-
-        items = self.progress(by_length.items(), desc=description, total=len(by_length), leave=False)
-
-        for length, sampler in items:
-            diagrams = self.alignment_groups_to_diagrams(sampler.sample,
-                                                         num_examples=num_examples,
-                                                         **self.diagram_kwargs,
-                                                        )
-            im = hits.visualize.make_stacked_Image([d.fig for d in diagrams])
-            fn = fns['length_range_figure'](length, length)
-            im.save(fn)
 
     def alignment_groups_to_diagrams(self, alignment_groups, num_examples, **diagram_kwargs):
         subsample = utilities.reservoir_sample(alignment_groups, num_examples)

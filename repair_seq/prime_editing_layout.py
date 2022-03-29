@@ -86,6 +86,7 @@ class Layout(layout.Categorizer):
              'no scaffold, no SNV',
              'no scaffold, with deletion',
              'no scaffold, no SNV, with deletion',
+             'doesn\'t include insertion',
             ),
         ),
         ('genomic insertion',
@@ -1387,16 +1388,19 @@ class Layout(layout.Categorizer):
 
         else:
             self.category = 'unintended annealing of RT\'ed sequence'
-            if self.alignment_scaffold_overlap(details['cropped_candidate_alignment']) >= 2:
-                self.subcategory = 'includes scaffold'
+            if details['shared_HAs'] == {('left', 'right')}:
+                self.subcategory = 'doesn\'t include insertion'
             else:
-                self.subcategory = 'no scaffold'
+                if self.alignment_scaffold_overlap(details['cropped_candidate_alignment']) >= 2:
+                    self.subcategory = 'includes scaffold'
+                else:
+                    self.subcategory = 'no scaffold'
 
-            if not has_donor_SNV:
-                self.subcategory += ', no SNV'
+                if not has_donor_SNV:
+                    self.subcategory += ', no SNV'
 
-            if details['longest_edge_deletion'] is not None:
-                self.subcategory += ', with deletion'
+                if details['longest_edge_deletion'] is not None:
+                    self.subcategory += ', with deletion'
 
         self.relevant_alignments = relevant_alignments
         self.special_alignment = details['candidate_alignment']
@@ -1406,13 +1410,16 @@ class Layout(layout.Categorizer):
         
     @memoized_property
     def donor_insertion_matches_intended(self):
+        return self.templated_insertion_matches_intended(self.donor_insertion)
+
+    def templated_insertion_matches_intended(self, details):
         matches = False
 
-        donor_al = self.donor_insertion['candidate_alignment']
+        donor_al = details['candidate_alignment']
         indels = self.extract_indels_from_alignments([donor_al])
 
         for feature in self.target_info.pegRNA_programmed_insertions:
-            shares_both_HAs = (self.donor_insertion['shared_HAs'] == {'left', 'right'})
+            shares_both_HAs = (('left', 'left') in details['shared_HAs'] and ('right', 'right') in details['shared_HAs'])
             overlaps_feature = sam.overlaps_feature(donor_al, feature, require_same_strand=False)
             no_big_indels = not any(indel.length > 1 for indel, _ in indels)
 
@@ -1437,60 +1444,19 @@ class Layout(layout.Categorizer):
     #        return intended_deletion
 
     def shared_HAs(self, donor_al, target_edge_als):
-        pegRNA_seq = self.target_info.reference_sequences[self.target_info.pegRNA_names[0]]
-        q_to_HA_offsets = defaultdict(lambda: defaultdict(set))
-
         if self.target_info.homology_arms is None:
-            return None
-
-        for side in ['left', 'right']:
-            # Only register the left-most occurence of the left HA in the left target edge alignment
-            # and right-most occurence of the right HA in the right target edge alignment.
-            all_q_to_HA_offset = {}
-            
-            al = target_edge_als[side]
-
-            if al is None or al.is_unmapped:
-                continue
-            
-            for q, read_b, ref_i, ref_b, qual in sam.aligned_tuples(al, self.target_info.target_sequence):
-                if q is None:
-                    continue
-                offset = self.target_info.HA_ref_p_to_offset['target', side].get(ref_i)
-                if offset is not None:
-                    all_q_to_HA_offset[q] = offset
-            
-            if side == 'left':
-                get_most_extreme = min
-                direction = 1
-            else:
-                get_most_extreme = max
-                direction = -1
-                
-            if len(all_q_to_HA_offset) > 0:
-                q = get_most_extreme(all_q_to_HA_offset)
-                while q in all_q_to_HA_offset:
-                    q_to_HA_offsets[q][side, all_q_to_HA_offset[q]].add('target')
-                    q += direction
-
-        if donor_al is None or donor_al.is_unmapped:
-            pass
+            shared_HAs = None
         else:
-            for q, read_b, ref_i, ref_b, qual in sam.aligned_tuples(donor_al, pegRNA_seq):
-                if q is None:
-                    continue
-                for side in ['left', 'right']:
-                    offset = self.target_info.HA_ref_p_to_offset['donor', side].get(ref_i)
-                    if offset is not None:
-                        q_to_HA_offsets[q][side, offset].add('donor')
-        
-        shared = set()
-        for q in q_to_HA_offsets:
-            for side, offset in q_to_HA_offsets[q]:
-                if len(q_to_HA_offsets[q][side, offset]) == 2:
-                    shared.add(side)
+            shared_HAs = set()
+            name_by_side = {side: self.target_info.homology_arms[side]['target'].attribute['ID'] for side in ['left', 'right']}
 
-        return shared
+            for HA_side in ['left', 'right']:
+                for target_side in ['left', 'right']:
+                    HA_name = name_by_side[HA_side]
+                    if self.share_feature(donor_al, HA_name, target_edge_als[target_side], HA_name):
+                        shared_HAs.add((HA_side, target_side))
+
+        return shared_HAs
 
     @memoized_property
     def ranked_templated_insertions(self):
@@ -1553,6 +1519,222 @@ class Layout(layout.Categorizer):
 
         return ranked
 
+    def evaluate_templated_insertion(self, target_edge_als, candidate_al, source):
+        ti = self.target_info
+
+        details = {'source': source}
+
+        candidate_ref_seq = ti.reference_sequences.get(candidate_al.reference_name)
+        
+        # Find the locations on the query at which switching from edge alignments to the
+        # candidate and then back again minimizes the edit distance incurred.
+        left_results = sam.find_best_query_switch_after(target_edge_als['left'], candidate_al, ti.target_sequence, candidate_ref_seq, min)
+        right_results = sam.find_best_query_switch_after(candidate_al, target_edge_als['right'], candidate_ref_seq, ti.target_sequence, max)
+
+        # For genomic insertions, parsimoniously assign maximal query to candidates that make it all the way to the read edge
+        # even if there is a short target alignmnent at the edge.
+        if source == 'genomic':
+            min_left_results = sam.find_best_query_switch_after(target_edge_als['left'], candidate_al, ti.target_sequence, candidate_ref_seq, min)
+            if min_left_results['switch_after'] == -1:
+                left_results = min_left_results
+
+            max_right_results = sam.find_best_query_switch_after(candidate_al, target_edge_als['right'], candidate_ref_seq, ti.target_sequence, max)
+            if max_right_results['switch_after'] == len(self.seq) - 1:
+                right_results = max_right_results
+
+        # TODO: might be valuable to replace max in left_results tie breaker with something that picks the cut site if possible.
+
+        # Crop the alignments at the switch points identified.
+        target_bounds = {}
+        target_query_bounds = {}
+
+        cropped_left_al = sam.crop_al_to_query_int(target_edge_als['left'], -np.inf, left_results['switch_after'])
+        target_bounds[5] = sam.reference_edges(cropped_left_al)[3]
+        target_query_bounds[5] = interval.get_covered(cropped_left_al).end
+
+        cropped_right_al = sam.crop_al_to_query_int(target_edge_als['right'], right_results['switch_after'] + 1, np.inf)
+        if cropped_right_al is None:
+            target_bounds[3] = None
+            target_query_bounds[3] = len(self.seq)
+        else:
+            if cropped_right_al.query_alignment_length >= 8:
+                target_bounds[3] = sam.reference_edges(cropped_right_al)[5]
+                target_query_bounds[3] = interval.get_covered(cropped_right_al).start
+            else:
+                target_bounds[3] = None
+                target_query_bounds[3] = len(self.seq)
+
+        cropped_candidate_al = sam.crop_al_to_query_int(candidate_al, left_results['switch_after'] + 1, right_results['switch_after'])
+        if cropped_candidate_al is None or cropped_candidate_al.is_unmapped:
+            details['edge_als'] = target_edge_als
+            details['candidate_al'] = candidate_al
+            details['switch_afters'] = {'left': left_results['switch_after'], 'right': right_results['switch_after']}
+            details['failed'] = 'cropping eliminates insertion'
+            return details
+
+        insertion_reference_bounds = sam.reference_edges(cropped_candidate_al)   
+        insertion_query_interval = interval.get_covered(cropped_candidate_al)
+        insertion_length = len(insertion_query_interval)
+            
+        left_edits = sam.edit_distance_in_query_interval(cropped_left_al, ref_seq=ti.target_sequence, only_Q30=True)
+        right_edits = sam.edit_distance_in_query_interval(cropped_right_al, ref_seq=ti.target_sequence, only_Q30=True)
+        middle_edits = sam.edit_distance_in_query_interval(cropped_candidate_al, ref_seq=candidate_ref_seq, only_Q30=True)
+        edit_distance = left_edits + middle_edits + right_edits
+
+        gap_before_length = left_results['gap_length']
+        gap_after_length = right_results['gap_length']
+        total_gap_length = gap_before_length + gap_after_length
+        
+        has_donor_SNV = {
+            'left': self.specific_to_donor(cropped_left_al),
+            'right': self.specific_to_donor(cropped_right_al),
+        }
+        if source == 'donor':
+            has_donor_SNV['insertion'] = self.specific_to_donor(candidate_al) # should this be cropped_candidate_al?
+
+        missing_from_blunt = {
+            5: None,
+            3: None,
+        }
+
+        # TODO: there are edge cases where short extra sequence appears at start of read before expected NotI site.
+        if target_bounds[5] is not None:
+            if target_edge_als['left'].is_reverse:
+                missing_from_blunt[5] = target_bounds[5] - (ti.cut_after + 1)
+            else:
+                missing_from_blunt[5] = ti.cut_after - target_bounds[5]
+
+        if target_bounds[3] is not None:
+            missing_from_blunt[3] = (target_bounds[3] - ti.cut_after)
+            if target_edge_als['right'].is_reverse:
+                missing_from_blunt[3] = ti.cut_after - target_bounds[3]
+            else:
+                missing_from_blunt[3] = target_bounds[3] - (ti.cut_after + 1)
+
+        longest_edge_deletion = None
+
+        for side in ['left', 'right']:
+            if target_edge_als[side] is not None:
+                indels = self.extract_indels_from_alignments([target_edge_als[side]])
+                for indel, _ in indels:
+                    if indel.kind == 'D':
+                        if longest_edge_deletion is None or indel.length > longest_edge_deletion.length:
+                            longest_edge_deletion = indel
+
+        edit_distance_besides_deletion = edit_distance
+        if longest_edge_deletion is not None:
+            edit_distance_besides_deletion -= longest_edge_deletion.length
+
+        details.update({
+            'source': source,
+            'insertion_length': insertion_length,
+            'insertion_reference_bounds': insertion_reference_bounds,
+            'insertion_query_bounds': {5: insertion_query_interval.start, 3: insertion_query_interval.end},
+
+            'gap_left_query_edge': left_results['switch_after'],
+            'gap_right_query_edge': right_results['switch_after'] + 1,
+
+            'gap_before': left_results['gap_interval'],
+            'gap_after': right_results['gap_interval'],
+
+            'gap_before_length': gap_before_length,
+            'gap_after_length': gap_after_length,
+            'total_gap_length': total_gap_length,
+
+            'missing_from_blunt': missing_from_blunt,
+
+            'total_edits_and_gaps': total_gap_length + edit_distance,
+            'left_edits': left_edits,
+            'right_edits': right_edits,
+            'edit_distance': edit_distance,
+            'edit_distance_besides_deletion': edit_distance_besides_deletion,
+            'candidate_alignment': candidate_al,
+            'cropped_candidate_alignment': cropped_candidate_al,
+            'target_bounds': target_bounds,
+            'target_query_bounds': target_query_bounds,
+            'cropped_alignments': [al for al in [cropped_left_al, cropped_candidate_al, cropped_right_al] if al is not None],
+            'edge_alignments': target_edge_als,
+            'full_alignments': [al for al in [target_edge_als['left'], candidate_al, target_edge_als['right']] if al is not None],
+
+            'longest_edge_deletion': longest_edge_deletion,
+
+            'has_donor_SNV': has_donor_SNV,
+
+            'strand': sam.get_strand(candidate_al),
+        })
+
+        if source == 'genomic':
+            organism, original_name = cropped_candidate_al.reference_name.split('_', 1)
+            organism_matches = {n for n in self.target_info.supplemental_headers if cropped_candidate_al.reference_name.startswith(n)}
+            if len(organism_matches) != 1:
+                raise ValueError(cropped_candidate_al.reference_name, self.target_info.supplemental_headers)
+            else:
+                organism = organism_matches.pop()
+                original_name = cropped_candidate_al.reference_name[len(organism) + 1:]
+
+            header = self.target_info.supplemental_headers[organism]
+            al_dict = cropped_candidate_al.to_dict()
+            al_dict['ref_name'] = original_name
+            original_al = pysam.AlignedSegment.from_dict(al_dict, header)
+
+            details.update({
+                'chr': original_al.reference_name,
+                'organism': organism,
+                'original_alignment': original_al,
+            })
+
+            # Since genomic insertions draw from a much large reference sequence
+            # than donor insertions, enforce a more stringent minimum length.
+
+            if insertion_length <= 25:
+                details['failed'] = f'insertion length = {insertion_length}'
+
+        failures = []
+
+        if source == 'donor':
+            shared_HAs = self.shared_HAs(candidate_al, target_edge_als)
+            details['shared_HAs'] = shared_HAs
+
+            # Only want to handle RT extensions here, which should have PAM-distal homology arm usage,
+            # unless the read isn't long enough to include this.
+            distance_from_end = self.whole_read.end - details['insertion_query_bounds'][3]
+            necessary_read_side = ti.PAM_side_to_read_side['PAM-distal']
+
+            if distance_from_end > 0 and (necessary_read_side, necessary_read_side) not in shared_HAs:
+                # 22.03.24: temporarily removing this restriction.
+                pass
+                #failures.append('doesn\'t share PAM-distal HA')
+
+        if gap_before_length > 5:
+            failures.append(f'gap_before_length = {gap_before_length}')
+
+        if gap_after_length > 5:
+            failures.append(f'gap_after_length = {gap_after_length}')
+
+        max_allowable_edit_distance = 5
+
+        # Allow a high edit distance if it is almost entirely explained by a single large deletion.
+        if edit_distance_besides_deletion > max_allowable_edit_distance:
+            failures.append(f'edit_distance = {edit_distance}')
+
+        if has_donor_SNV['left']:
+            failures.append('left alignment has a donor SNV')
+
+        if has_donor_SNV['right']:
+            failures.append('right alignment has a donor SNV')
+
+        #if insertion_length < 5:
+        #    failures.append(f'insertion length = {insertion_length}')
+
+        edit_distance_over_length = middle_edits / insertion_length
+        if edit_distance_over_length >= 0.1:
+            failures.append(f'edit distance / length = {edit_distance_over_length}')
+
+        if len(failures) > 0:
+            details['failed'] = ' '.join(failures)
+
+        return details
+
     @memoized_property
     def possible_templated_insertions(self):
         # Make some shorter aliases.
@@ -1575,292 +1757,14 @@ class Layout(layout.Categorizer):
         possible_insertions = []
 
         for candidate_al, source in candidates:
-            details = {'source': source}
-
-            if source == 'donor':
-                candidate_ref_seq = ti.reference_sequences[ti.pegRNA_names[0]]
-            else:
-                candidate_ref_seq = None
-            
-            # Find the locations on the query at which switching from edge alignments to the
-            # candidate and then back again minimizes the edit distance incurred.
-            left_results = sam.find_best_query_switch_after(edge_als['left'], candidate_al, ti.target_sequence, candidate_ref_seq, min)
-            right_results = sam.find_best_query_switch_after(candidate_al, edge_als['right'], candidate_ref_seq, ti.target_sequence, max)
-
-            # For genomic insertions, parsimoniously assign maximal query to candidates that make it all the way to the read edge
-            # even if there is a short target alignmnent at the edge.
-            if source == 'genomic':
-                min_left_results = sam.find_best_query_switch_after(edge_als['left'], candidate_al, ti.target_sequence, candidate_ref_seq, min)
-                if min_left_results['switch_after'] == -1:
-                    left_results = min_left_results
-
-                max_right_results = sam.find_best_query_switch_after(candidate_al, edge_als['right'], candidate_ref_seq, ti.target_sequence, max)
-                if max_right_results['switch_after'] == len(self.seq) - 1:
-                    right_results = max_right_results
-
-            # TODO: might be valuable to replace max in left_results tie breaker with something that picks the cut site if possible.
-
-            # Crop the alignments at the switch points identified.
-            target_bounds = {}
-            target_query_bounds = {}
-
-            cropped_left_al = sam.crop_al_to_query_int(edge_als['left'], -np.inf, left_results['switch_after'])
-            target_bounds[5] = sam.reference_edges(cropped_left_al)[3]
-            target_query_bounds[5] = interval.get_covered(cropped_left_al).end
-
-            cropped_right_al = sam.crop_al_to_query_int(edge_als['right'], right_results['switch_after'] + 1, np.inf)
-            if cropped_right_al is None:
-                target_bounds[3] = None
-                target_query_bounds[3] = len(self.seq)
-            else:
-                if cropped_right_al.query_alignment_length >= 8:
-                    target_bounds[3] = sam.reference_edges(cropped_right_al)[5]
-                    target_query_bounds[3] = interval.get_covered(cropped_right_al).start
-                else:
-                    target_bounds[3] = None
-                    target_query_bounds[3] = len(self.seq)
-
-            cropped_candidate_al = sam.crop_al_to_query_int(candidate_al, left_results['switch_after'] + 1, right_results['switch_after'])
-            if cropped_candidate_al is None or cropped_candidate_al.is_unmapped:
-                details['edge_als'] = edge_als
-                details['candidate_al'] = candidate_al
-                details['switch_afters'] = {'left': left_results['switch_after'], 'right': right_results['switch_after']}
-                details['failed'] = 'cropping eliminates insertion'
-                possible_insertions.append(details)
-                continue
-
-            insertion_reference_bounds = sam.reference_edges(cropped_candidate_al)   
-            insertion_query_interval = interval.get_covered(cropped_candidate_al)
-            insertion_length = len(insertion_query_interval)
-                
-            left_edits = sam.edit_distance_in_query_interval(cropped_left_al, ref_seq=ti.target_sequence)
-            right_edits = sam.edit_distance_in_query_interval(cropped_right_al, ref_seq=ti.target_sequence)
-            middle_edits = sam.edit_distance_in_query_interval(cropped_candidate_al, ref_seq=candidate_ref_seq)
-            edit_distance = left_edits + middle_edits + right_edits
-
-            gap_before_length = left_results['gap_length']
-            gap_after_length = right_results['gap_length']
-            total_gap_length = gap_before_length + gap_after_length
-            
-            has_donor_SNV = {
-                'left': self.specific_to_donor(cropped_left_al),
-                'right': self.specific_to_donor(cropped_right_al),
-            }
-            if source == 'donor':
-                has_donor_SNV['insertion'] = self.specific_to_donor(candidate_al) # should this be cropped_candidate_al?
-
-            missing_from_blunt = {
-                5: None,
-                3: None,
-            }
-
-            # TODO: there are edge cases where short extra sequence appears at start of read before expected NotI site.
-            if target_bounds[5] is not None:
-                if edge_als['left'].is_reverse:
-                    missing_from_blunt[5] = target_bounds[5] - (ti.cut_after + 1)
-                else:
-                    missing_from_blunt[5] = ti.cut_after - target_bounds[5]
-
-            if target_bounds[3] is not None:
-                missing_from_blunt[3] = (target_bounds[3] - ti.cut_after)
-                if edge_als['right'].is_reverse:
-                    missing_from_blunt[3] = ti.cut_after - target_bounds[3]
-                else:
-                    missing_from_blunt[3] = target_bounds[3] - (ti.cut_after + 1)
-
-            longest_edge_deletion = None
-
-            for side in ['left', 'right']:
-                if edge_als[side] is not None:
-                    indels = self.extract_indels_from_alignments([edge_als[side]])
-                    for indel, _ in indels:
-                        if indel.kind == 'D':
-                            if longest_edge_deletion is None or indel.length > longest_edge_deletion.length:
-                                longest_edge_deletion = indel
-
-            edit_distance_besides_deletion = edit_distance
-            if longest_edge_deletion is not None:
-                edit_distance_besides_deletion -= longest_edge_deletion.length
-
-            details.update({
-                'source': source,
-                'insertion_length': insertion_length,
-                'insertion_reference_bounds': insertion_reference_bounds,
-                'insertion_query_bounds': {5: insertion_query_interval.start, 3: insertion_query_interval.end},
-
-                'gap_left_query_edge': left_results['switch_after'],
-                'gap_right_query_edge': right_results['switch_after'] + 1,
-
-                'gap_before': left_results['gap_interval'],
-                'gap_after': right_results['gap_interval'],
-
-                'gap_before_length': gap_before_length,
-                'gap_after_length': gap_after_length,
-                'total_gap_length': total_gap_length,
-
-                'missing_from_blunt': missing_from_blunt,
-
-                'total_edits_and_gaps': total_gap_length + edit_distance,
-                'left_edits': left_edits,
-                'right_edits': right_edits,
-                'edit_distance': edit_distance,
-                'edit_distance_besides_deletion': edit_distance_besides_deletion,
-                'candidate_alignment': candidate_al,
-                'cropped_candidate_alignment': cropped_candidate_al,
-                'target_bounds': target_bounds,
-                'target_query_bounds': target_query_bounds,
-                'cropped_alignments': [al for al in [cropped_left_al, cropped_candidate_al, cropped_right_al] if al is not None],
-                'edge_alignments': edge_als,
-                'full_alignments': [al for al in [edge_als['left'], candidate_al, edge_als['right']] if al is not None],
-
-                'longest_edge_deletion': longest_edge_deletion,
-
-                'has_donor_SNV': has_donor_SNV,
-
-                'strand': sam.get_strand(candidate_al),
-            })
-
-            if source == 'genomic':
-                organism, original_name = cropped_candidate_al.reference_name.split('_', 1)
-                organism_matches = {n for n in self.target_info.supplemental_headers if cropped_candidate_al.reference_name.startswith(n)}
-                if len(organism_matches) != 1:
-                    raise ValueError(cropped_candidate_al.reference_name, self.target_info.supplemental_headers)
-                else:
-                    organism = organism_matches.pop()
-                    original_name = cropped_candidate_al.reference_name[len(organism) + 1:]
-
-                header = self.target_info.supplemental_headers[organism]
-                al_dict = cropped_candidate_al.to_dict()
-                al_dict['ref_name'] = original_name
-                original_al = pysam.AlignedSegment.from_dict(al_dict, header)
-
-                details.update({
-                    'chr': original_al.reference_name,
-                    'organism': organism,
-                    'original_alignment': original_al,
-                })
-
-                # Since genomic insertions draw from a much large reference sequence
-                # than donor insertions, enforce a more stringent minimum length.
-
-                if insertion_length <= 25:
-                    details['failed'] = f'insertion length = {insertion_length}'
-
-            if source == 'donor':
-                shared_HAs = self.shared_HAs(candidate_al, edge_als)
-                details['shared_HAs'] = shared_HAs
-
-                # Only want to handle RT extensions here, which should have PAM-distal homology arm usage,
-                # unless the read isn't long enough to include this.
-                distance_from_end = self.whole_read.end - details['insertion_query_bounds'][3]
-                necessary_read_side = ti.PAM_side_to_read_side['PAM-distal']
-                if distance_from_end > 0 and necessary_read_side not in shared_HAs:
-                    details['failed'] = f'doesn\'t share PAM-distal HA'
-
-            failures = []
-
-            if gap_before_length > 5:
-                failures.append(f'gap_before_length = {gap_before_length}')
-
-            if gap_after_length > 5:
-                failures.append(f'gap_after_length = {gap_after_length}')
-
-            if self.error_corrected:
-                max_allowable_edit_distance = 5
-            else:
-                max_allowable_edit_distance = 10
-
-            # Allow a high edit distance if it is almost entirely explained by a single large deletion.
-            if edit_distance_besides_deletion > max_allowable_edit_distance:
-                failures.append(f'edit_distance = {edit_distance}')
-
-            if has_donor_SNV['left']:
-                failures.append('left alignment has a donor SNV')
-
-            if has_donor_SNV['right']:
-                failures.append('right alignment has a donor SNV')
-
-            #if insertion_length < 5:
-            #    failures.append(f'insertion length = {insertion_length}')
-
-            edit_distance_over_length = middle_edits / insertion_length
-            if edit_distance_over_length >= 0.1:
-                failures.append(f'edit distance / length = {edit_distance_over_length}')
-
-            if len(failures) > 0:
-                details['failed'] = ' '.join(failures)
-
+            details = self.evaluate_templated_insertion(edge_als, candidate_al, source)
             possible_insertions.append(details)
 
         return possible_insertions
 
     @memoized_property
-    def multipart_templated_insertion(self):
-        candidates = self.possible_templated_insertions()
-        edge_als = self.target_edge_alignments
-
-        lefts = [c for c in candidates if 'gap_before' in c and c['gap_before'] is None]
-        rights = [c for c in candidates if 'gap_after' in c and c['gap_after'] is None]
-        
-        covering_pairs = []
-        
-        for left in lefts:
-            left_al = left['candidate_alignment']
-            for right in rights:
-                right_al = right['candidate_alignment']
-                
-                gap_length = right['gap_right_query_edge'] - left['gap_left_query_edge'] - 1
-
-                left_covered = interval.get_covered(left_al)
-                right_covered = interval.get_covered(right_al)
-                pair_overlaps = left_covered.end >= right_covered.start - 1
-
-                if pair_overlaps and gap_length > 5: 
-                    if left['source'] == 'donor':
-                        left_ref = self.target_info.donor_sequence
-                    else:
-                        left_ref = None
-
-                    if right['source'] == 'donor':
-                        right_ref = self.target_info.donor_sequence
-                    else:
-                        right_ref = None
-
-                    switch_results = sam.find_best_query_switch_after(left_al, right_al, left_ref, right_ref, min)
-                    
-                    cropped_left_al = sam.crop_al_to_query_int(left_al, -np.inf, switch_results['switch_after'])
-                    cropped_right_al = sam.crop_al_to_query_int(right_al, switch_results['switch_after'] + 1, np.inf)
-
-                    left_edits = sam.edit_distance_in_query_interval(cropped_left_al, ref_seq=left_ref)
-                    right_edits = sam.edit_distance_in_query_interval(cropped_right_al, ref_seq=right_ref)
-                    edit_distance = left_edits + right_edits
-                    
-                    pair_results = {
-                        'left_alignment': left['candidate_alignment'],
-                        'right_alignment': right['candidate_alignment'],
-                        'edit_distance': edit_distance,
-                        'left_source': left['source'],
-                        'right_source': right['source'],
-                        'full_alignments': [al for al in [edge_als['left'], left['candidate_alignment'], right['candidate_alignment'], edge_als['right']] if al is not None],
-                        'gap_length': gap_length,
-                    }
-                    
-                    covering_pairs.append(pair_results)
-        
-        covering_pairs = sorted(covering_pairs, key=lambda p: (p['edit_distance']))
-        
-        return covering_pairs
-
-    @memoized_property
     def no_alignments_detected(self):
         return all(al.is_unmapped for al in self.alignments)
-
-    @memoized_property
-    def perfect_edge_alignments_from_scratch(self):
-        seed_length = 10
-        left_als = self.seed_and_extend('target', 0, seed_length)
-        right_als = self.seed_and_extend('target', len(self.seq) - 1 - seed_length, len(self.seq) - 1)
-        return left_als + right_als
 
     def categorize(self):
         self.outcome = None
@@ -2055,11 +1959,11 @@ class Layout(layout.Categorizer):
                     self.details = 'n/a'
                     self.relevant_alignments = self.uncategorized_relevant_alignments
 
-        elif self.donor_insertion is not None:
+        elif self.duplication is None and self.donor_insertion is not None:
             self.register_donor_insertion()
 
-        elif self.long_duplication is not None:
-            subcategory, ref_junctions, indels, als_with_donor_SNVs, merged_als = self.long_duplication
+        elif self.duplication is not None:
+            subcategory, ref_junctions, indels, als_with_donor_SNVs, merged_als = self.duplication
             if len(indels) == 0:
                 self.outcome = DuplicationOutcome(ref_junctions)
 
@@ -2091,6 +1995,13 @@ class Layout(layout.Categorizer):
                 self.subcategory = 'uncategorized'
                 self.details = 'n/a'
                 self.relevant_alignments = self.uncategorized_relevant_alignments
+
+        elif self.duplication_plus_insertion:
+            self.category = 'edit + duplication'
+            self.subcategory = 'simple'
+            self.details = 'n/a'
+            # TODO: make more relevant
+            self.relevant_alignments = self.uncategorized_relevant_alignments
 
         elif self.genomic_insertion is not None:
             self.register_genomic_insertion()
@@ -2224,7 +2135,77 @@ class Layout(layout.Categorizer):
         return interval.make_parsimonious(initial_als + gap_covers)
 
     @memoized_property
-    def long_duplication(self):
+    def duplications_from_each_read_edge(self):
+        ti = self.target_info
+        # Order target als by position on the query from left to right.
+        target_als = sorted(self.target_gap_covering_alignments, key=interval.get_covered)
+
+        correct_strand_als = [al for al in target_als if sam.get_strand(al) == ti.sequencing_direction]
+
+        # Need deletions to be merged.
+        merged_als = sam.merge_any_adjacent_pairs(correct_strand_als, ti.reference_sequences)
+        
+        intervals = [interval.get_covered(al) for al in merged_als]
+        
+        if len(merged_als) > 0 and self.overlaps_primer(merged_als[0], 'left'):
+            no_gaps_through_index = 0
+            
+            for i in range(1, len(intervals)):
+                cumulative_from_left = interval.make_disjoint(intervals[:i + 1])
+                
+                # If there are no gaps so far
+                if len(cumulative_from_left.intervals) == 1:
+                    no_gaps_through_index = i
+                else:
+                    break
+                    
+            from_left_edge = merged_als[:no_gaps_through_index + 1]
+        else:
+            from_left_edge = None
+            
+        if len(merged_als) > 0 and \
+           (self.overlaps_primer(merged_als[len(intervals) - 1], 'right') or
+            (intervals[-1].end == self.whole_read.end and len(intervals[-1]) >= 20)
+           ):
+            no_gaps_through_index = len(intervals) - 1
+            
+            for i in range(len(intervals) - 2, 0, -1):
+                cumulative_from_right = interval.make_disjoint(intervals[i:])
+                
+                # If there are no gaps so far
+                if len(cumulative_from_right.intervals) == 1:
+                    no_gaps_through_index = i
+                else:
+                    break
+                    
+            from_right_edge = merged_als[no_gaps_through_index:]
+        else:
+            from_right_edge = None
+        
+        return from_left_edge, from_right_edge
+
+    @memoized_property
+    def duplication_plus_insertion(self):
+        from_left_edge, from_right_edge = self.duplications_from_each_read_edge
+
+        explains_whole_read = False
+
+        if from_left_edge is not None and from_right_edge is not None:
+
+            edge_als = {'left': from_left_edge[-1], 'right': from_right_edge[0]}
+
+            if 'right' in self.pegRNA_extension_als and self.pegRNA_extension_als['right'] is not None:
+                pegRNA_al = self.pegRNA_extension_als['right']
+                details = self.evaluate_templated_insertion(edge_als, pegRNA_al, 'donor')
+
+                if 'failed' not in details:
+                    if self.templated_insertion_matches_intended(details):
+                        explains_whole_read = True
+                    
+        return explains_whole_read
+
+    @memoized_property
+    def duplication(self):
         ''' (duplication, simple)   - a single junction
             (duplication, iterated) - multiple uses of the same junction
             (duplication, complex)  - multiple junctions that are not exactly the same
@@ -2247,7 +2228,7 @@ class Layout(layout.Categorizer):
                     covered.start = 0
             covereds.append(covered)
     
-        covered = interval.DisjointIntervals(interval.make_disjoint(covereds))
+        covered = interval.make_disjoint(covereds)
 
         uncovered = self.whole_read_minus_edges(2) - covered
         
@@ -2329,11 +2310,7 @@ class Layout(layout.Categorizer):
 
         ti = self.target_info
 
-        # temp for backwards compatibility
-        if ti.donor is not None:
-            pegRNA_name = ti.donor
-        else:
-            pegRNA_name = ti.pegRNA_names[0]
+        pegRNA_name = ti.pegRNA_names[0]
 
         PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
         PBS_strand = ti.features[ti.target, PBS_name].strand
@@ -2341,16 +2318,20 @@ class Layout(layout.Categorizer):
         flip_target = ti.sequencing_direction == '-'
 
         if (flip_target and PBS_strand == '-') or (not flip_target and PBS_strand == '+'):
-            flip_donor = True
+            flip_pegRNA = True
         else:
-            flip_donor = False
+            flip_pegRNA = False
+
+        label_offsets = {feature_name: 1 for _, feature_name in self.target_info.PAM_features}
+
+        for pegRNA in self.target_info.pegRNA_names:
+            label_offsets[f'insertion_{pegRNA}'] = 1
 
         diagram_kwargs = dict(
             draw_sequence=True,
             flip_target=flip_target,
-            flip_donor=flip_donor,
             split_at_indels=True,
-            label_offsets={feature_name: 1 for _, feature_name in ti.PAM_features},
+            label_offsets=label_offsets,
             features_to_show=ti.features_to_show,
             refs_to_draw={ti.target, *ti.pegRNA_names},
             label_overrides={name: 'protospacer' for name in ti.sgRNAs},
@@ -2369,5 +2350,29 @@ class Layout(layout.Categorizer):
                                                     ti,
                                                     **diagram_kwargs,
                                                    )
+
+        # Draw the pegRNA.
+        if any(al.reference_name in ti.pegRNA_names for al in als_to_plot):
+            ref_y = diagram.max_y + diagram.target_and_donor_y_gap
+
+            # To ensure that features on pegRNAs that extend far to the right of
+            # the read are plotted, temporarily make the x range very wide.
+            old_min_x, old_max_x = diagram.min_x, diagram.max_x
+
+            diagram.min_x = -1000
+            diagram.max_x = 1000
+
+            ref_p_to_xs = diagram.draw_reference(pegRNA_name, ref_y, flip_pegRNA)
+
+            pegRNA_seq = ti.reference_sequences[pegRNA_name]
+            pegRNA_min_x, pegRNA_max_x = sorted([ref_p_to_xs(0), ref_p_to_xs(len(pegRNA_seq) - 1)])
+
+            diagram.max_x = max(old_max_x, pegRNA_max_x)
+
+            diagram.min_x = min(old_min_x, pegRNA_min_x)
+
+            diagram.ax.set_xlim(diagram.min_x, diagram.max_x)
+
+            diagram.update_size()
 
         return diagram
