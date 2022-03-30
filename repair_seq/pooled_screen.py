@@ -103,10 +103,12 @@ class SingleGuideExperiment(experiment.Experiment):
         self.outcome_fn_keys = ['filtered_cell_outcomes']
         self.count_index_levels = ['perfect_guide', 'category', 'subcategory', 'details']
 
-        self.diagram_kwargs.update(self.pool.diagram_kwargs)
-
         self.x_tick_multiple = 100
         self.max_relevant_length = 1000
+
+    @memoized_property
+    def diagram_kwargs(self):
+        return self.pool.diagram_kwargs
 
     @property
     def default_read_type(self):
@@ -586,16 +588,20 @@ class SingleGuideExperiment(experiment.Experiment):
 
         return layout
 
-    def get_read_diagram(self, read_id, only_relevant=True, qname_to_als=None, outcome=None, **diagram_kwargs):
+    def get_read_diagram(self, read_id, relevant=True, qname_to_als=None, outcome=None, **diagram_kwargs):
         layout = self.get_read_layout(read_id, qname_to_als=qname_to_als, outcome=outcome)
 
-        if only_relevant:
+        if relevant:
             layout.categorize()
             to_plot = layout.relevant_alignments
         else:
             to_plot = layout.alignments
 
-        diagram = visualize.ReadDiagram(to_plot, self.target_info, **self.diagram_kwargs)
+        for k, v in self.diagram_kwargs.items():
+            diagram_kwargs.setdefault(k, v)
+
+
+        diagram = visualize.ReadDiagram(to_plot, self.target_info, **diagram_kwargs)
 
         return diagram
 
@@ -1204,15 +1210,16 @@ class PooledScreen:
             if sgRNA != self.target_info.primary_sgRNA:
                 label_offsets[f'{sgRNA}_PAM'] = 1
 
-        diagram_kwargs = dict(features_to_show=self.target_info.features_to_show,
-                              ref_centric=True,
-                              draw_sequence=True,
-                              flip_target=self.target_info.sequencing_direction == '-',
-                              highlight_SNPs=True,
-                              split_at_indels=True,
-                              force_left_aligned=False,
-                              label_offsets=label_offsets,
-                             )
+        diagram_kwargs = dict(
+            features_to_show=self.target_info.features_to_show,
+            ref_centric=True,
+            draw_sequence=True,
+            flip_target=self.target_info.sequencing_direction == '-',
+            highlight_SNPs=True,
+            split_at_indels=True,
+            force_left_aligned=False,
+            label_offsets=label_offsets,
+        )
 
         return diagram_kwargs
 
@@ -2594,10 +2601,10 @@ class PooledScreen:
                             )
         return l
 
-    def get_read_diagram(self, read_id, only_relevant=True, **diagram_kwargs):
+    def get_read_diagram(self, read_id, relevant=True, **diagram_kwargs):
         layout = self.get_read_layout(read_id)
 
-        if only_relevant:
+        if relevant:
             layout.categorize()
             to_plot = layout.relevant_alignments
         else:
