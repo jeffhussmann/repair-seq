@@ -60,6 +60,8 @@ class SingleGuideExperiment(experiment.Experiment):
             'guide_mismatch_rates': self.results_dir / 'guide_mismatch_rates.txt',
             'truncation_positions': self.results_dir / 'truncation_positions.txt',
 
+            'qname_to_common_name': self.results_dir / 'qname_to_common_name.txt',
+
             'genomic_insertion_seqs': self.results_dir / 'genomic_insertion_seqs.fa',
             'filtered_genomic_insertion_seqs': self.results_dir / 'filtered_genomic_insertion_seqs.fa',
             'filtered_genomic_insertion_details': self.results_dir / 'filtered_genomic_insertion_details.txt',
@@ -159,11 +161,13 @@ class SingleGuideExperiment(experiment.Experiment):
         looked_up_common = False
 
         if self.use_memoized_outcomes:
-            seq = self.names_with_common_seq.get(read_id)
-            if seq is not None:
-                als = self.pool.get_common_seq_alignments(seq)
-                looked_up_common = True
             read_type = 'collapsed_uncommon_R2'
+
+            common_name = self.qname_to_common_name.get(read_id)
+
+            if common_name is not None:
+                als = self.pool.get_read_alignments(common_name)
+                looked_up_common = True
         else:
             read_type = 'collapsed_R2'
             
@@ -171,29 +175,6 @@ class SingleGuideExperiment(experiment.Experiment):
             als = super().get_read_alignments(read_id, fn_key=fn_key, outcome=outcome, read_type=read_type)
 
         return als
-
-    def alignment_group_dictionary(self, category, subcategory, n=100):
-        relevant_cells = self.filtered_cell_outcomes.query('category == @category and subcategory == @subcategory')
-        sample = relevant_cells.sample(min(n, len(relevant_cells)), random_state=0)
-
-        qnames = set(sample['query_name'])
-
-        outcome_alignment_groups = self.alignment_groups(outcome=(category, subcategory), read_type='collapsed_uncommon_R2')
-        name_with_uncommon_seq_to_als = dict(outcome_alignment_groups)
-
-        name_to_als = {}
-        for qname in qnames:
-            als = name_with_uncommon_seq_to_als.get(qname)
-            if als is None:
-                seq = self.names_with_common_seq.get(qname)
-                if seq is None:
-                    raise ValueError(qname)
-                else:
-                    als = self.pool.get_common_seq_alignments(seq)
-
-            name_to_als[qname] = als
-
-        return name_to_als
 
     @memoized_property
     def R2_read_length(self):
@@ -292,22 +273,38 @@ class SingleGuideExperiment(experiment.Experiment):
             return self.progress(reads, desc='Iterating over collapsed reads')
 
     def make_uncommon_sequence_fastq(self):
+        ''' 
+        Populate self.fns_by_read_type['fastq']['collapsed_uncommon_R2'] with fastq
+        reads that don't have common sequences, and populate self.fns['qname_to_common_name']
+        with (qname, common_name) pairs for all reads that do have common sequences.
+        '''
+
+        qname_to_common_name = {}
+
         fn = self.fns_by_read_type['fastq']['collapsed_uncommon_R2']
         with gzip.open(fn, 'wt', compresslevel=1) as fh:
             for read in self.collapsed_reads():
-                if read.seq not in self.pool.common_sequence_to_outcome:
+                if read.seq in self.pool.common_sequence_to_outcome:
+                    outcome = self.pool.common_sequence_to_outcome[read.seq]
+                    qname_to_common_name[read.name] = outcome.query_name
+                else:
                     fh.write(str(read))
 
+        with open(self.fns['qname_to_common_name'], 'w') as fh:
+            for qname, common_name in qname_to_common_name.items():
+                fh.write(f'{qname}\t{common_name}\n')
+
     @memoized_property
-    def names_with_common_seq(self):
-        names = {}
+    def qname_to_common_name(self):
+        qname_to_common_name = {}
 
-        for read in self.collapsed_reads():
-            if read.seq in self.pool.common_sequence_to_outcome:
-                names[read.name] = read.seq
+        with open(self.fns['qname_to_common_name']) as fh:
+            for line in fh:
+                qname, common_name = line.strip().split('\t')
+                qname_to_common_name[qname] = common_name
 
-        return names
-
+        return qname_to_common_name
+                
     @property
     def collapsed_uncommon_reads(self):
         fn = self.fns_by_read_type['fastq']['collapsed_uncommon_R2']
@@ -346,10 +343,11 @@ class SingleGuideExperiment(experiment.Experiment):
             outcome_fh.write(f'## Generated at {utilities.current_time_string()}\n')
 
             for read in self.progress(reads, desc='Categorizing reads'):
-                if self.use_memoized_outcomes and read.seq in self.pool.common_sequence_to_outcome:
-                    layout = self.pool.common_sequence_to_outcome[read.seq]
-                    special_alignment = self.pool.common_sequence_to_special_alignment.get(read.seq)
-                    common_sequence_name = layout.query_name
+                if self.use_memoized_outcomes and read.name in self.qname_to_common_name:
+                    common_name = self.qname_to_common_name[read.name]
+                    layout = self.pool.common_name_to_outcome[read.seq]
+                    special_alignment = self.pool.common_name_to_special_alignment.get(common_name)
+                    common_sequence_name = common_name
 
                 else:
                     common_sequence_name = ''
@@ -384,10 +382,6 @@ class SingleGuideExperiment(experiment.Experiment):
 
                 elif self.has_UMIs:
                     annotation = collapse.Annotations['collapsed_UMI_mismatch'].from_identifier(read.name)
-
-                    if layout.category in ['uncategorized'] and not self.use_memoized_outcomes:
-                        if int(annotation['UMI']) < 1000: 
-                            details = f'{details},{annotation["UMI"]}_{annotation["num_reads"]}'
 
                     outcome = coherence.Pooled_UMI_Outcome(annotation['UMI'],
                                                            annotation['mismatch'],
@@ -2520,6 +2514,14 @@ class PooledScreen:
 
         return common_sequence_to_outcome
 
+    @memoized_property
+    def common_name_to_outcome(self):
+        common_name_to_outcome = {}
+        for outcome in self.common_sequence_outcomes:
+            common_name_to_outcome[outcome.query_name] = outcome
+
+        return common_name_to_outcome
+
     def common_names_for_category(self, category):
         for outcome in self.common_sequence_outcomes:
             if outcome.category == category:
@@ -2543,20 +2545,19 @@ class PooledScreen:
     def common_name_to_alignments(self):
         common_name_to_alignments = {}
 
-        for chunk_exp in self.progress(self.common_sequence_chunk_exps(), total=len(self.common_sequence_chunk_exp_names)):
+        chunk_exps = self.progress(self.common_sequence_chunk_exps(),
+                                   total=len(self.common_sequence_chunk_exp_names),
+                                   desc='Iterating over common_sequence_chunk_exps',
+                                  )
+
+        for chunk_exp in chunk_exps:
             for common_name, als in chunk_exp.alignment_groups():
                 common_name_to_alignments[common_name] = als
 
         return common_name_to_alignments
 
-    @memoized_property
-    def common_sequence_to_special_alignment(self):
-        name_to_al = self.common_name_to_special_alignment
-        seq_to_name = self.common_sequence_to_common_name
-        return {seq: name_to_al[name] for seq, name in seq_to_name.items() if name in name_to_al}
-
     def common_sequence_chunk_exp_from_name(self, chunk_name):
-        return CommonSequenceExperiment(self.base_dir, self.group, 'common_sequences', chunk_name, pool=self, progress=self.progress)
+        return CommonSequenceExperiment(self.base_dir, self.name, 'common_sequences', chunk_name, pool=self, progress=self.progress)
 
     @memoized_property
     def name_to_chunk(self):
@@ -2607,11 +2608,6 @@ class PooledScreen:
         diagram = visualize.ReadDiagram(to_plot, self.target_info, **diagram_kwargs)
 
         return diagram
-
-    def get_common_seq_alignments(self, seq):
-        name = self.common_sequence_to_common_name[seq]
-        als = self.get_read_alignments(name)
-        return als
 
     @memoized_property
     def common_sequence_outcomes(self):
