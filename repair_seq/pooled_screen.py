@@ -47,12 +47,13 @@ class SingleGuideExperiment(experiment.Experiment):
         if self.pool is None:
             self.pool = get_pool(base_dir, pool_name, progress=kwargs.get('progress'))
 
-        self.has_UMIs = self.pool.has_UMIs
-
         self.fixed_guide = fixed_guide
         self.variable_guide = variable_guide
         
         super().__init__(base_dir, pool_name, name, **kwargs)
+
+        # Note: has_UMIs must be set after super()
+        self.has_UMIs = self.pool.has_UMIs
 
         self.fns.update({
             'chunks': self.results_dir / 'chunks',
