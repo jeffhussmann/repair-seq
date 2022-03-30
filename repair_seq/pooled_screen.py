@@ -2672,7 +2672,7 @@ class PooledScreen:
         # Unclear if equivalent is needed for multiprocessing design.
 
         def process_stage(stage):
-            with multiprocessing.Pool(num_processes) as process_pool:
+            with multiprocessing.Pool(processes=num_processes, maxtasksperchild=1) as process_pool:
                 arg_tuples = []
 
                 for fixed_guide, variable_guide in self.guide_combinations_by_read_count:
@@ -2684,7 +2684,7 @@ class PooledScreen:
         def process_common_sequences():
             self.make_common_sequences()
 
-            with multiprocessing.Pool(num_processes) as process_pool:
+            with multiprocessing.Pool(processes=num_processes, maxtasksperchild=1) as process_pool:
                 arg_tuples = [(self.base_dir, self.name, chunk_name) for chunk_name in self.common_sequence_chunk_exp_names]
                 process_pool.starmap(process_common_sequences_chunk, arg_tuples)
 
