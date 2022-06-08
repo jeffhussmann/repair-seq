@@ -1,0 +1,48 @@
+LOCUS       oJAH159                  176 bp ds-DNA     linear       20-MAY-2020
+DEFINITION  .
+FEATURES             Location/Qualifiers
+ORIGIN
+        1 TTCAGGCTCC TGGGCAACGT GCTGGTCTGT GTGCTGGCCT ATCACTTTGG TAAAGAATTC
+       61 ACCCCATCAG TGCAGGCTGC CTGTCAGAAA GTGTTGGCTG GTGTGGCTAG TGCCCTGGCC
+      121 CACAATTATC ACTAAGCTCG CTTTCTTGCT GTCCAATTTC TATTAAAGGT TCCTTT
+//
+LOCUS       oJAH160                  176 bp ds-DNA     linear       09-AUG-2019
+DEFINITION  .
+FEATURES             Location/Qualifiers
+ORIGIN
+        1 AAAGGAACCT TTAATAGAAA TTGGACAGCA AGAAAGCGAG CTTAGTGATA ATTGTGGGCC
+       61 AGGGCACTAG CCACACCAGC CAACACTTTC TGACAGGCAG CCTGCACTGA TGGGGTGAAT
+      121 TCTTTACCAA AGTGATAGGC CAGCACACAG ACCAGCACGT TGCCCAGGAG CCTGAA
+//
+LOCUS       oJAH165                  176 bp ds-DNA     linear       09-AUG-2019
+DEFINITION  .
+FEATURES             Location/Qualifiers
+ORIGIN
+        1 CTTGGAGGAC ATCTTTGAGT GGTCAGTCTG TCTTCGGTTC AGTCTCACAG GCCTGAATTC
+       61 CTACTAACGG TCTATTCTGC TCATTCGAAT TAACGCAGTG CCCTGGTTAC CAGCCTGGTG
+      121 TGCAAGAACG TCTTTGCATT GCCCTTTCGC CTCGAGTGGC TTGATTGTCA AGAGCT
+//
+LOCUS       oBA701                   178 bp ds-DNA     linear       09-AUG-2019
+DEFINITION  .
+FEATURES             Location/Qualifiers
+ORIGIN
+        1 aaattggaca gcaagaaagc gagcttagtg atacttgtgg gccagggcat tagccacaAc
+       61 agAcaAcact Ctctgatagg cagcctgTac tggtggggtg aattctttgc caaagtCatg
+      121 Tgccagcaca cagaccagca cgttgcccag gagcctgaag ttctcaggat ctacgtgc
+//
+LOCUS       oBA701-PCR               178 bp ds-DNA     linear       04-JUN-2020
+DEFINITION  .
+FEATURES             Location/Qualifiers
+ORIGIN
+        1 aaattggaca gcaagaaagc gagcttagtg atacttgtgg gccagggcat tagccacaAc
+       61 agAcaAcact Ctctgatagg cagcctgTac tggtggggtg aattctttgc caaagtCatg
+      121 Tgccagcaca cagaccagca cgttgcccag gagcctgaag ttctcaggat ctacgtgc
+//
+LOCUS       oJAH158                  178 bp ds-DNA     linear       09-AUG-2019
+DEFINITION  .
+FEATURES             Location/Qualifiers
+ORIGIN
+        1 gcacgtagat cctgagaact tcaggctcct gggcaacgtg ctggtctgtg tgctggcAca
+       61 tGactttggc aaagaattca ccccaccagt Acaggctgcc tatcagaGag tgTtgTctgT
+      121 tgtggctaat gccctggccc acaagtatca ctaagctcgc tttcttgctg tccaattt
+//

@@ -1,0 +1,7 @@
+gene	best_promoter
+TP53BP1	P1
+LIG4	P2
+APTX	P1
+KAT8	P1
+POLM	P1
+RAD52	P1
