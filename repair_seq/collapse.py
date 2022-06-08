@@ -6,9 +6,9 @@ import tqdm
 import pysam
 
 from hits import fastq, utilities
-from hits import annotation as annotation_module
 
 from .collapse_cython import hq_mismatches_from_seed
+from repair_seq.annotations import Annotations
 
 progress = tqdm.tqdm_notebook
 
@@ -18,53 +18,6 @@ CLUSTER_ID_TAG = 'ZC'
 HIGH_Q = 31
 LOW_Q = 10
 N_Q = 2
-
-annotation_fields = {
-    'UMI': [
-        ('UMI', 's'),
-        ('original_name', 's'),
-    ],
-
-    'UMI_guide': [
-        ('UMI', 's'),
-        ('guide', 's'),
-        ('guide_qual', 's'),
-        ('original_name', 's'),
-    ],
-
-    'collapsed_UMI': [
-        ('UMI', 's'),
-        ('guide', 's'),
-        ('guide_qual', 's'),
-        ('cluster_id', '06d'),
-        ('num_reads', '06d'),
-    ],
-
-    'collapsed_UMI_mismatch': [
-        ('UMI', 's'),
-        ('cluster_id', '06d'),
-        ('num_reads', '010d'),
-        ('mismatch', 'd'),
-    ],
-
-    'common_sequence': [
-        ('rank', '012d'),
-        ('count', '012d'),
-    ],
-
-    'R2_with_guide': [
-        ('query_name', 's'),
-        ('guide', 's'),
-        ('guide_qual', 's'),
-    ],
-
-    'R2_with_guide_mismatches': [
-        ('query_name', 's'),
-        ('mismatches', 's'),
-    ],
-}
-
-Annotations = {key: annotation_module.Annotation_factory(fields) for key, fields in annotation_fields.items()}
 
 def consensus_seq_and_qs(reads, max_read_length, bam):
     if max_read_length is None:
