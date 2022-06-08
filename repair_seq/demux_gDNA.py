@@ -10,8 +10,8 @@ from collections import defaultdict, Counter
 import numpy as np
 import pandas as pd
 idx = pd.IndexSlice
-import yaml
 import tqdm
+import yaml
 
 from hits import fastq, utilities
 import knock_knock.target_info
@@ -49,9 +49,12 @@ def load_pool_details(base_dir, batch):
         for key_to_split in ['I7_index', 'I5_index', 'sgRNA']:
             if key_to_split in pool_details:
                 pool_details[key_to_split] = [s.split(';') if s is not None else s for s in pool_details[key_to_split]]
+
         pool_details = pool_details.T.to_dict()
+
     else:
         pool_details = None
+
     return pool_details
 
 def make_pool_sample_sheets(base_dir, batch):
