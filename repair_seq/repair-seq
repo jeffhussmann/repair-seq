@@ -1,20 +1,117 @@
 #!/usr/bin/env python3
 
 import argparse
+import logging
+import os
 from pathlib import Path
 
-import tqdm
+import repair_seq as rs
+import repair_seq.demux
+import repair_seq.process_SRA_data
 
-from repair_seq import pooled_screen
+if __name__ == '__main__':
+    logging.basicConfig(format='%(asctime)s: %(message)s',
+                        datefmt='%y-%m-%d %H:%M:%S',
+                        level=logging.INFO,
+                       )
 
-parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser()
 
-parser.add_argument('pool')
-parser.add_argument('max_procs', type=int)
-parser.add_argument('--progress', const=tqdm.tqdm, action='store_const')
-parser.add_argument('--base_dir', type=Path, default=Path.home() / 'projects' / 'repair_seq')
+    def add_base_dir_arg(parser):
+        parser.add_argument('base_dir',
+                            type=Path,
+                            help='The base directory to store data, metadata, and output.',
+                        )
+    def add_num_processes_arg(parser):
+        available_CPUs = len(os.sched_getaffinity(0))
+        parser.add_argument('--num_processes',
+                            type=int,
+                            help='Number of processors to use.',
+                            default=min(8, available_CPUs),
+                        )
 
-args = parser.parse_args()
+    def add_SRA_screen_name_arg(parser):
+        valid_screen_names = sorted(repair_seq.demux.load_SRA_sample_sheet().index)
+        parser.add_argument('screen_name',
+                            help='Name of screen.',
+                            choices=valid_screen_names,
+                            metavar='screen_name',
+                            )
 
-pool = pooled_screen.get_pool(args.base_dir, args.pool, progress=args.progress)
-pool.process(num_processes=args.max_procs)
+    def add_debug_arg(parser):
+        parser.add_argument('--debug',
+                            action='store_true',
+                            help='Run on a small fraction of the data for debugging purposes.',
+                        )
+
+    subparsers = parser.add_subparsers(dest='subcommand')
+    subparsers.required = True
+
+    process_subparser = subparsers.add_parser('process')
+    add_base_dir_arg(process_subparser)
+    process_subparser.add_argument('screen_name')
+    add_num_processes_arg(process_subparser)
+
+    def process(args):
+        pool = rs.pooled_screen.get_pool(args.base_dir, args.screen_name)
+        
+        if pool is not None:
+            pool.process(num_processes=args.num_processes)
+        else:
+            pools = rs.pooled_screen.get_all_pools(args.base_dir)
+            print(f'{args.pool} not found in {args.base_dir}')
+            if len(pools) == 0:
+                print('There are no screens in {args.base_dir} - is this base_dir correct?')
+            else:
+                print('Valid screens found were:')
+                for pool_name in sorted(pools):
+                    print(f'\t{pool_name}')
+
+    process_subparser.set_defaults(func=process)
+
+    SRA_subparsers = subparsers.add_parser('SRA').add_subparsers(dest='SRA_subcommand')
+    SRA_subparsers.required = True
+
+    initial_setup_subparser = SRA_subparsers.add_parser('initial_setup',
+                                                        help='Perform intial setup of metadata and reference genomes.',
+                                                    )
+    add_base_dir_arg(initial_setup_subparser)
+    add_num_processes_arg(initial_setup_subparser)
+
+    def initial_setup(args):
+        repair_seq.process_SRA_data.install_metadata(args.base_dir)
+        repair_seq.process_SRA_data.build_targets(args.base_dir, args.num_processes)
+        repair_seq.process_SRA_data.download_and_build_indices(args.base_dir, args.num_processes)
+
+    initial_setup_subparser.set_defaults(func=initial_setup)
+
+    download_subparser = SRA_subparsers.add_parser('download',
+                                                   help='Download data for a screen from SRA.',
+                                                  )
+
+    add_base_dir_arg(download_subparser)
+    add_SRA_screen_name_arg(download_subparser)
+    add_debug_arg(download_subparser)
+
+    def download(args):
+        repair_seq.process_SRA_data.download_SRA_data(args.base_dir, args.screen_name, debug=args.debug)
+
+    download_subparser.set_defaults(func=download)
+
+    process_SRA_subparser = SRA_subparsers.add_parser('process',
+                                                      help='Processes data for a screen. Requires screen data to have been downloaded.',
+                                                     )
+
+    add_base_dir_arg(process_SRA_subparser)
+    add_SRA_screen_name_arg(process_SRA_subparser)
+    add_num_processes_arg(process_SRA_subparser)
+    add_debug_arg(process_SRA_subparser)
+
+    def process_SRA(args):
+        repair_seq.demux.demux_group(args.base_dir, args.screen_name, from_SRA=True, debug=args.debug)
+        process(args)
+
+    process_SRA_subparser.set_defaults(func=process_SRA)
+
+    args = parser.parse_args()
+    args.func(args)
