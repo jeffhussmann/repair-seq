@@ -1,8 +1,14 @@
 from setuptools import setup, Extension
+from pathlib import Path
+
+metadata_fns = []
+metadata_dir = Path('repair_seq/metadata')
+for fn in metadata_dir.rglob('*'):
+    metadata_fns.append(str(fn.relative_to('repair_seq')))
 
 setup(
     name='repair_seq',
-    version='1.0.3',
+    version='1.0.4',
 
     author='Jeff Hussmann',
     author_email='jeff.hussmann@gmail.com',
@@ -14,6 +20,10 @@ setup(
         'repair_seq/visualize',
         'repair_seq/test',
     ],
+
+    package_data={
+        'repair_seq': metadata_fns,
+    },
 
     scripts=[
         'repair_seq/repair-seq',
