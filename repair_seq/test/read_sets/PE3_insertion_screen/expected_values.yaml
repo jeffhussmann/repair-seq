@@ -52,3 +52,11 @@ expected_values:
     category: duplication
     subcategory: simple
     note: at one point, incorrectly called unintended annealing
+  01:01145:015275:010942_:
+    category: edit + duplication
+    subcategory: simple
+    note: pegRNA alignment reaches the edge of the read before switching back to target
+  01:01107:024469:001783_:
+    category: edit + duplication
+    subcategory: simple
+    note: pegRNA alignment switches back to target, with mismatches afterwards
