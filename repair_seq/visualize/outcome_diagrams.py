@@ -34,6 +34,7 @@ def plot(outcome_order,
          draw_imperfect_MH=False,
          draw_wild_type_on_top=False,
          draw_donor_on_top=False,
+         draw_insertion_degeneracy=True,
          text_size=8,
          features_to_draw=None,
          replacement_text_for_complex=None,
@@ -272,11 +273,18 @@ def plot(outcome_order,
         else:
             start_to_label = starts[0]
 
+        purple_line_width = line_widths
+        purple_line_alpha = 0.6
+        if not draw_insertion_degeneracy:
+            purple_line_width *= 1.5
+            purple_line_alpha = 0.9
+
         for i, (start, bs) in enumerate(zip(starts, insertion.seqs)):
             ys = [y - 0.3, y + 0.3]
             xs = [start + 0.5, start + 0.5]
 
-            ax.plot(xs, ys, color='purple', linewidth=line_widths, alpha=0.6)
+            if draw_insertion_degeneracy or (start == start_to_label):
+                ax.plot(xs, ys, color='purple', linewidth=purple_line_width, alpha=purple_line_alpha)
 
             if start == start_to_label:
                 width = 0.9
@@ -1000,7 +1008,7 @@ class DiagramGrid:
 
         x_ticks = []
 
-        for exponent in [6, 5, 4, 3, 2, 1]:
+        for exponent in [6, 5, 4, 3, 2, 1, 0]:
             xs = np.log10(np.arange(1, 10) * 10**-exponent)        
             for x in xs:
                 if x_min < x < x_max:

@@ -62,7 +62,7 @@ def add_fold_change_colorbar(fig, im,
     cbar_ax.annotate(f'log$_2$ fold change\nin frequency from\n{baseline_condition_name}',
                      xy=(0.5, 1),
                      xycoords='axes fraction',
-                     xytext=(0, 20 if label_interpretation else 5),
+                     xytext=(0, 5 + 2 * text_size),
                      textcoords='offset points',
                      va='bottom',
                      ha='center',
@@ -104,7 +104,7 @@ def genes(pool,
           gene_to_sort_by=None,
           show_ax_titles=True,
           overall_title=None,
-          use_high_frequency=False,
+          use_high_frequency_counts=False,
           different_colors_if_one_gene=True,
           log10_x_lims=None,
           clip_on=False,
@@ -114,7 +114,7 @@ def genes(pool,
         heatmap_pools = [(pool, fixed_guide)]
 
     colors = itertools.cycle(bokeh.palettes.Set2[8])
-    pool_to_color = {(p.group, fixed_guide): color for (p, fixed_guide), color in zip(heatmap_pools, colors)}
+    pool_to_color = {(p.name, fixed_guide): color for (p, fixed_guide), color in zip(heatmap_pools, colors)}
 
     if guide_aliases is None:
         guide_aliases = {}
@@ -163,9 +163,9 @@ def genes(pool,
         ax_order.append('log2_between_pools')
 
     if outcomes is None:
-        outcome_order, auto_outcome_group_sizes = pool.rational_outcome_order(fixed_guide, by_frequency=True)
+        outcome_order, auto_outcome_group_sizes = pool.rational_outcome_order(fixed_guide, by_frequency=True, use_high_frequency_counts=use_high_frequency_counts)
     elif isinstance(outcomes, int):
-        outcome_order, auto_outcome_group_sizes = pool.rational_outcome_order(fixed_guide, num_outcomes=outcomes, by_frequency=True)
+        outcome_order, auto_outcome_group_sizes = pool.rational_outcome_order(fixed_guide, num_outcomes=outcomes, by_frequency=True, use_high_frequency_counts=use_high_frequency_counts)
     else:
         outcome_order = outcomes
         auto_outcome_group_sizes = [len(outcome_order)]
@@ -173,11 +173,12 @@ def genes(pool,
     if outcome_group_sizes is None:
         outcome_group_sizes = auto_outcome_group_sizes
 
-    if use_high_frequency:
+    if use_high_frequency_counts:
+        # Note: only supports no fixed guide.
         def get_log2_fold_changes(p, f=fixed_guide):
-            return p.high_frequency_log2_fold_changes[f]
+            return p.high_frequency_log2_fold_changes
         def get_outcome_fractions(p, f=fixed_guide):
-            return p.high_frequency_outcome_fractions[f]
+            return p.high_frequency_outcome_fractions
     else:
         def get_log2_fold_changes(p, f=fixed_guide):
             return p.log2_fold_changes(guide_status=guide_status, fixed_guide=f)
@@ -227,8 +228,8 @@ def genes(pool,
         return color
 
     def get_nt_fractions(pool, fixed_guide):
-        if use_high_frequency:
-            return pool.high_frequency_outcome_fractions[fixed_guide, 'all_non_targeting'].reindex(outcome_order, fill_value=0)
+        if use_high_frequency_counts:
+            return pool.high_frequency_outcome_fractions['all_non_targeting'].reindex(outcome_order, fill_value=0)
         else:
             return pool.non_targeting_fractions(guide_status='all', fixed_guide=fixed_guide).reindex(outcome_order, fill_value=0)
 
@@ -256,7 +257,7 @@ def genes(pool,
                         lowers = lowers * 100
                         uppers = uppers * 100
 
-                    color = pool_to_color[heatmap_pool.group, heatmap_fixed_guide]
+                    color = pool_to_color[heatmap_pool.name, heatmap_fixed_guide]
 
                     # Draw standard deviation bars
                     for y, lower, upper in zip(ys, lowers, uppers): 
@@ -609,7 +610,7 @@ def genes(pool,
 
     if show_pool_name:
         if overall_title is None:
-            overall_title = pool.group
+            overall_title = pool.name
         
         diagram_ax.annotate(overall_title,
                             xy=(0.5, 1),
@@ -1502,6 +1503,7 @@ def pooled_screen_categories(pool,
                              label_aliases=None,
                              manual_colors=None,
                              title=None,
+                             panel_width=5,
                              **kwargs,
                             ):
 
@@ -1557,7 +1559,7 @@ def pooled_screen_categories(pool,
                                        )
 
     ax_kwargs = dict(
-        width_multiple=5,
+        width_multiple=panel_width,
         gap_multiple=1,
         title_size=8,
     )

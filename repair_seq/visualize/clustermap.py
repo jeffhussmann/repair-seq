@@ -1,3 +1,4 @@
+import copy
 from collections import defaultdict
 
 import numpy as np
@@ -27,14 +28,27 @@ class Clustermap:
         diagram_ax_rectangle: rectangle (in figure fraction coords) for diagrams to occupy in existing figure
         '''
         options.setdefault('upside_down', False)
+
+        options.setdefault('draw_fold_changes', True)
         options.setdefault('draw_outcome_clusters', False)
         options.setdefault('draw_guide_clusters', True)
         options.setdefault('draw_outcome_similarities', True)
         options.setdefault('draw_guide_similarities', True)
         options.setdefault('draw_colorbars', True)
+
         options.setdefault('guide_library', None)
         options.setdefault('diagram_kwargs', {})
         options.setdefault('gene_text_size', 14)
+
+        options.setdefault('guide_to_color', {})
+        options.setdefault('guide_to_alias', {})
+        options.setdefault('guides_on_top', False)
+        #options.setdefault('guide_to_color', {})
+
+        options.setdefault('alphabetical_guides', False)
+        options.setdefault('original_outcome_order', False)
+        
+        options.setdefault('colorbar_text_size', 12)
 
         options['diagram_kwargs'].setdefault('window', (-30, 30))
 
@@ -83,7 +97,8 @@ class Clustermap:
     def draw(self):
         self.draw_diagrams()
 
-        self.draw_fold_changes()
+        if self.options['draw_fold_changes']:
+            self.draw_fold_changes()
 
         if self.options['draw_outcome_similarities']:
             self.draw_outcome_similarities()
@@ -144,19 +159,87 @@ class Clustermap:
 
         # See TODO comment in fold changes on reversing here.
 
-        outcomes = self.clusterer.clustered_outcomes[::-1]
+        if self.options['original_outcome_order']:
+            outcomes = self.clusterer.original_outcome_order_with_pool[::-1]
+        else:
+            outcomes = self.clusterer.clustered_outcomes[::-1]
 
         repair_seq.visualize.outcome_diagrams.plot(outcomes,
-                                            self.clusterer.pn_to_target_info,
-                                            ax=ax,
-                                            replacement_text_for_complex={
-                                                'genomic insertion, hg19, <=75 nts': 'capture of genomic sequence ≤75 nts',
-                                                'genomic insertion, hg19, >75 nts': 'capture of genomic sequence >75 nts',
-                                            },
-                                            **self.options['diagram_kwargs'],
-                                           )
+                                                   self.clusterer.pn_to_target_info,
+                                                   ax=ax,
+                                                   replacement_text_for_complex={
+                                                       'genomic insertion, hg19, <=75 nts': 'capture of genomic sequence ≤75 nts',
+                                                       'genomic insertion, hg19, >75 nts': 'capture of genomic sequence >75 nts',
+                                                   },
+                                                   **self.options['diagram_kwargs'],
+                                                  )
 
         ax.set_position(self.rectangle('diagrams'))
+
+    def draw_frequencies(self, frequencies,
+                         x_lims=(np.log10(1.99e-3), np.log10(2.01e-1)),
+                         manual_ticks=None,
+                         include_percentage=False,
+                         label_size=6,
+                         **plot_kwargs,
+                        ):
+        if 'frequencies' not in self.axs:
+            already_existed = False
+
+            diagrams_position = self.get_position('diagrams')
+            self.x0['frequencies'] = diagrams_position.x1 + diagrams_position.width * 0.02
+            self.y0['frequencies'] = diagrams_position.y0
+            self.width_inches['frequencies'] = self.inches_per_guide * 15
+            self.height_inches['frequencies'] = self.inches_per_guide * self.num_outcomes 
+
+            ax = self.add_axes('frequencies', sharey='diagrams')
+
+            ax.set_yticks([])
+            ax.xaxis.tick_top()
+            ax.spines['left'].set_alpha(0.3)
+            ax.spines['right'].set_alpha(0.3)
+            ax.grid(axis='x', alpha=0.3, clip_on=False)
+
+            ax.spines['bottom'].set_visible(False)
+
+            x_min, x_max = x_lims
+            ax.set_xlim(x_min, x_max)
+
+            x_ticks = []
+
+            for exponent in [6, 5, 4, 3, 2, 1, 0]:
+                xs = np.log10(np.arange(1, 10) * 10**-exponent)        
+                for x in xs:
+                    if x_min < x < x_max:
+                        ax.axvline(x, color='black', alpha=0.05, clip_on=False)
+
+                if exponent <= 3:
+                    multiples = [1, 5]
+                else:
+                    multiples = [1]
+
+                for multiple in multiples:
+                    x = multiple * 10**-exponent
+                    if x_min <= np.log10(x) <= x_max:
+                        x_ticks.append(x)
+
+            if manual_ticks is not None:
+                x_ticks = manual_ticks
+
+            x_tick_labels = [f'{100 * x:g}' + ('%' if include_percentage else '') for x in x_ticks]
+
+            ax.set_xticks(np.log10(x_ticks))
+            ax.set_xticklabels(x_tick_labels, size=label_size)
+
+            for side in ['left', 'right']:
+                ax.spines[side].set_visible(False)
+
+        ax = self.axs['frequencies']  
+
+        plot_kwargs = copy.deepcopy(plot_kwargs)
+        plot_kwargs.setdefault('clip_on', False)
+
+        ax.plot(frequencies, np.arange(len(frequencies)), **plot_kwargs)
 
     def draw_fold_changes(self):
         diagrams_position = self.get_position('diagrams')
@@ -169,7 +252,16 @@ class Clustermap:
         # outcome similarities requires sharey and reversing outcome order in diagrams.
         ax = self.add_axes('fold changes', sharey='diagrams')
 
-        im = ax.imshow(self.clusterer.clustered_log2_fold_changes,
+        heatmap_to_plot = self.clusterer.clustered_log2_fold_changes
+
+        if self.options['alphabetical_guides']:
+            heatmap_to_plot = heatmap_to_plot.rename(columns=self.options['guide_to_alias'])
+            heatmap_to_plot = heatmap_to_plot.sort_index(axis=1)
+
+        if self.options['original_outcome_order']:
+            heatmap_to_plot = heatmap_to_plot.loc[self.clusterer.original_outcome_order_with_pool]
+
+        im = ax.imshow(heatmap_to_plot,
                        cmap=repair_seq.visualize.fold_changes_cmap,
                        vmin=-2, vmax=2,
                        interpolation='none',
@@ -179,17 +271,22 @@ class Clustermap:
 
         ax.axis('off')
 
-        for x, guide in enumerate(self.clusterer.clustered_guides):
-            color = 'black'
-            ax.annotate(guide,
-                        xy=(x, 1 if self.options['upside_down'] else 0),
+        on_top = self.options['upside_down'] or self.options['guides_on_top']
+
+        for x, guide in enumerate(heatmap_to_plot.columns):
+            color = self.options['guide_to_color'].get(guide, 'black')
+
+            alias = self.options['guide_to_alias'].get(guide, guide)
+
+            ax.annotate(alias,
+                        xy=(x, 1 if on_top else 0),
                         xycoords=('data', 'axes fraction'),
-                        xytext=(0, 3 if self.options['upside_down'] else -3),
+                        xytext=(0, 3 if on_top else -3),
                         textcoords='offset points',
                         rotation=90,
                         ha='center',
-                        va='bottom' if self.options['upside_down'] else 'top',
-                        size=7 if color == 'black' else 8,
+                        va='bottom' if on_top else 'top',
+                        size=7 if color == 'black' else 9,
                         color=color,
                         weight='normal' if color == 'black' else 'bold',
                        )
@@ -238,10 +335,15 @@ class Clustermap:
         self.x0['guide similarity'] = fold_changes_position.x0
 
         gap = 0.5 * self.height_per_guide
+
         if self.options['upside_down']:
             self.y1['guide similarity'] = fold_changes_position.y0 - gap
         else:
-            self.y0['guide similarity'] = fold_changes_position.y1 + gap
+            y = fold_changes_position.y1 + gap
+            if self.options['guides_on_top']:
+                y += 5 * self.height_per_guide
+
+            self.y0['guide similarity'] = y
 
         self.width_inches['guide similarity'] = self.width_inches['fold changes']
         self.height_inches['guide similarity'] = self.width_inches['fold changes'] / 2
@@ -564,7 +666,9 @@ class Clustermap:
 
     def draw_colorbars(self):
 
-        # Similary colorbar.
+        text_size = self.options['colorbar_text_size']
+
+        # Similarity colorbar.
 
         self.x0['similarity colorbar'] = self.x0['guide similarity']
         self.y0['similarity colorbar'] = self.y0['guide similarity'] + 20 * self.height_per_guide
@@ -577,15 +681,16 @@ class Clustermap:
         cbar = plt.colorbar(self.ims['guide similarities'], cax=ax, orientation='vertical', ticks=[-1, 0, 1])
 
         cbar.outline.set_alpha(0.1)
+        cbar.ax.tick_params(labelsize=text_size)
 
         ax.annotate('correlation\nbetween\nrepair outcome\nredistribution\nprofiles',
                     xy=(1, 0.5),
                     xycoords='axes fraction',
-                    xytext=(18, 0),
+                    xytext=(text_size * 1.5, 0),
                     textcoords='offset points',
                     ha='left',
                     va='center',
-                    size=12,
+                    size=text_size,
                    )
 
         # Fold changes colorbar.
@@ -599,8 +704,9 @@ class Clustermap:
 
         ax = self.add_axes('fold changes colorbar')
 
-        repair_seq.visualize.heatmap.add_fold_change_colorbar(self.fig, self.ims['fold changes'], cbar_ax=ax, text_size=12)
+        repair_seq.visualize.heatmap.add_fold_change_colorbar(self.fig, self.ims['fold changes'], cbar_ax=ax, text_size=text_size)
 
+        return cbar
 
 class SinglePoolClustermap(Clustermap):
     def __init__(self, pool, **kwargs):
