@@ -1,16 +1,17 @@
+import matplotlib
+if 'inline' not in matplotlib.get_backend():
+    matplotlib.use('Agg')
+
 import bisect
 import copy
 import datetime
 import gzip
 import heapq
 import itertools
-import multiprocessing
-import os
+import logging
 import pickle
 import resource
 import shutil
-import subprocess
-import sys
 import time
 import warnings
 
@@ -23,14 +24,13 @@ import numpy as np
 import pandas as pd
 import pysam
 import scipy.sparse
-import tqdm
 import yaml
 
 import hits.visualize
-from hits import utilities, sam, fastq, fasta, mapping_tools, interval
-from knock_knock import experiment, target_info, visualize, ranges, explore, outcome_record
+from hits import utilities, sam, fastq, fasta, interval
+from knock_knock import experiment, target_info, visualize, ranges, explore, outcome_record, parallel
 
-from . import pooled_layout, collapse, coherence, guide_library, prime_editing_layout, statistics
+from . import pooled_layout, collapse, coherence, guide_library, prime_editing_layout, twin_prime_layout, statistics
 
 memoized_property = utilities.memoized_property
 memoized_with_args = utilities.memoized_with_args
@@ -315,7 +315,7 @@ class SingleGuideExperiment(experiment.Experiment):
 
     @memoized_property
     def combined_header(self):
-        return sam.get_header(self.fns['bam_by_name'])
+        return sam.get_header(self.fns_by_read_type['bam_by_name']['collapsed_uncommon_R2'])
         
     def categorize_outcomes(self, max_reads=None):
         times = []
@@ -347,10 +347,9 @@ class SingleGuideExperiment(experiment.Experiment):
 
             for read in self.progress(reads, desc='Categorizing reads'):
                 if self.use_memoized_outcomes and read.name in self.qname_to_common_name:
-                    common_name = self.qname_to_common_name[read.name]
-                    layout = self.pool.common_name_to_outcome[read.seq]
-                    special_alignment = self.pool.common_name_to_special_alignment.get(common_name)
-                    common_sequence_name = common_name
+                    common_sequence_name = self.qname_to_common_name[read.name]
+                    layout = self.pool.common_name_to_outcome[common_sequence_name]
+                    special_alignment = self.pool.common_name_to_special_alignment.get(common_sequence_name)
 
                 else:
                     common_sequence_name = ''
@@ -621,7 +620,7 @@ class SingleGuideExperiment(experiment.Experiment):
         # to keep iters in sync.
         outcomes = self.outcome_iter(outcome_fn_keys=['outcome_list'])
 
-        for outcome in self.progress(outcomes):
+        for outcome in self.progress(outcomes, desc='Populating length ranges'):
             if specific_outcome is not None:
                 if (outcome.category, outcome.subcategory) != specific_outcome:
                     continue
@@ -702,17 +701,14 @@ class SingleGuideExperiment(experiment.Experiment):
             'unintended donor integration',
         ]
 
-        with open(self.fns['filtered_cell_outcomes']) as outcomes_fh:
-            for line in outcomes_fh:
-                outcome = self.final_Outcome.from_line(line)
-            
-                if outcome.category in relevant_categories and getattr(outcome, 'guide_mismatch', -1) == -1:
-                    insertion_outcome = pooled_layout.LongTemplatedInsertionOutcome.from_string(outcome.details)
-                    
-                    for field in fields: 
-                        value = getattr(insertion_outcome, field)
-                        key = f'{outcome.category}/{outcome.subcategory}/{field}'
-                        lists[key].append(value)
+        for outcome in self.outcome_iter(outcome_fn_keys=['filtered_cell_outcomes']):
+            if outcome.category in relevant_categories and getattr(outcome, 'guide_mismatch', -1) == -1:
+                insertion_outcome = pooled_layout.LongTemplatedInsertionOutcome.from_string(outcome.details)
+                
+                for field in fields: 
+                    value = getattr(insertion_outcome, field)
+                    key = f'{outcome.category}/{outcome.subcategory}/{field}'
+                    lists[key].append(value)
 
         with h5py.File(self.fns['filtered_templated_insertion_details'], 'w') as hdf5_file:
             cat_and_subcats = {key.rsplit('/', 1)[0] for key in lists}
@@ -893,10 +889,13 @@ class SingleGuideExperiment(experiment.Experiment):
                 #self.extract_deletion_ranges()
                 #self.make_filtered_cell_bams()
                 #self.make_outcome_plots(num_examples=3)
+
+            elif stage == 'visualize':
+                self.generate_figures()
             else:
                 raise ValueError(stage)
         except:
-            print(self.pool_name, self.sample_name)
+            print(f'Error in {self.pool.name}: {self.sample_name}')
             raise
 
 class SingleGuideNoUMIExperiment(SingleGuideExperiment):
@@ -983,7 +982,7 @@ class SingleGuideNoUMIExperiment(SingleGuideExperiment):
         if self.outcome_counts is None:
             return None
         else:
-            return self.outcome_counts.loc[True].sum(level=['category', 'subcategory'])
+            return self.outcome_counts.xs(True).groupby(level=['category', 'subcategory'], sort=False).sum()
 
 class CommonSequenceExperiment(SingleGuideExperiment):
     def __init__(self, *args, **kwargs):
@@ -1011,7 +1010,7 @@ class CommonSequenceExperiment(SingleGuideExperiment):
             self.combine_alignments(read_type)
             self.categorize_outcomes()
         except:
-            print(self.sample_name)
+            print(f'Error in {self.sample_name}')
             raise
 
     @property
@@ -1030,11 +1029,14 @@ def collapse_categories(df):
 
     new_rows = {}
     
-    for category in to_collapse:
-        subcats = sorted({s for c, s, v in df.index.values if c == category})
-        for subcat in subcats:
-            to_add = df.loc[category, subcat]
-            new_rows[category, subcat, 'collapsed'] = to_add.sum()
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', category=pd.errors.PerformanceWarning)
+
+        for category in to_collapse:
+            subcats = sorted({s for c, s, v in df.index.values if c == category})
+            for subcat in subcats:
+                to_add = df.loc[category, subcat]
+                new_rows[category, subcat, 'collapsed'] = to_add.sum()
 
     # Collapse subcategories, retaining details.
     if any(c == 'donor' for c, s, d in df.index.values):
@@ -1088,6 +1090,8 @@ class PooledScreen:
             self.categorizer = pooled_layout.Layout
         elif categorizer_name == 'prime_editing_layout': 
             self.categorizer = prime_editing_layout.Layout
+        elif categorizer_name == 'twin_prime': 
+            self.categorizer = twin_prime_layout.Layout
         else:
             raise ValueError(categorizer_name)
 
@@ -1113,7 +1117,15 @@ class PooledScreen:
 
         self.Experiment = SingleGuideExperiment
 
-        self.supplemental_index_names = self.sample_sheet.get('supplemental_indices', ['hg19', 'bosTau7', 'e_coli'])
+        index_names = self.sample_sheet.get('supplemental_indices')
+
+        if index_names is None:
+            index_names = ['hg19', 'bosTau7', 'e_coli']
+
+        if isinstance(index_names, str):
+            index_names = index_names.split(';')
+
+        self.supplemental_index_names = index_names
 
         self.min_reads_per_UMI = self.sample_sheet.get('min_reads_per_UMI', 4)
 
@@ -1187,29 +1199,13 @@ class PooledScreen:
                                     primer_names=self.primer_names,
                                     sequencing_start_feature_name=self.sequencing_start_feature_name,
                                     supplemental_indices=self.supplemental_indices,
-                                    infer_homology_arms=self.sample_sheet.get(
-                                        'infer_homology_arms', False),
+                                    infer_homology_arms=self.sample_sheet.get('infer_homology_arms', False),
                                    )
 
         return ti
         
     @memoized_property
     def diagram_kwargs(self):
-        label_offsets = {}
-        for (seq_name, feature_name), feature in self.target_info.features.items():
-            if feature.feature.startswith('donor_insertion'):
-                label_offsets[feature_name] = 2
-            elif feature.feature.startswith('donor_deletion'):
-                label_offsets[feature_name] = 3
-            elif feature_name.startswith('HA_RT'):
-                label_offsets[feature_name] = 1
-
-        label_offsets[f'{self.target_info.primary_sgRNA}_PAM'] = 1
-
-        for sgRNA in self.target_info.sgRNAs:
-            if sgRNA != self.target_info.primary_sgRNA:
-                label_offsets[f'{sgRNA}_PAM'] = 1
-
         diagram_kwargs = dict(
             features_to_show=self.target_info.features_to_show,
             ref_centric=True,
@@ -1218,7 +1214,6 @@ class PooledScreen:
             highlight_SNPs=True,
             split_at_indels=True,
             force_left_aligned=False,
-            label_offsets=label_offsets,
         )
 
         return diagram_kwargs
@@ -1334,9 +1329,11 @@ class PooledScreen:
         for exp in self.progress(exps, total=len(self.guide_combinations), desc=description):
             counts = exp.outcome_counts
             if counts is None:
-                print(f'Warning: no outcome counts for {exp}')
+                logging.warning(f'Warning: no outcome counts for {exp}')
             else:
-                all_counts[exp.fixed_guide, exp.variable_guide] = exp.outcome_counts
+                # Collapse outcome details that are too individually rare to be worth tracking.
+                collapsed = pd.concat({pg: collapse_categories(counts.xs(pg)) for pg in [True, False] if pg in counts.index.levels[0]})
+                all_counts[exp.fixed_guide, exp.variable_guide] = collapsed
 
         all_outcomes = set()
 
@@ -1365,13 +1362,12 @@ class PooledScreen:
 
         df.sum(axis=1).to_csv(self.fns['total_outcome_counts'], header=False)
 
-        # Collapse potentially equivalent outcomes together.
-        collapsed = pd.concat({pg: collapse_categories(df.loc[pg]) for pg in [True, False] if pg in df.index.levels[0]})
-
-        coo = scipy.sparse.coo_matrix(np.array(collapsed))
+        coo = scipy.sparse.coo_matrix(df.to_numpy())
         scipy.sparse.save_npz(self.fns['collapsed_outcome_counts'], coo)
 
-        collapsed.sum(axis=1).to_csv(self.fns['collapsed_total_outcome_counts'], header=False)
+        # 21.12.25: this is now redundant with total_outcome_counts, but left in
+        # for backwards compatibility.
+        df.sum(axis=1).to_csv(self.fns['collapsed_total_outcome_counts'], header=False)
 
     def record_snapshot(self, name=None, description=''):
         ''' Make copies of outcome counts to allow comparison
@@ -1558,7 +1554,7 @@ class PooledScreen:
             # 21.11.22: sometime between pandas 1.1.2 and 1.3.4, trying to use a boolean value
             # in a .loc for a multiindex fails, apparently because the whole index is checked for
             # a boolean dtype rather than just the relevant level. Unclear if this is intended
-            # behavior or not. Must use .xs with drop_level=True instead.
+            # behavior or not. Must use .xs (with drop_level=True) instead.
             outcome_counts = all_counts.xs(perfect_guide)
 
         return outcome_counts
@@ -1580,15 +1576,16 @@ class PooledScreen:
 
         short_and_long = short_gis + long_gis
 
-        if guide_status == 'perfect':
-            if not np.allclose(short_and_long, outcome_counts.loc['genomic insertion', 'hg19', 'collapsed']):
-                # TODO: understand source of discrepancies here
-                pass
+        if ('genomic insertion', 'hg19', 'collapsed') in outcome_counts.index:
+            if guide_status == 'perfect':
+                    if not np.allclose(short_and_long, outcome_counts.loc['genomic insertion', 'hg19', 'collapsed']):
+                        # TODO: understand source of discrepancies here
+                        pass
 
-        outcome_counts.drop(('genomic insertion', 'hg19', 'collapsed'), inplace=True)
+            outcome_counts.drop(('genomic insertion', 'hg19', 'collapsed'), inplace=True)
 
-        outcome_counts.loc['genomic insertion', 'hg19', f'<={length_cutoff} nts'] = short_gis
-        outcome_counts.loc['genomic insertion', 'hg19', f'>{length_cutoff} nts'] = long_gis
+            outcome_counts.loc['genomic insertion', 'hg19', f'<={length_cutoff} nts'] = short_gis
+            outcome_counts.loc['genomic insertion', 'hg19', f'>{length_cutoff} nts'] = long_gis
         
         return outcome_counts
 
@@ -1820,12 +1817,12 @@ class PooledScreen:
     
     def extract_category_counts(self):
         nt_guides = self.variable_guide_library.non_targeting_guides
-        category_counts = self.outcome_counts()['none'].sum(level='category')
+        category_counts = self.outcome_counts()['none'].groupby(level='category').sum()
         category_counts = category_counts.drop('malformed layout', errors='ignore')
         category_counts[ALL_NON_TARGETING] = category_counts[nt_guides].sum(axis=1)
         category_counts.to_csv(self.fns['category_counts'])
 
-        subcategory_counts = self.outcome_counts()['none'].sum(level=['category', 'subcategory'])
+        subcategory_counts = self.outcome_counts()['none'].groupby(level=['category', 'subcategory']).sum()
         subcategory_counts = subcategory_counts.drop('malformed layout', errors='ignore')
         subcategory_counts[ALL_NON_TARGETING] = subcategory_counts[nt_guides].sum(axis=1)
         subcategory_counts.to_csv(self.fns['subcategory_counts'])
@@ -2106,7 +2103,13 @@ class PooledScreen:
             
         return gene_guides
         
-    def rational_outcome_order(self, fixed_guide, num_outcomes=50, include_uncommon=False, by_frequency=False):
+    def rational_outcome_order(self,
+                               fixed_guide,
+                               num_outcomes=50,
+                               include_uncommon=False,
+                               by_frequency=False,
+                               use_high_frequency_counts=False,
+                              ):
         def get_deletion_info(details):
             deletion = target_info.degenerate_indel_from_string(details)
             return {'num_MH_nts': len(deletion.starts_ats) - 1,
@@ -2166,10 +2169,15 @@ class PooledScreen:
             '___',
         ]
 
-        groups = {
-            name: [o for o in self.most_frequent_outcomes(fixed_guide)[:num_outcomes] if condition(*o)] if name != 'uncommon' else condition
-            for name, condition in conditions.items()
-        }
+        most_frequent_outcomes = self.most_frequent_outcomes(fixed_guide=fixed_guide, use_high_frequency_counts=use_high_frequency_counts)[:num_outcomes]
+        groups = {}
+        for name, condition in conditions.items():
+            if name != 'uncommon':
+                outcomes = [o for o in most_frequent_outcomes if condition(*o)]
+            else:
+                outcomes = condition
+
+            groups[name] = outcomes
 
         def donor_key(csd):
             details = csd[2]
@@ -2304,7 +2312,7 @@ class PooledScreen:
         length_counts = {}
         length_fractions = {}
 
-        read_length = self.R2_read_length
+        read_length = 265#self.R2_read_length
         
         for guide_name, guide_combos in self.progress(all_guide_combos.items()):    
             for organism in ['hg19', 'bosTau7']:
@@ -2607,13 +2615,17 @@ class PooledScreen:
         if relevant:
             layout.categorize()
             to_plot = layout.relevant_alignments
+            diagram_kwargs['inferred_amplicon_length'] = layout.inferred_amplicon_length
         else:
             to_plot = layout.alignments
             
         for k, v in self.diagram_kwargs.items():
             diagram_kwargs.setdefault(k, v)
 
-        diagram = visualize.ReadDiagram(to_plot, self.target_info, **diagram_kwargs)
+        if relevant:
+            diagram = layout.plot(**diagram_kwargs)
+        else:
+            diagram = visualize.ReadDiagram(to_plot, self.target_info, **diagram_kwargs)
 
         return diagram
 
@@ -2671,21 +2683,40 @@ class PooledScreen:
         #    env['OPENBLAS_NUM_THREADS'] = '1'
         # Unclear if equivalent is needed for multiprocessing design.
 
+        log_fn = self.dir / f'log_{datetime.datetime.now():%y%m%d-%H%M%S}.out'
+
+        logger = logging.getLogger(__name__)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        file_handler = logging.FileHandler(log_fn)
+        formatter = logging.Formatter(fmt='%(asctime)s: %(message)s',
+                                      datefmt='%y-%m-%d %H:%M:%S',
+                                     )
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.DEBUG)
+        logger.addHandler(file_handler)
+
+        print(f'Logging in {log_fn}')
+
         def process_stage(stage):
-            with multiprocessing.Pool(processes=num_processes, maxtasksperchild=1) as process_pool:
-                arg_tuples = []
+            arg_tuples = []
 
-                for fixed_guide, variable_guide in self.guide_combinations_by_read_count:
-                    arg_tuple = (self.base_dir, self.name, fixed_guide, variable_guide, stage, None, True)
-                    arg_tuples.append(arg_tuple)
+            for exp_i, (fixed_guide, variable_guide) in enumerate(self.guide_combinations_by_read_count):
+                arg_tuple = (self.base_dir, self.name, fixed_guide, variable_guide, stage, None, exp_i, len(self.guide_combinations_by_read_count))
+                arg_tuples.append(arg_tuple)
 
+            with parallel.PoolWithLoggerThread(num_processes, logger) as process_pool:
                 process_pool.starmap(process_single_guide_experiment_stage, arg_tuples)
 
         def process_common_sequences():
             self.make_common_sequences()
 
-            with multiprocessing.Pool(processes=num_processes, maxtasksperchild=1) as process_pool:
-                arg_tuples = [(self.base_dir, self.name, chunk_name) for chunk_name in self.common_sequence_chunk_exp_names]
+            arg_tuples = []
+            for chunk_i, chunk_name in enumerate(self.common_sequence_chunk_exp_names):
+                arg_tuple = (self.base_dir, self.name, chunk_name, None, chunk_i, len(self.common_sequence_chunk_exp_names))
+                arg_tuples.append(arg_tuple)
+
+            with parallel.PoolWithLoggerThread(num_processes, logger) as process_pool:
                 process_pool.starmap(process_common_sequences_chunk, arg_tuples)
 
             self.merge_common_sequence_outcomes()
@@ -2706,6 +2737,9 @@ class PooledScreen:
         #self.merge_templated_insertion_details(fn_key='filtered_duplication_details')
         #self.merge_special_alignments()
 
+        logger.removeHandler(file_handler)
+        file_handler.close()
+        
 class PooledScreenNoUMI(PooledScreen):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -2766,12 +2800,13 @@ class CommonSequenceSplitter:
         
     def write_files(self):
         seq_lengths = {len(s) for s in self.seq_counts}
+
         if len(seq_lengths) > 1:
-            raise ValueError('More than one sequence length: ', seq_lengths)
-        seq_length = seq_lengths.pop()
+            print(f'Warning: more than one sequence length: {seq_lengths}')
+        max_seq_length = max(seq_lengths)
 
         # Include one value outside of the solexa range to allow automatic detection.
-        qual = fastq.encode_sanger([25] + [40] * (seq_length - 1))
+        qual = fastq.encode_sanger([25] + [40] * (max_seq_length - 1))
    
         tuples = []
 
@@ -2783,7 +2818,7 @@ class CommonSequenceSplitter:
 
             if count > 1 and distinct_guides > 1:
                 name = str(Annotation(rank=i, count=count))
-                read = fastq.Read(name, seq, qual)
+                read = fastq.Read(name, seq, qual[:len(seq)])
                 self.write_read(i, read)
                 i += 1
             else:
@@ -2883,28 +2918,30 @@ def process_single_guide_experiment_stage(base_dir,
                                           variable_guide,
                                           stage,
                                           progress=None,
-                                          print_timestamps=False,
+                                          guide_index=None,
+                                          total_guides=None,
                                          ):
     pool = get_pool(base_dir, pool_name, progress=progress)
     exp = pool.single_guide_experiment(fixed_guide, variable_guide)
 
-    if print_timestamps:
-        print(f'{utilities.current_time_string()} Started {fixed_guide}-{variable_guide} {stage}')
+    progress_string = f'({guide_index + 1: >7,} / {total_guides: >7,})'
+    stage_string = f'{fixed_guide}-{variable_guide} {stage}'
+    logging.info(f'{progress_string} Started {stage_string}')
 
     exp.process(stage)
 
-    if print_timestamps:
-        print(f'{utilities.current_time_string()} Finished {fixed_guide}-{variable_guide} {stage}')
+    logging.info(f'{progress_string} Finished {stage_string}')
 
-def process_common_sequences_chunk(base_dir, pool_name, chunk, progress=None):
+def process_common_sequences_chunk(base_dir, pool_name, chunk_name, progress=None, chunk_index=None, total_chunks=None):
     pool = get_pool(base_dir, pool_name, progress=progress)
-    exp = pool.common_sequence_chunk_exp_from_name(chunk)
+    exp = pool.common_sequence_chunk_exp_from_name(chunk_name)
 
-    print(f'{utilities.current_time_string()} Started {chunk}')
+    progress_string = f'({chunk_index + 1: >7,} / {total_chunks: >7,})'
+    logging.info(f'{progress_string} Started {chunk_name}')
 
     exp.process()
 
-    print(f'{utilities.current_time_string()} Finished {chunk}')
+    logging.info(f'{progress_string} Finished {chunk_name}')
 
 class PooledScreenExplorer(explore.Explorer):
     def __init__(self,

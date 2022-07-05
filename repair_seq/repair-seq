@@ -21,14 +21,14 @@ if __name__ == '__main__':
         parser.add_argument('base_dir',
                             type=Path,
                             help='The base directory to store data, metadata, and output.',
-                        )
+                           )
     def add_num_processes_arg(parser):
         available_CPUs = len(os.sched_getaffinity(0))
         parser.add_argument('--num_processes',
                             type=int,
                             help='Number of processors to use.',
                             default=min(8, available_CPUs),
-                        )
+                           )
 
     def add_SRA_screen_name_arg(parser):
         valid_screen_names = sorted(repair_seq.demux.load_SRA_sample_sheet().index)
@@ -36,13 +36,13 @@ if __name__ == '__main__':
                             help='Name of screen.',
                             choices=valid_screen_names,
                             metavar='screen_name',
-                            )
+                           )
 
     def add_debug_arg(parser):
         parser.add_argument('--debug',
                             action='store_true',
                             help='Run on a small fraction of the data for debugging purposes.',
-                        )
+                           )
 
     subparsers = parser.add_subparsers(dest='subcommand')
     subparsers.required = True
@@ -53,6 +53,7 @@ if __name__ == '__main__':
     add_num_processes_arg(process_subparser)
 
     def process(args):
+        logging.info(f'Processing {args.screen_name}')
         pool = rs.pooled_screen.get_pool(args.base_dir, args.screen_name)
         
         if pool is not None:

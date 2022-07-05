@@ -199,8 +199,10 @@ class Layout(layout.Categorizer):
 
         if self.target_info.donor is not None:
             valid_names = [self.target_info.donor]
-        else:
+        elif self.target_info.pegRNA_names is not None:
             valid_names = self.target_info.pegRNA_names
+        else:
+            valid_names = []
 
         d_als = [
             al for al in self.alignments
@@ -431,7 +433,7 @@ class Layout(layout.Categorizer):
 
         edge_als_by_side = {'left': [], 'right': []}
         for al in edge_als:
-            if sam.get_strand(al) != self.expected_target_strand:
+            if sam.get_strand(al) != self.target_info.sequencing_direction:
                 continue
 
             covered = interval.get_covered(al)
@@ -447,34 +449,7 @@ class Layout(layout.Categorizer):
                 best_edge_al = max(edge_als_by_side[edge], key=lambda al: al.query_alignment_length)
                 als.append(best_edge_al)
 
-        # One-sided sequencing reads of outcomes that represent complex rearrangments may end
-        # a short way into a new segment that is too short to produce an initial alignment.
-        # To catch some such cases, look for perfect alignments between uncovered read edges
-        # and perfect alignment to relevant sequences.
-
         covered = interval.get_disjoint_covered(als)
-
-        if len(self.seq) - 1 not in covered:
-            right_most = max(als, key=lambda al: interval.get_covered(al).end)
-            other = [al for al in als if al != right_most]
-
-            perfect_edge_als = self.perfect_edge_alignments
-            merged = sam.merge_adjacent_alignments(right_most, perfect_edge_als['right'], ti.reference_sequences)
-            if merged is None:
-                merged = right_most
-
-            als = other + [merged]
-        
-        if 0 not in covered:
-            left_most = min(als, key=lambda al: interval.get_covered(al).start)
-            other = [al for al in als if al != left_most]
-
-            perfect_edge_als = self.perfect_edge_alignments
-            merged = sam.merge_adjacent_alignments(perfect_edge_als['left'], left_most, ti.reference_sequences)
-            if merged is None:
-                merged = left_most
-
-            als = other + [merged]
 
         # If the end result of all of these alignment attempts is mergeable alignments,
         # merge them.
@@ -488,7 +463,12 @@ class Layout(layout.Categorizer):
     @memoized_property
     def split_target_and_donor_alignments(self):
         all_split_als = []
-        for al in self.target_alignments + self.donor_alignments:
+
+        initial_als = self.target_alignments + self.donor_alignments
+        if self.perfect_right_edge_alignment is not None:
+            initial_als.append(self.perfect_right_edge_alignment)
+
+        for al in initial_als:
             split_als = layout.comprehensively_split_alignment(al,
                                                                self.target_info,
                                                                'illumina',
@@ -533,11 +513,6 @@ class Layout(layout.Categorizer):
     def target_edge_alignments_list(self):
         return [al for al in self.target_edge_alignments.values() if al is not None]
 
-    @memoized_property
-    def expected_target_strand(self):
-        ti = self.target_info
-        return ti.features[ti.target, 'sequencing_start'].strand
-    
     def get_target_edge_alignments(self, alignments, split=True):
         ''' Get target alignments that make it to the read edges. '''
         edge_alignments = {'left': [], 'right':[]}
@@ -1008,67 +983,6 @@ class Layout(layout.Categorizer):
     def read(self):
         return fastq.Read(self.query_name, self.seq, fastq.encode_sanger(self.qual))
 
-    @memoized_property
-    def sw_alignments(self):
-        self.required_sw = True
-
-        ti = self.target_info
-
-        targets = [
-            (ti.target, ti.target_sequence),
-        ]
-
-        if ti.donor is not None:
-            targets.append((ti.donor, ti.donor_sequence))
-
-        stringent_als = sw.align_read(self.read, targets, 5, ti.header,
-                                      max_alignments_per_target=10,
-                                      mismatch_penalty=-8,
-                                      indel_penalty=-60,
-                                      min_score_ratio=0,
-                                      both_directions=True,
-                                      N_matches=False,
-                                     )
-
-        no_Ns = [al for al in stringent_als if 'N' not in al.get_tag('MD')]
-
-        return no_Ns
-    
-    def sw_interval_to_donor(self, query_start, query_end):
-        ti = self.target_info
-        
-        seq = self.seq[query_start:query_end + 1]
-        read = fastq.Read('read', seq, fastq.encode_sanger([41]*len(seq)))
-        
-        als = sw.align_read(read, [(ti.donor, ti.donor_sequence)], 5, ti.header,
-                            alignment_type='whole_query',
-                            min_score_ratio=0.5,
-                            indel_penalty=None,
-                            deletion_penalty=-2,
-                            mismatch_penalty=-2,
-                            insertion_penalty=-10,
-                           )
-        if len(als) == 0:
-            return None
-        
-        al = als[0]
-        
-        before_cigar = [(sam.BAM_CSOFT_CLIP, query_start)]
-        after_cigar = [(sam.BAM_CSOFT_CLIP, len(self.seq) - 1 - query_end)]
-        if al.is_reverse:
-            cigar = after_cigar + al.cigar + before_cigar
-            al.query_sequence = utilities.reverse_complement(self.seq)
-        else:
-            cigar = before_cigar + al.cigar + after_cigar
-            al.query_sequence = self.seq
-
-        al.cigar = cigar
-
-        al = sw.extend_alignment(al, ti.donor_sequence_bytes)
-        al.query_qualities = [41] * len(self.seq)
-        
-        return al
-
     def seed_and_extend(self, on, query_start, query_end):
         extender = self.target_info.seed_and_extender[on]
         return extender(self.seq_bytes, query_start, query_end, self.query_name)
@@ -1086,113 +1000,29 @@ class Layout(layout.Categorizer):
         return valids
 
     @memoized_property
-    def perfect_edge_alignments_and_gap(self):
-        # Set up keys to prioritize alignments.
-        # Prioritize by (correct strand and side of cut, length (longer better), distance from cut (closer better)) 
+    def perfect_right_edge_alignment(self):
+        min_length = 5
         
-        def sort_key(al, side):
-            length = al.query_alignment_length
+        edge_al = None
 
-            valid_int = self.valid_intervals_for_edge_alignments[side]
-            valid_strand = self.target_info.sequencing_direction
+        def is_valid(al):
+            long_enough = al.query_alignment_length >= min_length
+            overlaps_amplicon_interval = interval.are_overlapping(interval.get_covered_on_ref(al), self.target_info.amplicon_interval)
+            return long_enough and overlaps_amplicon_interval
 
-            correct_strand = sam.get_strand(al) == valid_strand
+        for length in range(20, 3, -1):
+            start = max(0, len(self.seq) - length)
+            end = len(self.seq)
 
-            cropped = sam.crop_al_to_ref_int(al, valid_int.start, valid_int.end)
-            if cropped is None or cropped.is_unmapped:
-                correct_side = 0
-                inverse_distance = 0
-            else:
-                correct_side = 1
+            als = self.seed_and_extend('target', start, end)
 
-                if side == 'left':
-                    if valid_strand == '+':
-                        edge = cropped.reference_end - 1
-                    else:
-                        edge = cropped.reference_start
-                else:
-                    if valid_strand == '+':
-                        edge = cropped.reference_start
-                    else:
-                        edge = cropped.reference_end - 1
+            valid = [al for al in als if is_valid(al)]
+            
+        if len(valid) > 0:
+            edge_al = max(valid, key=lambda al: al.query_alignment_length)
 
-                inverse_distance = 1 / (abs(edge - self.target_info.cut_after) + 0.1)
+        return edge_al
 
-            return correct_strand & correct_side, length, inverse_distance
-
-        def is_valid(al, side):
-            correct_strand_and_side, length, inverse_distance = sort_key(al, side)
-            return correct_strand_and_side
-        
-        best_edge_als = {'left': None, 'right': None}
-
-        # Insist that the alignments be to the right side and strand, even if longer ones
-        # to the wrong side or strand exist.
-        for side in ['left', 'right']:
-            for length in range(20, 3, -1):
-                if side == 'left':
-                    start = 0
-                    end = length
-                else:
-                    start = max(0, len(self.seq) - length)
-                    end = len(self.seq)
-
-                als = self.seed_and_extend('target', start, end)
-
-                valid = [al for al in als if is_valid(al, side)]
-                if len(valid) > 0:
-                    break
-                
-            if len(valid) > 0:
-                key = lambda al: sort_key(al, side)
-                best_edge_als[side] = max(valid, key=key)
-
-        covered_from_edges = interval.get_disjoint_covered(best_edge_als.values())
-        uncovered = self.whole_read - covered_from_edges
-        
-        if uncovered.total_length == 0:
-            gap_interval = None
-        elif len(uncovered.intervals) > 1:
-            # This shouldn't be possible since seeds start at each edge
-            raise ValueError('disjoint gap', uncovered)
-        else:
-            gap_interval = uncovered.intervals[0]
-        
-        return best_edge_als, gap_interval
-
-    @memoized_property
-    def perfect_edge_alignments(self):
-        edge_als, gap = self.perfect_edge_alignments_and_gap
-        return edge_als
-
-    @memoized_property
-    def gap_between_perfect_edge_als(self):
-        edge_als, gap = self.perfect_edge_alignments_and_gap
-        return gap
-
-    @memoized_property
-    def perfect_edge_alignment_reference_edges(self):
-        edge_als = self.perfect_edge_alignments
-
-        # TODO: this isn't general for a primer upstream of cut
-        left_edge = sam.reference_edges(edge_als['left'])[3]
-        right_edge = sam.reference_edges(edge_als['right'])[5]
-
-        return left_edge, right_edge
-
-    def reference_distances_from_perfect_edge_alignments(self, al):
-        al_edges = sam.reference_edges(al)
-        left_edge, right_edge = self.perfect_edge_alignment_reference_edges 
-        return abs(left_edge - al_edges[5]), abs(right_edge - al_edges[3])
-
-    @memoized_property
-    def realigned_target_alignments(self):
-        return [al for al in self.sw_alignments if al.reference_name == self.target_info.target]
-    
-    @memoized_property
-    def realigned_donor_alignments(self):
-        return [al for al in self.sw_alignments if al.reference_name == self.target_info.donor]
-    
     @memoized_property
     def genomic_insertion(self):
         if self.ranked_templated_insertions is None:
@@ -1418,12 +1248,17 @@ class Layout(layout.Categorizer):
         donor_al = details['candidate_alignment']
         indels = self.extract_indels_from_alignments([donor_al])
 
-        for feature in self.target_info.pegRNA_programmed_insertions:
-            shares_both_HAs = (('left', 'left') in details['shared_HAs'] and ('right', 'right') in details['shared_HAs'])
-            overlaps_feature = sam.overlaps_feature(donor_al, feature, require_same_strand=False)
+        for insertion_feature in self.target_info.pegRNA_programmed_insertions:
+            shares_HA = {side: (side, side) in details['shared_HAs'] for side in ['left', 'right']}
+            overlaps_feature = sam.overlaps_feature(donor_al, insertion_feature, require_same_strand=False)
             no_big_indels = not any(indel.length > 1 for indel, _ in indels)
 
-            matches = shares_both_HAs and overlaps_feature and no_big_indels
+            reaches_read_edge = details['insertion_query_bounds'][3] == self.whole_read.end
+
+            if overlaps_feature and no_big_indels:
+                if shares_HA['left']:
+                    if shares_HA['right'] or reaches_read_edge:
+                        matches = True
         
         return matches
 
@@ -1698,12 +1533,12 @@ class Layout(layout.Categorizer):
             # Only want to handle RT extensions here, which should have PAM-distal homology arm usage,
             # unless the read isn't long enough to include this.
             distance_from_end = self.whole_read.end - details['insertion_query_bounds'][3]
-            necessary_read_side = ti.PAM_side_to_read_side['PAM-distal']
 
-            if distance_from_end > 0 and (necessary_read_side, necessary_read_side) not in shared_HAs:
-                # 22.03.24: temporarily removing this restriction.
-                pass
-                #failures.append('doesn\'t share PAM-distal HA')
+            PAM_distal_paired_HA = (ti.PAM_side_to_read_side['PAM-distal'], ti.PAM_side_to_read_side['PAM-distal'])
+            insertion_skipping_paired_HA = (ti.PAM_side_to_read_side['PAM-proximal'], ti.PAM_side_to_read_side['PAM-distal'])
+
+            if distance_from_end > 0 and PAM_distal_paired_HA not in shared_HAs and insertion_skipping_paired_HA not in shared_HAs:
+                failures.append('doesn\'t share relevant HA')
 
         if gap_before_length > 5:
             failures.append(f'gap_before_length = {gap_before_length}')
@@ -1731,7 +1566,7 @@ class Layout(layout.Categorizer):
             failures.append(f'edit distance / length = {edit_distance_over_length}')
 
         if len(failures) > 0:
-            details['failed'] = ' '.join(failures)
+            details['failed'] = '; '.join(failures)
 
         return details
 
@@ -1996,12 +1831,11 @@ class Layout(layout.Categorizer):
                 self.details = 'n/a'
                 self.relevant_alignments = self.uncategorized_relevant_alignments
 
-        elif self.duplication_plus_insertion:
+        elif self.duplication_plus_insertion is not None:
             self.category = 'edit + duplication'
             self.subcategory = 'simple'
             self.details = 'n/a'
-            # TODO: make more relevant
-            self.relevant_alignments = self.uncategorized_relevant_alignments
+            self.relevant_alignments = self.duplication_plus_insertion
 
         elif self.genomic_insertion is not None:
             self.register_genomic_insertion()
@@ -2035,7 +1869,7 @@ class Layout(layout.Categorizer):
                 self.subcategory = 'uncategorized'
                 self.details = 'n/a'
 
-            self.trust_inferred_length = False
+            self.trust_inferred_length = True
                 
             self.relevant_alignments = self.uncategorized_relevant_alignments
 
@@ -2055,9 +1889,6 @@ class Layout(layout.Categorizer):
         ti = self.target_info
 
         initial_als = copy.copy(self.split_target_and_donor_alignments)
-
-        if self.perfect_edge_alignments['right'] is not None:
-            initial_als.append(self.perfect_edge_alignments['right'])
 
         initial_uncovered = self.whole_read_minus_edges(5) - interval.get_disjoint_covered(initial_als)
         
@@ -2107,7 +1938,7 @@ class Layout(layout.Categorizer):
 
         all_als = initial_als + gap_covers
 
-        return sam.make_nonredundant(interval.make_parsimonious(all_als))
+        return sam.make_nonredundant(all_als)
 
     @memoized_property
     def target_gap_covering_alignments(self):
@@ -2118,27 +1949,11 @@ class Layout(layout.Categorizer):
         return [al for al in self.gap_covering_alignments if al.reference_name == self.target_info.donor]
 
     @memoized_property
-    def target_and_donor_multiple_gap_covering_alignments(self):
-        initial_als = self.split_target_alignments + self.split_donor_alignments
-
-        if self.perfect_edge_alignments['right'] is not None:
-            initial_als.append(self.perfect_edge_alignments['right'])
-
-        initial_uncovered = self.whole_read - interval.get_disjoint_covered(initial_als)
-        gap_covers = []
-        for uncovered_interval in initial_uncovered.intervals:
-            # Don't try to explain tiny gaps.
-            if len(uncovered_interval) > 4:
-                # Note the + 1 on end here.
-                gap_covers.extend(self.seed_and_extend('target', uncovered_interval.start, uncovered_interval.end + 1))
-
-        return interval.make_parsimonious(initial_als + gap_covers)
-
-    @memoized_property
     def duplications_from_each_read_edge(self):
         ti = self.target_info
+        target_als = interval.make_parsimonious(self.target_gap_covering_alignments)
         # Order target als by position on the query from left to right.
-        target_als = sorted(self.target_gap_covering_alignments, key=interval.get_covered)
+        target_als = sorted(target_als, key=interval.get_covered)
 
         correct_strand_als = [al for al in target_als if sam.get_strand(al) == ti.sequencing_direction]
 
@@ -2165,7 +1980,7 @@ class Layout(layout.Categorizer):
             
         if len(merged_als) > 0 and \
            (self.overlaps_primer(merged_als[len(intervals) - 1], 'right') or
-            (intervals[-1].end == self.whole_read.end and len(intervals[-1]) >= 20)
+            (intervals[-1].end >= self.whole_read.end - 1 and len(intervals[-1]) >= 20)
            ):
             no_gaps_through_index = len(intervals) - 1
             
@@ -2190,19 +2005,41 @@ class Layout(layout.Categorizer):
 
         explains_whole_read = False
 
-        if from_left_edge is not None and from_right_edge is not None:
+        if from_left_edge is not None:
+            left_edge = from_left_edge[-1]
+        else:
+            left_edge = None
+            
+        if from_right_edge is not None:
+            right_edge = from_right_edge[0]
+        else:
+            right_edge = None
 
-            edge_als = {'left': from_left_edge[-1], 'right': from_right_edge[0]}
+        edge_als = {
+            'left': left_edge,
+            'right': right_edge,
+        }
 
-            if 'right' in self.pegRNA_extension_als and self.pegRNA_extension_als['right'] is not None:
-                pegRNA_al = self.pegRNA_extension_als['right']
-                details = self.evaluate_templated_insertion(edge_als, pegRNA_al, 'donor')
+        if 'right' in self.pegRNA_extension_als and self.pegRNA_extension_als['right'] is not None:
+            pegRNA_al = self.pegRNA_extension_als['right']
+            details = self.evaluate_templated_insertion(edge_als, pegRNA_al, 'donor')
 
-                if 'failed' not in details:
-                    if self.templated_insertion_matches_intended(details):
-                        explains_whole_read = True
-                    
-        return explains_whole_read
+            if 'failed' not in details:
+                if self.templated_insertion_matches_intended(details):
+                    explains_whole_read = True
+
+        if explains_whole_read:
+            alignments = [pegRNA_al]
+
+            if from_left_edge is not None:
+                alignments.extend(from_left_edge)
+
+            if from_right_edge is not None:
+                alignments.extend(from_right_edge)
+        else:
+            alignments = None
+
+        return alignments
 
     @memoized_property
     def duplication(self):
@@ -2211,8 +2048,9 @@ class Layout(layout.Categorizer):
             (duplication, complex)  - multiple junctions that are not exactly the same
         '''
         ti = self.target_info
+        target_als = interval.make_parsimonious(self.target_gap_covering_alignments)
         # Order target als by position on the query from left to right.
-        target_als = sorted(self.target_gap_covering_alignments, key=interval.get_covered)
+        target_als = sorted(target_als, key=interval.get_covered)
 
         correct_strand_als = [al for al in target_als if sam.get_strand(al) == ti.sequencing_direction]
 
@@ -2261,6 +2099,75 @@ class Layout(layout.Categorizer):
             subcategory = 'complex'
 
         return subcategory, ref_junctions, indels, als_with_donor_SNVs, merged_als
+
+    def extend_target_PBS_alignment(self, pegRNA_al):
+        ''' If a potential transition from a pegRNA alignment back to 
+        genomic (target) sequence at a PBS occurs close to the end of a read,
+        initial alignment generation may fail to produce a relevant target alignment
+        that potentially extends a few nts past the PBS, especially if there is a
+        mismatch in the PBS. This function takes a pegRNA alignment and generates
+        the longest perfectly extended target alignment that pairs with the PBS.
+        ''' 
+
+        ti = self.target_info
+
+        pegRNA_name = pegRNA_al.reference_name
+
+        target_PBS = ti.features[ti.target, knock_knock.pegRNAs.PBS_name(pegRNA_name)]
+
+        pegRNA_PBS = ti.features[pegRNA_name, 'PBS']
+
+        pegRNA_PBS_al = sam.crop_al_to_ref_int(pegRNA_al, pegRNA_PBS.start, pegRNA_PBS.end)
+
+        if pegRNA_PBS_al is None or pegRNA_PBS_al.is_unmapped or sam.contains_indel(pegRNA_PBS_al):
+            extended_al = None
+        else:
+            # Reminder: feature_offset is relative to "plus-orientation version of feature",
+            # so min of feature_offsets will be the right-most for a plus-orientation feature
+            # but max will be right-most for a minus-orientation feature.
+            pegRNA_feature_offset_to_q = self.feature_offset_to_q(pegRNA_al, 'PBS')
+
+            if target_PBS.strand == '+':
+                start_offset = min(pegRNA_feature_offset_to_q)
+            else:
+                start_offset = max(pegRNA_feature_offset_to_q)
+
+            target_PBS_start = ti.feature_offset_to_ref_p(target_PBS.seqname, target_PBS.ID)[start_offset]
+
+            query_start = min(pegRNA_feature_offset_to_q.values())
+            query_end = max(pegRNA_feature_offset_to_q.values())
+
+            print(query_start, query_end)
+
+            al = pysam.AlignedSegment(ti.header)
+
+            al.query_sequence = self.seq
+            al.query_qualities = sam.get_original_qual(self.alignments[0])
+
+            soft_clip_before = query_start
+            soft_clip_after = len(self.seq) - 1 - query_end
+
+            al.cigar = [
+                (sam.BAM_CSOFT_CLIP, soft_clip_before),
+                (sam.BAM_CMATCH, pegRNA_PBS_al.query_alignment_length),
+                (sam.BAM_CSOFT_CLIP, soft_clip_after),
+            ]
+
+            if ti.sequencing_direction == '-':
+                al.query_sequence = utilities.reverse_complement(al.query_sequence)
+                al.query_qualities = al.query_qualities[::-1]
+                al.is_reverse = True
+                al.cigar = al.cigar[::-1]
+
+            al.reference_name = ti.target
+            al.query_name = self.read.name
+            al.next_reference_id = -1
+
+            al.reference_start = target_PBS_start
+
+            extended_al = sw.extend_alignment(al, ti.reference_sequence_bytes[ti.target])
+
+        return extended_al
 
     @memoized_property
     def longest_polyG(self):
@@ -2339,7 +2246,8 @@ class Layout(layout.Categorizer):
             center_on_primers=True,
         )
 
-        diagram_kwargs.update(**manual_diagram_kwargs)
+        for k, v in diagram_kwargs.items():
+            manual_diagram_kwargs.setdefault(k, v)
 
         if relevant:
             als_to_plot = self.relevant_alignments
@@ -2348,7 +2256,7 @@ class Layout(layout.Categorizer):
 
         diagram = knock_knock.visualize.ReadDiagram(als_to_plot,
                                                     ti,
-                                                    **diagram_kwargs,
+                                                    **manual_diagram_kwargs,
                                                    )
 
         # Draw the pegRNA.

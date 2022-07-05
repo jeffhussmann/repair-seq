@@ -3,7 +3,7 @@ from collections import defaultdict
 
 import pandas as pd
 
-from hits import utilities, fasta, mapping_tools
+from hits import utilities, fasta
 
 memoized_property = utilities.memoized_property
 memoized_with_args = utilities.memoized_with_args

@@ -3,7 +3,6 @@ import gzip
 from collections import Counter
 
 from hits import fastq
-from knock_knock.experiment import Experiment
 
 class CommonSequenceSplitter:
     def __init__(self, experiment_group, reads_per_chunk=1000):

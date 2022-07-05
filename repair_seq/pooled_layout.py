@@ -202,7 +202,9 @@ class Layout(layout.Categorizer):
         self.error_corrected = error_corrected
         self.mode = mode
 
-        self.inferred_amplicon_length = len(self.seq) if self.seq is not None else -1
+        self.trust_inferred_length = True
+
+        self.categorized = False
 
     @classmethod
     def from_read(cls, read, target_info):
@@ -920,41 +922,6 @@ class Layout(layout.Categorizer):
 
         return no_Ns
     
-    def sw_interval_to_donor(self, query_start, query_end):
-        ti = self.target_info
-        
-        seq = self.seq[query_start:query_end + 1]
-        read = fastq.Read('read', seq, fastq.encode_sanger([41]*len(seq)))
-        
-        als = sw.align_read(read, [(ti.donor, ti.donor_sequence)], 5, ti.header,
-                            alignment_type='whole_query',
-                            min_score_ratio=0.5,
-                            indel_penalty=None,
-                            deletion_penalty=-2,
-                            mismatch_penalty=-2,
-                            insertion_penalty=-10,
-                           )
-        if len(als) == 0:
-            return None
-        
-        al = als[0]
-        
-        before_cigar = [(sam.BAM_CSOFT_CLIP, query_start)]
-        after_cigar = [(sam.BAM_CSOFT_CLIP, len(self.seq) - 1 - query_end)]
-        if al.is_reverse:
-            cigar = after_cigar + al.cigar + before_cigar
-            al.query_sequence = utilities.reverse_complement(self.seq)
-        else:
-            cigar = before_cigar + al.cigar + after_cigar
-            al.query_sequence = self.seq
-
-        al.cigar = cigar
-
-        al = sw.extend_alignment(al, ti.donor_sequence_bytes)
-        al.query_qualities = [41] * len(self.seq)
-        
-        return al
-
     def seed_and_extend(self, on, query_start, query_end):
         extender = self.target_info.seed_and_extender[on]
         return extender(self.seq_bytes, query_start, query_end, self.query_name)
@@ -2614,6 +2581,8 @@ class Layout(layout.Categorizer):
             # on the target sequence.
             self.details = str(self.outcome.perform_anchor_shift(self.target_info.anchor))
 
+        self.categorized = True
+
         return self.category, self.subcategory, self.details, self.outcome
 
     @memoized_property
@@ -2630,3 +2599,73 @@ class Layout(layout.Categorizer):
     @memoized_property
     def uncategorized_relevant_alignments(self):
         return self.target_alignments + self.donor_alignments + interval.make_parsimonious(self.nonredundant_supplemental_alignments) + self.gap_sw_realignments
+
+    @property
+    def inferred_amplicon_length(self):
+        if self.seq  == '':
+            return 0
+
+        right_al = self.target_edge_alignments['right']
+        right_primer = self.target_info.primers_by_side_of_read['right']
+
+        if right_al is None or not self.trust_inferred_length:
+            inferred_length = -1
+        else:
+            right_al_edge_in_query = sam.query_interval(right_al)[1]
+            right_al_edge_in_target = sam.reference_edges(right_al)[3]
+
+            if self.target_info.sequencing_direction == '+':
+                right_primer_edge = right_primer.end
+                inferred_extra = right_primer_edge - right_al_edge_in_target
+
+            else:
+                right_primer_edge = right_primer.start
+                inferred_extra = right_al_edge_in_target - right_primer_edge
+
+            length_seen = right_al_edge_in_query + 1 
+            inferred_length = length_seen + max(inferred_extra, 0)
+
+        return inferred_length
+
+    def plot(self, relevant=True, **manual_diagram_kwargs):
+        if not self.categorized:
+            self.categorize()
+
+        ti = self.target_info
+
+        flip_target = ti.sequencing_direction == '-'
+
+        diagram_kwargs = dict(
+            draw_sequence=True,
+            flip_target=flip_target,
+            split_at_indels=True,
+            features_to_show=ti.features_to_show,
+            #refs_to_draw={ti.target, *ti.pegRNA_names},
+            inferred_amplicon_length=self.inferred_amplicon_length,
+            center_on_primers=True,
+        )
+
+        if ti.homology_arms is not None:
+            # If the donor is the same orientation as the target, then
+            # its flip status should be the same.
+            if ti.homology_arms[5]['donor'].strand == ti.homology_arms[5]['target'].strand:
+                flip_donor = flip_target
+            else:
+                flip_donor = not flip_target
+
+            diagram_kwargs['flip_donor'] = flip_donor
+
+        for k, v in diagram_kwargs.items():
+            manual_diagram_kwargs.setdefault(k, v)
+
+        if relevant:
+            als_to_plot = self.relevant_alignments
+        else:
+            als_to_plot = self.uncategorized_relevant_alignments
+
+        diagram = knock_knock.visualize.ReadDiagram(als_to_plot,
+                                                    ti,
+                                                    **manual_diagram_kwargs,
+                                                   )
+
+        return diagram

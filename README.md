@@ -35,36 +35,9 @@ This will move annotations of the screen vector and CRISPRI sgRNA libraries into
 
 To download raw sequencing data for an individual screen, run
 
-`$ repair-seq SRA download BASE_DIR SCREEN_NAME`.
+`$ repair-seq SRA download BASE_DIR SCREEN_NAME`
 
-Valid options for `SCREEN_NAME` are:
-
- - K562_AsCas12a_target_none_AX227_1
- - K562_SpCas9_target-1_none_AC001_1
- - K562_SpCas9_target-1_none_AC001_2
- - K562_SpCas9_target-1_none_AX227_1
- - K562_SpCas9_target-1_oBA701-PAGE_AC001_1
- - K562_SpCas9_target-1_oBA701-PCR_AX227_1
- - K562_SpCas9_target-1_oBA701_AC001_1
- - K562_SpCas9_target-1_oBA701_AC001_2
- - K562_SpCas9_target-1_oBA701_AX227_1
- - K562_SpCas9_target-1_oBA701_AX227_2
- - K562_SpCas9_target-1_oJAH158_AC001_1
- - K562_SpCas9_target-1_oJAH159_AC001_1
- - K562_SpCas9_target-1_oJAH160_AC001_1
- - K562_SpCas9_target-1_oJAH165_AC001_1
- - K562_SpCas9_target-2_none_AC001_1
- - K562_SpCas9_target-2_none_AX227_1
- - K562_SpCas9_target-2_oBA701_AX227_1
- - K562_SpCas9_target-3_none_AC001_1
- - K562_SpCas9_target-3_none_AC001_2
- - K562_SpCas9_target-4_none_AC001_1
- - K562_SpCas9_target-4_none_AC001_2
- - K562_none_none_none_AC001_1
- - K562_none_none_none_AC001_2
-
-
-Experimental details for each screen are listed in [Table S5](https://ars.els-cdn.com/content/image/1-s2.0-S0092867421011764-mmc5.xlsx). 
+Experimental details for each screen are listed in [Table S5](https://ars.els-cdn.com/content/image/1-s2.0-S0092867421011764-mmc5.xlsx). Valid options for `SCREEN_NAME` are value from the `Screen_Name` column in this table.
 
 Note that four sequencing reads per spot were used in these screens: an 8 nt sample index read, a 12 nt UMI, a 45 nt read to identify the CRISPRi sgRNA identity, and a 258 nt read to identify the repair outcome sequence:
 
@@ -90,6 +63,6 @@ NGCCGCTGCACGTAGCATGCAACAAAGGAACCTTTAATAGAAATTGGACAGCAAGAAAGCGAGCTTAGTGATACTTGTGG
 
 To process data for an individual screen after downloading it,
 
-`repair-seq SRA process BASE_DIR SCREEN_NAME`.
+`repair-seq SRA process BASE_DIR SCREEN_NAME`
 
 This will demultplex reads based on the CRISPRi sgRNA identities in R1 reads, collapse and error-correct resulting groups of R2 sequences based on their UMI sequences, align and categorize these error-corrected sequences, and count the CRISPRi-sgRNA-specific frequencies of each identified repair outcome.

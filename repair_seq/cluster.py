@@ -475,12 +475,15 @@ class Clusterer:
 
                 needs_categorical_legend = True
 
-            elif color_by == 'category':
+            elif color_by == 'category' or color_by in data.index.levels[1]:
                 effector = self.target_info.effector.name
 
                 value_to_color = visualize.category_alias_colors[effector]
 
                 data['color'] = data['category_colors']
+
+                if color_by != 'category':
+                    data.loc[data.index.get_level_values('category') != color_by, 'color'] = 'grey'
 
                 # Force insertions to be drawn on top.
                 data = data.sort_values(by='categories_aliased', key=lambda s: s == 'insertion')
@@ -938,6 +941,10 @@ class SinglePoolClusterer(Clusterer):
             outcomes = self.pool.canonical_outcomes
 
         return outcomes
+
+    @property
+    def original_outcome_order_with_pool(self):
+        return [(self.pool.short_name, *vs) for vs in self.outcomes]
 
     @memoized_property
     def guides(self):

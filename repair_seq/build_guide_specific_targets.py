@@ -205,7 +205,19 @@ if __name__ == '__main__':
         original_target = 'pPC1000'
         original_genbank_name = 'ppc1000'
         guide_library_names = ['DDR_library']
-        build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names)
+        build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names,
+                          test=args.test,
+                          num_processes=args.num_processes,
+                         )
+
+    elif args.vector == 'twin_prime_singles':
+        original_target = 'pPC1655'
+        original_genbank_name = 'ppc1655'
+        guide_library_names = ['DDR_library_with_twin_prime_addon']
+        build_all_singles(args.base_dir, original_target, original_genbank_name, guide_library_names,
+                          test=args.test,
+                          num_processes=args.num_processes,
+                         )
 
     elif args.vector == 'singles':
         original_target = 'pooled_vector'

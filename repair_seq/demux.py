@@ -1,6 +1,7 @@
 import argparse
 import gzip
 import itertools
+import logging
 import multiprocessing
 import shutil
 
@@ -15,7 +16,6 @@ import tqdm
 
 from hits import fastq, fasta, utilities
 
-import repair_seq.collapse
 import repair_seq.guide_library
 from repair_seq.annotations import Annotations
 
@@ -148,7 +148,7 @@ class FastqChunker:
         line_groups = fastq.get_line_groups(self.input_fn)
 
         if self.debug:
-            line_groups = itertools.islice(line_groups, int(5e5))
+            line_groups = itertools.islice(line_groups, int(1e6))
         
         for read_number, line_group in enumerate(line_groups):
             if read_number % self.reads_per_chunk == 0:
@@ -253,14 +253,14 @@ def demux_chunk_from_SRA(base_dir, screen_name, quartet_name, chunk_number, queu
     ''' Note: quartet_name is unused, but it is convenient to have the same function
     signature as demux_chunk
     '''
-    resolvers, expected_seqs = get_resolvers(base_dir, group, from_SRA=True)
+    resolvers, expected_seqs = get_resolvers(base_dir, screen_name, from_SRA=True)
 
     SRA_annotation = Annotations['SRA']
     Annotation = Annotations['UMI_guide']
     
-    fastq_fns = [FastqChunker(base_dir, group, quartet_name, which, from_SRA=True).get_chunk_fn(chunk_number) for which in ['R1', 'R2']]
+    fastq_fns = [FastqChunker(base_dir, screen_name, quartet_name, which, from_SRA=True).get_chunk_fn(chunk_number) for which in ['R1', 'R2']]
 
-    sorters = UMISorters(base_dir, group, quartet_name, chunk_number, from_SRA=True)
+    sorters = UMISorters(base_dir, screen_name, quartet_name, chunk_number, from_SRA=True)
 
     counts = defaultdict(Counter)
 
@@ -315,7 +315,7 @@ def demux_chunk_from_SRA(base_dir, screen_name, quartet_name, chunk_number, queu
 
     sorters.sort_and_write()
 
-    chunk_dir = base_dir / 'data' / group / 'chunks'
+    chunk_dir = base_dir / 'data' / screen_name / 'chunks'
     for k, cs in counts.items():
         cs = pd.Series(cs).sort_values(ascending=False)
         fn = chunk_dir / f'{k}_{quartet_name}_{chunk_number_to_string(chunk_number)}.txt'
@@ -326,7 +326,6 @@ def demux_chunk_from_SRA(base_dir, screen_name, quartet_name, chunk_number, queu
         fastq_fn.unlink()
 
     queue.put(('demux', quartet_name, chunk_number))
-
 
 def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
     resolvers, expected_seqs = get_resolvers(base_dir, group, from_SRA=False)
@@ -465,20 +464,13 @@ def merge_ids(base_dir, group):
 
     for fn in count_fns:
         fn.unlink()
-    
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('base_dir', type=Path, default=Path.home() / 'projects' / 'repair_seq')
-    parser.add_argument('group_name')
-    parser.add_argument('--debug', action='store_true')
-    parser.add_argument('--from_SRA', action='store_true')
 
-    args = parser.parse_args()
-    base_dir = args.base_dir
-    group = args.group_name
-    debug = args.debug
-    from_SRA = args.from_SRA
-    
+def demux_group(base_dir, group, debug=False, reads_per_chunk=int(5e6), from_SRA=False, just_chunk=False):
+    '''
+    just_chunk: Only split input files into chunks (don't demux them). 
+    '''
+    logging.info(f'Demultiplexing {group} in {base_dir}')
+
     if from_SRA:
         write_SRA_pool_sample_sheet(base_dir, group)
         sample_sheet = load_SRA_pool_sample_sheet(group)
@@ -491,7 +483,9 @@ if __name__ == '__main__':
         demux_chunk_function = demux_chunk
 
     quartet_names = sorted(sample_sheet['quartets'])
-    reads_per_chunk = int(5e6)
+
+    if debug:
+        reads_per_chunk = int(5e5)
 
     chunks_per_quartet = [int(np.ceil(d['num_reads'] / reads_per_chunk)) for q, d in sample_sheet['quartets'].items()]
     total_chunks = sum(chunks_per_quartet)
@@ -501,15 +495,15 @@ if __name__ == '__main__':
     
     chunks_done = defaultdict(set) 
     
-    chunk_progress = tqdm.tqdm(desc='Chunk progress', total=total_chunks)
-    demux_progress = tqdm.tqdm(desc='Demux progress', total=total_chunks)
-    
     chunk_pool = multiprocessing.Pool(processes=4 * len(quartet_names))
-    demux_pool = multiprocessing.Pool(processes=4 * len(quartet_names))
+    chunk_progress = tqdm.tqdm(desc='Chunk progress', total=total_chunks)
+    chunk_results = []
 
+    demux_pool = multiprocessing.Pool(processes=4 * len(quartet_names))
+    demux_progress = tqdm.tqdm(desc='Demux progress', total=total_chunks)
+    demux_results = []
+    
     with chunk_pool, demux_pool:
-        chunk_results = []
-        demux_results = []
 
         unfinished_chunkers = set()
         
@@ -519,7 +513,9 @@ if __name__ == '__main__':
                 chunk_result = chunk_pool.apply_async(split_into_chunks, args)
 
                 if debug:
-                    print(chunk_result.get())
+                    result = chunk_result.get()
+                    if not chunk_result.successful():
+                        print(result)
 
                 chunk_results.append(chunk_result)
 
@@ -542,30 +538,35 @@ if __name__ == '__main__':
                     if chunks_done[quartet_name, chunk_number] == set(relevant_read_types):
                         chunk_progress.update()
                         
-                        args = (base_dir, group, quartet_name, chunk_number, tasks_done_queue)
-                        demux_result = demux_pool.apply_async(demux_chunk_function, args)
+                        if not just_chunk:
+                            args = (base_dir, group, quartet_name, chunk_number, tasks_done_queue)
+                            demux_result = demux_pool.apply_async(demux_chunk_function, args)
 
-                        if debug:
-                            print(demux_result.get())
+                            if debug:
+                                result = demux_result.get()
+                                if not demux_result.successful():
+                                    print(result)
 
-                        demux_results.append(demux_result)
+                                demux_results.append(demux_result)
 
             elif task_type == 'demux':
                 demux_progress.update()
 
-        while demux_progress.n < chunk_progress.n:
-            task_type, *task_info = tasks_done_queue.get()
-            if task_type == 'demux':
-                demux_progress.update()
-            else:
-                error, = task_info
-                raise error
+        if not just_chunk:
+            while demux_progress.n < chunk_progress.n:
+                task_type, *task_info = tasks_done_queue.get()
+                if task_type == 'demux':
+                    demux_progress.update()
+                else:
+                    error, = task_info
+                    raise error
         
         chunk_pool.join()
         for chunk_result in chunk_results:
             if not chunk_result.successful():
                 print(chunk_result.get())
                 
+
         demux_pool.close()
                 
         demux_pool.join()
@@ -574,25 +575,45 @@ if __name__ == '__main__':
                 print(demux_result.get())
 
     chunk_progress.close()
-    demux_progress.close()
 
-    print('Merging statistics...')
+    if not just_chunk:
+        demux_progress.close()
 
-    merge_pool = multiprocessing.Pool(processes=3)
-    merge_results = []
-    if not from_SRA:
-        merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'sample', from_SRA)))
-    if 'fixed_guide_library' in sample_sheet:
-        merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'fixed_guide_barcode', from_SRA)))
+        logging.info('Merging statistics...')
 
-    merge_results.append(merge_pool.apply_async(merge_ids, args=(base_dir, group)))
+        merge_pool = multiprocessing.Pool(processes=3)
+        merge_results = []
+        if not from_SRA:
+            merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'sample', from_SRA)))
+        if 'fixed_guide_library' in sample_sheet:
+            merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, group, 'fixed_guide_barcode', from_SRA)))
 
-    merge_pool.close()
-    merge_pool.join()
+        merge_results.append(merge_pool.apply_async(merge_ids, args=(base_dir, group)))
 
-    for merge_result in merge_results:
-        if not merge_result.successful():
-            print(merge_result.get())
+        merge_pool.close()
+        merge_pool.join()
 
-    chunk_dir = base_dir / 'data' / group / 'chunks'
-    shutil.rmtree(str(chunk_dir))
+        for merge_result in merge_results:
+            if not merge_result.successful():
+                print(merge_result.get())
+
+        chunk_dir = base_dir / 'data' / group / 'chunks'
+        shutil.rmtree(str(chunk_dir))
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('base_dir', type=Path, default=Path.home() / 'projects' / 'repair_seq')
+    parser.add_argument('group_name')
+    parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--from_SRA', action='store_true')
+    parser.add_argument('--just_chunk', action='store_true')
+    parser.add_argument('--reads_per_chunk', type=int, default=int(5e6))
+
+    args = parser.parse_args()
+
+    demux_group(args.base_dir, args.group_name,
+                debug=args.debug,
+                from_SRA=args.from_SRA,
+                reads_per_chunk=args.reads_per_chunk,
+                just_chunk=args.just_chunk,
+               )

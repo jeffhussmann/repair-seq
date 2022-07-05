@@ -62,7 +62,7 @@ def download_SRA_data(base_dir, screen_name, debug=False):
     SRA_sample_sheet = repair_seq.demux.load_SRA_sample_sheet()
 
     data_dir = Path(base_dir) / 'data' / screen_name
-    data_dir.mkdir(exist_ok=True)
+    data_dir.mkdir(exist_ok=True, parents=True)
     
     fastq_dump_common_command = [
         'fastq-dump',
@@ -71,6 +71,11 @@ def download_SRA_data(base_dir, screen_name, debug=False):
         '--gzip',
         '--outdir', str(data_dir),
     ]
+
+    if debug:
+        fastq_dump_common_command.extend([
+            '--maxSpotId', str(int(1e6)),
+        ])
     
     fastq_dump_command = fastq_dump_common_command + [SRA_sample_sheet.loc[screen_name, 'SRR_accession']]
     subprocess.run(fastq_dump_command, check=True)

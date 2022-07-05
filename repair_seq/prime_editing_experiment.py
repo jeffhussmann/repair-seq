@@ -75,7 +75,8 @@ class PrimeEditingExperiment(experiment.Experiment):
     @memoized_property
     def max_relevant_length(self):
         outcomes = self.outcome_iter()
-        return max(outcome.inferred_amplicon_length for outcome in outcomes)
+        longest_seen = max(outcome.inferred_amplicon_length for outcome in outcomes)
+        return min(longest_seen, 600)
     
     def make_nonredundant_sequence_fastq(self):
         # This is overloaded by ArrayedExperiment.
@@ -94,7 +95,8 @@ class PrimeEditingExperiment(experiment.Experiment):
         return reads
 
     def trim_reads(self):
-        ''' Trim a random length barcode from the beginning by searching for the expected starting sequence.
+        ''' Trim a (potentially variable-length) barcode from the beginning of a read
+        by searching for the expected sequence that the amplicon should begin with.
         '''
 
         ti = self.target_info
@@ -112,7 +114,7 @@ class PrimeEditingExperiment(experiment.Experiment):
         with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
             for read in self.progress(self.reads, desc='Trimming reads'):
                 try:
-                    start = read.seq.index(prefix, 0, 20)
+                    start = read.seq.index(prefix, 0, 30)
                 except ValueError:
                     start = 0
 

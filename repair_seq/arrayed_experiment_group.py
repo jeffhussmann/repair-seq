@@ -15,7 +15,8 @@ import knock_knock.explore
 import knock_knock.outcome
 from hits import utilities, sam
 
-from . import experiment_group, prime_editing_experiment, single_end_experiment, paired_end_experiment
+from . import prime_editing_experiment, single_end_experiment, paired_end_experiment
+import repair_seq.experiment_group
 
 memoized_property = utilities.memoized_property
 
@@ -141,7 +142,7 @@ class Batch:
         new_group_descriptions.index = [groups_to_include[name] for name in new_group_descriptions.index]
         new_group_descriptions.index.name = 'group'
 
-        # Convoluted way of blanking supplmental_indices - '' will be parse as nan, then coverted to None,
+        # Convoluted way of blanking supplmental_indices - '' will be parsed as nan, then coverted to None,
         # then converted to [].
         new_group_descriptions['supplemental_indices'] = ''
 
@@ -172,18 +173,18 @@ class Batch:
     
 
 def get_batch(base_dir, batch_name, progress=None, **kwargs):
-    batch = None
-
     group_dir = Path(base_dir) / 'data' / batch_name
     group_descriptions_fn = group_dir / 'group_descriptions.csv'
 
     if group_descriptions_fn.exists():
         batch = Batch(base_dir, batch_name, progress, **kwargs)
+    else:
+        batch = None
 
     return batch
 
 def get_all_batches(base_dir=Path.home() / 'projects' / 'repair_seq', progress=None, **kwargs):
-    possible_batch_dirs = [p for p in (Path(base_dir) / 'results').iterdir() if p.is_dir()]
+    possible_batch_dirs = [p for p in (Path(base_dir) / 'data').iterdir() if p.is_dir()]
 
     batches = {}
 
@@ -195,7 +196,25 @@ def get_all_batches(base_dir=Path.home() / 'projects' / 'repair_seq', progress=N
 
     return batches
 
-class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
+def get_all_experiments(base_dir=Path.home() / 'projects' / 'repair_seq', progress=None, conditions=None, **kwargs):
+    if conditions is None:
+        conditions = {}
+
+    batches = get_all_batches(base_dir, progress, **kwargs)
+
+    exps = {}
+
+    for batch_name, batch in batches.items():
+        if 'batch' in conditions and batch_name not in conditions['batch']:
+            continue
+
+        for sample_name, row in batch.sample_sheet.iterrows():
+            group = batch.groups[row['group']]
+            exps[batch_name, group.group, sample_name] = group.sample_name_to_experiment(sample_name)
+
+    return exps
+
+class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
     def __init__(self, base_dir, batch, group,
                  category_groupings=None,
                  progress=None,
@@ -275,7 +294,10 @@ class ArrayedExperimentGroup(experiment_group.ExperimentGroup):
 
         self.full_condition_to_sample_name = {full_condition_from_row(row): sample_name for sample_name, row in self.sample_sheet.iterrows()}
 
-        self.conditions = sorted(set(c[:-1] for c in self.full_conditions))
+        if len(self.condition_keys) == 0:
+            self.conditions = []
+        else:
+            self.conditions = sorted(set(c[:-1] for c in self.full_conditions))
 
         # Indexing breaks if it is a length 1 tuple.
         if len(self.condition_keys) == 1:
@@ -721,6 +743,10 @@ class ArrayedExperiment:
     def seq_to_alignments(self):
         return self.experiment_group.common_sequence_to_alignments
 
+    @memoized_property
+    def combined_header(self):
+        return sam.get_header(self.fns_by_read_type['bam_by_name']['nonredundant'])
+
     def alignment_groups(self, fn_key='bam_by_name', outcome=None, read_type=None):
         if read_type is None:
             nonredundant_alignment_groups = super().alignment_groups(read_type='nonredundant', outcome=outcome)
@@ -729,7 +755,6 @@ class ArrayedExperiment:
             if outcome is None:
                 outcome_records = itertools.repeat(None)
             else:
-                #outcome_records = self.outcome_iter(outcome_fn_keys=['outcome_list'])
                 outcome_records = self.outcome_iter()
 
             for read, outcome_record in zip(reads, outcome_records):
@@ -848,8 +873,9 @@ class ArrayedExperiment:
 def arrayed_specialized_experiment_factory(experiment_kind):
     experiment_kind_to_class = {
         'paired_end': paired_end_experiment.PairedEndExperiment,
-        'prime_editing': prime_editing_experiment.PrimeEditingExperiment,
         'single_end': single_end_experiment.SingleEndExperiment,
+        'prime_editing': prime_editing_experiment.PrimeEditingExperiment,
+        'twin_prime': prime_editing_experiment.TwinPrimeExperiment,
     }
 
     SpecializedExperiment = experiment_kind_to_class[experiment_kind]
@@ -860,11 +886,12 @@ def arrayed_specialized_experiment_factory(experiment_kind):
             SpecializedExperiment.__init__(self, base_dir, (batch, group), sample_name, **kwargs)
 
         def __repr__(self):
+            # 22.06.03: TODO: this doesn't actually call the SpecializedExperiment form of __repr__.
             return f'Arrayed{SpecializedExperiment.__repr__(self)}'
     
-    class ArrayedSpecializedCommonSequencesExperiment(experiment_group.CommonSequencesExperiment, ArrayedExperiment, SpecializedExperiment):
+    class ArrayedSpecializedCommonSequencesExperiment(repair_seq.experiment_group.CommonSequencesExperiment, ArrayedExperiment, SpecializedExperiment):
         def __init__(self, base_dir, batch, group, sample_name, experiment_group=None, **kwargs):
-            experiment_group.CommonSequencesExperiment.__init__(self)
+            repair_seq.experiment_group.CommonSequencesExperiment.__init__(self)
             ArrayedExperiment.__init__(self, base_dir, batch, group, sample_name, experiment_group=experiment_group)
             SpecializedExperiment.__init__(self, base_dir, (batch, group), sample_name, **kwargs)
     
@@ -879,8 +906,9 @@ class ArrayedGroupExplorer(knock_knock.explore.Explorer):
                 ):
         self.group = group
 
-        if initial_condition is None:
+        if initial_condition is None and len(self.group.conditions) > 0:
             initial_condition = self.group.conditions[0]
+
         self.initial_condition = initial_condition
 
         self.experiments = {}
@@ -901,15 +929,24 @@ class ArrayedGroupExplorer(knock_knock.explore.Explorer):
 
     def set_up_read_selection_widgets(self):
 
-        condition_options = [(', '.join(c) if isinstance(c, tuple) else c, c) for c in self.group.conditions] 
+        selection_widget_keys = []
+
+        if len(self.group.conditions) > 0:
+            condition_options = [(', '.join(c) if isinstance(c, tuple) else c, c) for c in self.group.conditions] 
+            self.widgets.update({
+                'condition': Select(options=condition_options, value=self.initial_condition, layout=Layout(height='200px', width='300px')),
+            })
+            self.widgets['condition'].observe(self.populate_replicates, names='value')
+            selection_widget_keys.append('condition')
+
         self.widgets.update({
-            'condition': Select(options=condition_options, value=self.initial_condition, layout=Layout(height='200px', width='300px')),
             'replicate': Select(options=[], layout=Layout(height='200px', width='150px')),
         })
 
         self.populate_replicates({'name': 'initial'})
-        self.widgets['condition'].observe(self.populate_replicates, names='value')
 
+        selection_widget_keys.append('replicate')
+        
         if self.by_outcome:
             self.populate_categories({'name': 'initial'})
             self.populate_subcategories({'name': 'initial'})
@@ -917,10 +954,11 @@ class ArrayedGroupExplorer(knock_knock.explore.Explorer):
             self.widgets['replicate'].observe(self.populate_categories, names='value')
             self.widgets['category'].observe(self.populate_subcategories, names='value')
             self.widgets['subcategory'].observe(self.populate_read_ids, names='value')
-            selection_widget_keys = ['condition', 'replicate', 'category', 'subcategory', 'read_id']
+            selection_widget_keys.extend(['category', 'subcategory'])
         else:
             self.widgets['replicate'].observe(self.populate_read_ids, names='value')
-            selection_widget_keys = ['condition', 'replicate', 'read_id']
+
+        selection_widget_keys.append('read_id')
 
         self.populate_read_ids({'name': 'initial'})
 

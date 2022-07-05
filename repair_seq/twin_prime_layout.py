@@ -87,7 +87,12 @@ class Layout(repair_seq.prime_editing_layout.Layout):
     @memoized_property
     def has_intended_pegRNA_overlap(self):
         als = self.pegRNA_extension_als
-        share_overlap = self.share_feature(als['left'], 'overlap', als['right'], 'overlap')
+
+        if 'left' in als and 'right' in als:
+            share_overlap = self.share_feature(als['left'], 'overlap', als['right'], 'overlap')
+        else:
+            share_overlap = False
+
         return share_overlap
 
     @memoized_property
@@ -383,57 +388,49 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         manual_anchors = {}
 
-        overlap_length = len(ti.features[ti.pegRNA_names[0], 'overlap'])
+        if ti.pegRNA_names is None:
+            return manual_anchors
 
-        overlap_offset_to_qs = defaultdict(dict)
+        overlap_feature = ti.features.get((ti.pegRNA_names[0], 'overlap'))
+        if overlap_feature is not None:
+            overlap_length = len(ti.features[ti.pegRNA_names[0], 'overlap'])
 
-        for side in ['left', 'right']:
-            pegRNA_al = self.pegRNA_extension_als[side]
-            
-            if pegRNA_al is None:
-                continue
-            
-            pegRNA_name = ti.pegRNA_names_by_side_of_read[side]
-            
-            overlap_offset_to_qs[side] = self.feature_offset_to_q(pegRNA_al, 'overlap')
-            
-        present_in_both = sorted(set(overlap_offset_to_qs['left']) & set(overlap_offset_to_qs['right']))
-        present_in_either = sorted(set(overlap_offset_to_qs['left']) | set(overlap_offset_to_qs['right']))
-
-        # If there is any offset present in both sides, use it as the anchor.
-        # Otherwise, pick any offset present in either side arbitrarily.
-        # If there is no such offset, don't make anchors for the pegRNAs.
-        # Check overlap length to exclude prime del.
-        if overlap_length > 5 and (present_in_both or present_in_either):
-            if present_in_both:
-                anchor_offset = present_in_both[0]
-                qs = [overlap_offset_to_qs[side][anchor_offset] for side in ['left', 'right']] 
-                q = int(np.floor(np.mean(qs)))
-            elif len(overlap_offset_to_qs['left']) > 0:
-                anchor_offset = sorted(overlap_offset_to_qs['left'])[0]
-                q = overlap_offset_to_qs['left'][anchor_offset]
-            elif len(overlap_offset_to_qs['right']) > 0:
-                anchor_offset = sorted(overlap_offset_to_qs['right'])[0]
-                q = overlap_offset_to_qs['right'][anchor_offset]
+            overlap_offset_to_qs = defaultdict(dict)
 
             for side in ['left', 'right']:
-                pegRNA_name = ti.pegRNA_names_by_side_of_read[side]
-                ref_p = ti.feature_offset_to_ref_p(pegRNA_name, 'overlap')[anchor_offset]
-                manual_anchors[pegRNA_name] = (q, ref_p)
+                pegRNA_al = self.pegRNA_extension_als[side]
                 
-        ## target anchor to center on amplicon
-        #primer_name = ti.primers_by_side_of_read['left'].attribute['ID']
-        #ref_p = ti.feature_offset_to_ref_p(ti.target, primer_name)[0]
-        #q = self.feature_offset_to_q(self.target_edge_alignments['left'], primer_name).get(0, 0)
+                if pegRNA_al is None:
+                    continue
+                
+                pegRNA_name = ti.pegRNA_names_by_side_of_read[side]
+                
+                overlap_offset_to_qs[side] = self.feature_offset_to_q(pegRNA_al, 'overlap')
+                
+            present_in_both = sorted(set(overlap_offset_to_qs['left']) & set(overlap_offset_to_qs['right']))
+            present_in_either = sorted(set(overlap_offset_to_qs['left']) | set(overlap_offset_to_qs['right']))
 
-        #extra_length = len(ti.amplicon_interval) - self.inferred_amplicon_length
-        #if ti.sequencing_direction == '-':
-        #    anchor_ref = ref_p - extra_length / 2
-        #else:
-        #    anchor_ref = ref_p + extra_length / 2
+            # If there is any offset present in both sides, use it as the anchor.
+            # Otherwise, pick any offset present in either side arbitrarily.
+            # If there is no such offset, don't make anchors for the pegRNAs.
+            # Check overlap length to exclude prime del.
+            if overlap_length > 5 and (present_in_both or present_in_either):
+                if present_in_both:
+                    anchor_offset = present_in_both[0]
+                    qs = [overlap_offset_to_qs[side][anchor_offset] for side in ['left', 'right']] 
+                    q = int(np.floor(np.mean(qs)))
+                elif len(overlap_offset_to_qs['left']) > 0:
+                    anchor_offset = sorted(overlap_offset_to_qs['left'])[0]
+                    q = overlap_offset_to_qs['left'][anchor_offset]
+                elif len(overlap_offset_to_qs['right']) > 0:
+                    anchor_offset = sorted(overlap_offset_to_qs['right'])[0]
+                    q = overlap_offset_to_qs['right'][anchor_offset]
 
-        #manual_anchors[ti.target] = (q, anchor_ref)
-
+                for side in ['left', 'right']:
+                    pegRNA_name = ti.pegRNA_names_by_side_of_read[side]
+                    ref_p = ti.feature_offset_to_ref_p(pegRNA_name, 'overlap')[anchor_offset]
+                    manual_anchors[pegRNA_name] = (q, ref_p)
+                
         return manual_anchors
 
     def plot(self, relevant=True, **manual_diagram_kwargs):
@@ -442,6 +439,10 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         ti = self.target_info
 
+        pegRNA_names = ti.pegRNA_names
+        if pegRNA_names is None:
+            pegRNA_names = []
+
         diagram_kwargs = dict(
             draw_sequence=True,
             flip_target=ti.sequencing_direction == '-',
@@ -449,7 +450,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             label_offsets={feature_name: 1 for _, feature_name in ti.PAM_features},
             features_to_show=ti.features_to_show,
             manual_anchors=self.manual_anchors,
-            refs_to_draw={ti.target, *ti.pegRNA_names},
+            refs_to_draw={ti.target, *pegRNA_names},
             label_overrides={name: 'protospacer' for name in ti.sgRNAs},
             inferred_amplicon_length=self.inferred_amplicon_length,
             center_on_primers=True,
@@ -468,7 +469,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                                                    )
 
         # Draw the pegRNAs.
-        if any(al.reference_name in ti.pegRNA_names for al in als_to_plot):
+        if any(al.reference_name in pegRNA_names for al in als_to_plot):
             ref_ys = {}
             ref_ys['left'] = diagram.max_y + diagram.target_and_donor_y_gap
             ref_ys['right'] = ref_ys['left'] + 7 * diagram.gap_between_als
@@ -485,8 +486,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             left_name = ti.pegRNA_names_by_side_of_read['left']
             ref_p_to_xs['left'] = diagram.draw_reference(left_name, ref_ys['left'], True, label_features=False)
 
-            offset_to_ref_ps = ti.feature_offset_to_ref_p(left_name, 'overlap')
-            overlap_xs = sorted([ref_p_to_xs['left'](offset_to_ref_ps[0]), ref_p_to_xs['left'](offset_to_ref_ps[max(offset_to_ref_ps)])])
 
             diagram.max_x = max(old_max_x, ref_p_to_xs['left'](0))
 
@@ -497,8 +496,10 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
             diagram.ax.set_xlim(diagram.min_x, diagram.max_x)
 
-            # temporary exclusion of prime del
-            if len(offset_to_ref_ps) >= 5:
+            if (left_name, 'overlap') in ti.features:
+                offset_to_ref_ps = ti.feature_offset_to_ref_p(left_name, 'overlap')
+                overlap_xs = sorted([ref_p_to_xs['left'](offset_to_ref_ps[0]), ref_p_to_xs['left'](offset_to_ref_ps[max(offset_to_ref_ps)])])
+
                 overlap_xs = knock_knock.visualize.adjust_edges(overlap_xs)
 
                 overlap_color = ti.features[ti.pegRNA_names[0], 'overlap'].attribute['color']

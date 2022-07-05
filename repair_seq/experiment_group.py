@@ -1,5 +1,6 @@
 import bisect
-import multiprocessing
+import datetime
+import logging
 
 import pandas as pd
 import pysam
@@ -10,6 +11,7 @@ memoized_property = utilities.memoized_property
 memoized_with_args = utilities.memoized_with_args
 
 import knock_knock.outcome_record
+import knock_knock.parallel
 
 from repair_seq.common_sequences import CommonSequenceSplitter
 
@@ -39,10 +41,27 @@ class ExperimentGroup:
             'genomic_insertion_length_distributions': self.results_dir / 'genomic_insertion_length_distribution.txt',
         }
 
-    def process(self, num_processes):
-        with multiprocessing.Pool(num_processes) as pool:
-            print('preprocessing')
+    def process(self, num_processes=18):
+        self.results_dir.mkdir(exist_ok=True, parents=True)
+        log_fn = self.results_dir / f'log_{datetime.datetime.now():%y%m%d-%H%M%S}.out'
+
+        logger = logging.getLogger(__name__)
+        logger.propagate = False
+        logger.setLevel(logging.INFO)
+        file_handler = logging.FileHandler(log_fn)
+        formatter = logging.Formatter(fmt='%(asctime)s: %(message)s',
+                                      datefmt='%y-%m-%d %H:%M:%S',
+                                     )
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.INFO)
+        logger.addHandler(file_handler)
+
+        print(f'Logging in {log_fn}')
+
+        with knock_knock.parallel.PoolWithLoggerThread(num_processes, logger) as pool:
+            logger.info('Preprocessing')
             args = [(type(self), self.group_args, sample_name, 'preprocess') for sample_name in self.sample_names]
+
             pool.starmap(run_stage, args)
 
             self.make_common_sequences()
@@ -50,9 +69,9 @@ class ExperimentGroup:
             for stage in [
                 'align',
                 'categorize',
-                ]:
+            ]:
 
-                print('common sequences', stage)
+                logger.info(f'Processing common sequences, stage {stage}')
                 args = [(type(self), self.group_args, chunk_exp_name, stage) for chunk_exp_name in self.common_sequence_chunk_exp_names]
                 pool.starmap(run_stage, args)
 
@@ -61,11 +80,15 @@ class ExperimentGroup:
             for stage in [
                 'align',
                 'categorize',
-               ]:
+                #'visualize',
+            ]:
 
-                print(stage)
+                logger.info(f'Processing unique sequences, stage {stage}')
                 args = [(type(self), self.group_args, sample_name, stage) for sample_name in self.sample_names]
                 pool.starmap(run_stage, args)
+
+        logger.removeHandler(file_handler)
+        file_handler.close()
 
         self.make_outcome_counts()
 

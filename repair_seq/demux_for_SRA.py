@@ -44,9 +44,9 @@ if __name__ == '__main__':
 
     if args.has_UMIs:
         pool_details = pd.read_csv(batch_dir / 'pool_details.csv',
-                                dtype={'guide_library': str, 'replicate': str},
-                                index_col='pool_name',
-                                )
+                                   dtype={'guide_library': str, 'replicate': str},
+                                   index_col='pool_name',
+                                  )
         # Samples that had multiple indices are given as a semi-colon separated list.
         pool_details['index'] = [s.split(';') for s in pool_details['index']]
 
@@ -95,9 +95,9 @@ if __name__ == '__main__':
 
     else:
         pool_details = pd.read_csv(batch_dir / 'gDNA_pool_details.csv',
-                                dtype={'guide_library': str, 'replicate': str},
-                                index_col='pool_name',
-                                )
+                                   dtype={'guide_library': str, 'replicate': str},
+                                   index_col='pool_name',
+                                  )
         sample_sheet_fn = batch_dir / 'gDNA_sample_sheet.yaml'
         pool_sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
 
