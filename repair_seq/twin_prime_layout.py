@@ -389,15 +389,23 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
             overlap_offset_to_qs = defaultdict(dict)
 
-            for side in ['left', 'right']:
-                pegRNA_al = self.pegRNA_extension_als[side]
-                
-                if pegRNA_al is None:
-                    continue
-                
+            for side, expected_strand in [('left', '-'), ('right', '+')]:
                 pegRNA_name = ti.pegRNA_names_by_side_of_read[side]
                 
-                overlap_offset_to_qs[side] = self.feature_offset_to_q(pegRNA_al, 'overlap')
+                pegRNA_als = [al for al in self.pegRNA_alignments[pegRNA_name] if sam.get_strand(al) == expected_strand]
+
+                if len(pegRNA_als) == 0:
+                    continue
+
+                def priority_key(al):
+                    is_extension_al = (al == self.pegRNA_extension_als['left']) or (al == self.pegRNA_extension_als['right'])
+                    overlap_length = sam.feature_overlap_length(al, self.target_info.features[pegRNA_name, 'overlap'])
+                    return is_extension_al, overlap_length
+                
+                pegRNA_als = sorted(pegRNA_als, key=priority_key)
+                best_overlap_pegRNA_al = max(pegRNA_als, key=priority_key)
+                
+                overlap_offset_to_qs[side] = self.feature_offset_to_q(best_overlap_pegRNA_al, 'overlap')
                 
             present_in_both = sorted(set(overlap_offset_to_qs['left']) & set(overlap_offset_to_qs['right']))
             present_in_either = sorted(set(overlap_offset_to_qs['left']) | set(overlap_offset_to_qs['right']))
@@ -431,9 +439,24 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         ti = self.target_info
 
+        color_overrides = {primer_name: 'lightgrey' for primer_name in ti.primer_names}
+
         pegRNA_names = ti.pegRNA_names
         if pegRNA_names is None:
             pegRNA_names = []
+        else:
+            for i, pegRNA_name in enumerate(pegRNA_names):
+                color = f'C{i + 2}'
+                light_color = hits.visualize.apply_alpha(color, 0.5)
+                color_overrides[pegRNA_name] = color
+                color_overrides[pegRNA_name, 'protospacer'] = light_color
+                ps_name = knock_knock.pegRNAs.protospacer_name(pegRNA_name)
+                color_overrides[ps_name] = light_color
+
+                PAM_name = f'{ps_name}_PAM'
+                color_overrides[PAM_name] = color
+
+        #print(self.manual_anchors)
 
         diagram_kwargs = dict(
             draw_sequence=True,
@@ -446,6 +469,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             label_overrides={name: 'protospacer' for name in ti.sgRNAs},
             inferred_amplicon_length=self.inferred_amplicon_length,
             center_on_primers=True,
+            color_overrides=color_overrides,
         )
 
         diagram_kwargs.update(**manual_diagram_kwargs)
@@ -460,8 +484,11 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                                                     **diagram_kwargs,
                                                    )
 
+        # Note that diagram.alignments may be different than als_to_plot
+        # due to application of parsimony.
+
         # Draw the pegRNAs.
-        if any(al.reference_name in pegRNA_names for al in als_to_plot):
+        if any(al.reference_name in pegRNA_names for al in diagram.alignments):
             ref_ys = {}
             ref_ys['left'] = diagram.max_y + diagram.target_and_donor_y_gap
             ref_ys['right'] = ref_ys['left'] + 7 * diagram.gap_between_als
@@ -476,31 +503,43 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             ref_p_to_xs = {}
 
             left_name = ti.pegRNA_names_by_side_of_read['left']
-            ref_p_to_xs['left'] = diagram.draw_reference(left_name, ref_ys['left'], True, label_features=False)
+            left_visible = any(al.reference_name == left_name for al in diagram.alignments)
 
+            right_name = ti.pegRNA_names_by_side_of_read['right']
+            right_visible = any(al.reference_name == right_name for al in diagram.alignments)
+
+            ref_p_to_xs['left'] = diagram.draw_reference(left_name, ref_ys['left'],
+                                                         flip=True,
+                                                         label_features=left_visible and (not right_visible),
+                                                         visible=left_visible,
+                                                        )
 
             diagram.max_x = max(old_max_x, ref_p_to_xs['left'](0))
 
-            right_name = ti.pegRNA_names_by_side_of_read['right']
-            ref_p_to_xs['right'] = diagram.draw_reference(right_name, ref_ys['right'], False)
+            ref_p_to_xs['right'] = diagram.draw_reference(right_name, ref_ys['right'],
+                                                          flip=False,
+                                                          label_features=True,
+                                                          visible=right_visible,
+                                                         )
 
             diagram.min_x = min(old_min_x, ref_p_to_xs['right'](0))
 
             diagram.ax.set_xlim(diagram.min_x, diagram.max_x)
 
-            if (left_name, 'overlap') in ti.features:
+            if self.manual_anchors and (left_name, 'overlap') in ti.features:
                 offset_to_ref_ps = ti.feature_offset_to_ref_p(left_name, 'overlap')
                 overlap_xs = sorted([ref_p_to_xs['left'](offset_to_ref_ps[0]), ref_p_to_xs['left'](offset_to_ref_ps[max(offset_to_ref_ps)])])
 
                 overlap_xs = knock_knock.visualize.adjust_edges(overlap_xs)
 
-                overlap_color = ti.features[ti.pegRNA_names[0], 'overlap'].attribute['color']
+                overlap_color = ti.features[left_name, 'overlap'].attribute['color']
                     
                 diagram.ax.fill_betweenx([ref_ys['left'], ref_ys['right'] + diagram.ref_line_width + diagram.feature_line_width],
                                          [overlap_xs[0], overlap_xs[0]],
                                          [overlap_xs[1], overlap_xs[1]],
                                          color=overlap_color,
-                                         alpha=0.5,
+                                         alpha=0.3,
+                                         visible=left_visible and right_visible,
                                         )
 
                 text_x = np.mean(overlap_xs)
@@ -512,6 +551,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                                     va='center',
                                     size=diagram.font_sizes['feature_label'],
                                     weight='bold',
+                                    visible=left_visible and right_visible,
                                    )
 
             diagram.update_size()
