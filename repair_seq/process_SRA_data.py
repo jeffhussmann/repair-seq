@@ -59,11 +59,11 @@ def download_and_build_indices(base_dir, num_processes):
 def download_SRA_data(base_dir, screen_name, debug=False):
     logging.info(f'Downloading data for {screen_name} into {base_dir}')
 
-    SRA_sample_sheet = repair_seq.demux.load_SRA_sample_sheet()
-
     data_dir = Path(base_dir) / 'data' / screen_name
     data_dir.mkdir(exist_ok=True, parents=True)
-    
+
+    SRR_accessions = repair_seq.demux.load_SRR_accessions().loc[screen_name].index
+
     fastq_dump_common_command = [
         'fastq-dump',
         '--split-3',
@@ -77,5 +77,6 @@ def download_SRA_data(base_dir, screen_name, debug=False):
             '--maxSpotId', str(int(1e6)),
         ])
     
-    fastq_dump_command = fastq_dump_common_command + [SRA_sample_sheet.loc[screen_name, 'SRR_accession']]
-    subprocess.run(fastq_dump_command, check=True)
+    for SRR_accession in SRR_accessions:
+        fastq_dump_command = fastq_dump_common_command + [SRR_accession]
+        subprocess.run(fastq_dump_command, check=True)

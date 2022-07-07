@@ -64,18 +64,24 @@ def load_SRA_sample_sheet():
     SRA_sample_sheet = pd.read_csv(sample_sheet_fn, index_col='screen_name')
     return SRA_sample_sheet
 
+def load_SRR_accessions():
+    sample_sheet_fn = Path(__file__).parent / 'metadata' / 'SRR_accessions.csv'
+    SRR_accessions = pd.read_csv(sample_sheet_fn, index_col=['screen_name', 'SRR_accession'])
+    return SRR_accessions
+
 def load_SRA_pool_sample_sheet(screen_name):
     SRA_sample_sheet = load_SRA_sample_sheet()
+    SRR_accessions = load_SRR_accessions()
 
     row = SRA_sample_sheet.loc[screen_name]
     row = row.replace([np.nan], [None])
     sample_sheet = row.to_dict()
 
-    sample_sheet['quartets'] = {
-        'all': {which: f'{sample_sheet["SRR_accession"]}_{which[-1]}' for which in ['R1', 'R2']},
-    }
+    sample_sheet['quartets'] = {}
 
-    sample_sheet['quartets']['all']['num_reads'] = sample_sheet['num_reads']
+    for SRR_accession, num_reads in SRR_accessions.loc[screen_name]['num_reads'].iteritems():
+        sample_sheet['quartets'][SRR_accession] = {which: f'{SRR_accession}_{which[-1]}' for which in ['R1', 'R2']}
+        sample_sheet['quartets'][SRR_accession]['num_reads'] = num_reads
 
     return sample_sheet
 
@@ -250,9 +256,6 @@ def get_resolvers(base_dir, group, from_SRA):
     return resolvers, expected_seqs
 
 def demux_chunk_from_SRA(base_dir, screen_name, quartet_name, chunk_number, queue):
-    ''' Note: quartet_name is unused, but it is convenient to have the same function
-    signature as demux_chunk
-    '''
     resolvers, expected_seqs = get_resolvers(base_dir, screen_name, from_SRA=True)
 
     SRA_annotation = Annotations['SRA']

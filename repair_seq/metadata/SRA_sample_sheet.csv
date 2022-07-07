@@ -1,22 +1,24 @@
-screen_name,target_info_prefix,variable_guide_library,sgRNA,donor,pooled,R2_read_length,infer_homology_arms,supplemental_indices,SRR_accession,num_reads
-K562_AsCas12a_target_none_AX227_1,pAX198,AX227,AsCas12a target,,True,258,True,hg19;bosTau7,SRR15164740,1092153349
-K562_SpCas9_target-1_none_AC001_1,pAX198,AC001,SpCas9 target 1,,True,258,True,hg19;bosTau7,SRR15164734,511683432
-K562_SpCas9_target-1_none_AC001_2,pAX198,AC001,SpCas9 target 1,,True,258,True,hg19;bosTau7,SRR15164726,226251532
-K562_SpCas9_target-1_none_AX227_1,pAX198,AX227,SpCas9 target 1,,True,258,True,hg19;bosTau7,SRR15164730,487367214
-K562_SpCas9_target-1_oBA701-PAGE_AC001_1,pAX198,AC001,SpCas9 target 1,oBA701,True,258,True,hg19;bosTau7,SRR15164724,300013212
-K562_SpCas9_target-1_oBA701-PCR_AX227_1,pAX198,AX227,SpCas9 target 1,oBA701-PCR,True,258,True,hg19;bosTau7,,0
-K562_SpCas9_target-1_oBA701_AC001_1,pAX198,AC001,SpCas9 target 1,oBA701,True,258,True,hg19;bosTau7,SRR15164739,385545354
-K562_SpCas9_target-1_oBA701_AC001_2,pAX198,AC001,SpCas9 target 1,oBA701,True,258,True,hg19;bosTau7,SRR15164738,252263190
-K562_SpCas9_target-1_oBA701_AX227_1,pAX198,AX227,SpCas9 target 1,oBA701,True,258,True,hg19;bosTau7,SRR15164741,1247199391
-K562_SpCas9_target-1_oBA701_AX227_2,pAX198,AX227,SpCas9 target 1,oBA701,True,258,True,hg19;bosTau7,SRR15164729,552807775
-K562_SpCas9_target-1_oJAH158_AC001_1,pAX198,AC001,SpCas9 target 1,oJAH158,True,258,True,hg19;bosTau7,,0
-K562_SpCas9_target-1_oJAH159_AC001_1,pAX198,AC001,SpCas9 target 1,oJAH159,True,258,True,hg19;bosTau7,SRR15164728,386436701
-K562_SpCas9_target-1_oJAH160_AC001_1,pAX198,AC001,SpCas9 target 1,oJAH160,True,258,True,hg19;bosTau7,SRR15164727,273543623
-K562_SpCas9_target-1_oJAH165_AC001_1,pAX198,AC001,SpCas9 target 1,oJAH165,True,258,True,hg19;bosTau7,SRR15164725,308348710
-K562_SpCas9_target-2_none_AC001_1,pAX198,AC001,SpCas9 target 2,,True,258,True,hg19;bosTau7,SRR15164735,491521002
-K562_SpCas9_target-2_none_AX227_1,pAX198,AX227,SpCas9 target 2,,True,258,True,hg19;bosTau7,SRR15164731,220000640
-K562_SpCas9_target-2_oBA701_AX227_1,pAX198,AX227,SpCas9 target 2,oBA701,True,258,True,hg19;bosTau7,PH,1178037908
-K562_SpCas9_target-3_none_AC001_1,pAX198,AC001,SpCas9 target 3,,True,258,True,hg19;bosTau7,SRR15164737,493803207
-K562_SpCas9_target-3_none_AC001_2,pAX198,AC001,SpCas9 target 3,,True,258,True,hg19;bosTau7,SRR15164736,584666192
-K562_SpCas9_target-4_none_AC001_1,pAX198,AC001,SpCas9 target 4,,True,258,True,hg19;bosTau7,SRR15164733,590361717
-K562_SpCas9_target-4_none_AC001_2,pAX198,AC001,SpCas9 target 4,,True,258,True,hg19;bosTau7,SRR15164732,536051047
+screen_name,target_info_prefix,variable_guide_library,sgRNA,donor,pooled,R2_read_length,infer_homology_arms,supplemental_indices
+K562_AsCas12a_target_none_AX227_1,pAX198,AX227,AsCas12a target,,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_none_AC001_1,pAX198,AC001,SpCas9 target 1,,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_none_AC001_2,pAX198,AC001,SpCas9 target 1,,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_none_AX227_1,pAX198,AX227,SpCas9 target 1,,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_oBA701-PAGE_AC001_1,pAX198,AC001,SpCas9 target 1,oBA701,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_oBA701-PCR_AX227_1,pAX198,AX227,SpCas9 target 1,oBA701-PCR,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_oBA701_AC001_1,pAX198,AC001,SpCas9 target 1,oBA701,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_oBA701_AC001_2,pAX198,AC001,SpCas9 target 1,oBA701,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_oBA701_AX227_1,pAX198,AX227,SpCas9 target 1,oBA701,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_oBA701_AX227_2,pAX198,AX227,SpCas9 target 1,oBA701,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_oJAH158_AC001_1,pAX198,AC001,SpCas9 target 1,oJAH158,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_oJAH159_AC001_1,pAX198,AC001,SpCas9 target 1,oJAH159,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_oJAH160_AC001_1,pAX198,AC001,SpCas9 target 1,oJAH160,True,258,True,hg19;bosTau7
+K562_SpCas9_target-1_oJAH165_AC001_1,pAX198,AC001,SpCas9 target 1,oJAH165,True,258,True,hg19;bosTau7
+K562_SpCas9_target-2_none_AC001_1,pAX198,AC001,SpCas9 target 2,,True,258,True,hg19;bosTau7
+K562_SpCas9_target-2_none_AX227_1,pAX198,AX227,SpCas9 target 2,,True,258,True,hg19;bosTau7
+K562_SpCas9_target-2_oBA701_AX227_1,pAX198,AX227,SpCas9 target 2,oBA701,True,258,True,hg19;bosTau7
+K562_SpCas9_target-3_none_AC001_1,pAX198,AC001,SpCas9 target 3,,True,258,True,hg19;bosTau7
+K562_SpCas9_target-3_none_AC001_2,pAX198,AC001,SpCas9 target 3,,True,258,True,hg19;bosTau7
+K562_SpCas9_target-4_none_AC001_1,pAX198,AC001,SpCas9 target 4,,True,258,True,hg19;bosTau7
+K562_SpCas9_target-4_none_AC001_2,pAX198,AC001,SpCas9 target 4,,True,258,True,hg19;bosTau7
+K562_none_none_none_AC001_1,pAX198,AC001,,,True,258,True,hg19;bosTau7
+K562_none_none_none_AC001_2,pAX198,AC001,,,True,258,True,hg19;bosTau7
