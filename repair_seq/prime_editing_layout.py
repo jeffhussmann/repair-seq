@@ -163,8 +163,6 @@ class Layout(layout.Categorizer):
         self.error_corrected = error_corrected
         self.mode = mode
 
-        self.trust_inferred_length = True
-
         self.categorized = False
 
     @classmethod
@@ -1113,7 +1111,6 @@ class Layout(layout.Categorizer):
         self.details = str(outcome)
         self.relevant_alignments = details['full_alignments']
         self.special_alignment = details['cropped_candidate_alignment']
-        self.trust_inferred_length = False
 
     @memoized_property
     def donor_insertion(self):
@@ -1603,7 +1600,6 @@ class Layout(layout.Categorizer):
 
     def categorize(self):
         self.outcome = None
-        self.trust_inferred_length = True
 
         if len(self.seq) <= self.target_info.combined_primer_length + 10:
             self.category = 'nonspecific amplification'
@@ -1621,7 +1617,6 @@ class Layout(layout.Categorizer):
             self.subcategory = 'no alignments detected'
             self.details = 'n/a'
             self.outcome = None
-            self.trust_inferred_length = False
 
         elif self.single_read_covering_target_alignment:
             target_alignment = self.single_read_covering_target_alignment
@@ -1869,8 +1864,6 @@ class Layout(layout.Categorizer):
                 self.subcategory = 'uncategorized'
                 self.details = 'n/a'
 
-            self.trust_inferred_length = True
-                
             self.relevant_alignments = self.uncategorized_relevant_alignments
 
         self.relevant_alignments = sam.make_nonredundant(self.relevant_alignments)
@@ -2186,28 +2179,69 @@ class Layout(layout.Categorizer):
 
     @property
     def inferred_amplicon_length(self):
+        ''' Infer the length of the amplicon including the portion
+        of primers that is present in the genome. To prevent synthesis
+        errors in primers from shifting this slightly, identify the
+        distance in the query between the end of the left primer and
+        the start of the right primer, then add the expected length of
+        both primers to this. If the sequencing read is single-end
+        and doesn't reach the right primer but ends in an alignment
+        to the target, parsimoniously assume that this alignment continues
+        on through the primer to infer length.
+        ''' 
+
         if self.seq  == '':
             return 0
 
+        left_al = self.target_edge_alignments['left']
         right_al = self.target_edge_alignments['right']
+
+        left_primer = self.target_info.primers_by_side_of_read['left']
         right_primer = self.target_info.primers_by_side_of_read['right']
 
-        if right_al is None or not self.trust_inferred_length:
-            inferred_length = -1
-        else:
-            right_al_edge_in_query = sam.query_interval(right_al)[1]
+        left_offset_to_q = self.feature_offset_to_q(left_al, left_primer.ID)
+        right_offset_to_q = self.feature_offset_to_q(right_al, right_primer.ID)
+
+        # Only trust the inferred length if there are non-spurious target alignments
+        # to both edges.
+        def is_nonspurious(al):
+            min_nonspurious_length = 20
+            return al is not None and al.query_alignment_length >= min_nonspurious_length
+
+        if is_nonspurious(left_al) and is_nonspurious(right_al):
+            # Calculate query distance between inner primer edges.
+            if len(left_offset_to_q) > 0:
+                left_inner_edge_offset = max(left_offset_to_q)
+                left_inner_edge_q = left_offset_to_q[left_inner_edge_offset]
+            else:
+                left_inner_edge_q = 0
+
+            if len(right_offset_to_q) > 0:
+                right_inner_edge_offset = max(right_offset_to_q)
+                right_inner_edge_q = right_offset_to_q[right_inner_edge_offset]
+            else:
+                right_inner_edge_q = sam.query_interval(right_al)[1]
+
+            # *_inner_edge_q is last position in the primer, so shift each by one to 
+            # have boundaries of region between them.
+            length_seen_between_primers = (right_inner_edge_q - 1) - (left_inner_edge_q + 1) + 1
+
             right_al_edge_in_target = sam.reference_edges(right_al)[3]
 
+            # Calculated inferred unseen length.
             if self.target_info.sequencing_direction == '+':
-                right_primer_edge = right_primer.end
-                inferred_extra = right_primer_edge - right_al_edge_in_target
-
+                distance_to_right_primer = right_primer.start - right_al_edge_in_target
             else:
-                right_primer_edge = right_primer.start
-                inferred_extra = right_al_edge_in_target - right_primer_edge
+                distance_to_right_primer = right_al_edge_in_target - right_primer.end
 
-            length_seen = right_al_edge_in_query + 1 
-            inferred_length = length_seen + max(inferred_extra, 0)
+            # right_al might extend past the primer start, so only care about positive values.
+            inferred_extra_at_end = max(distance_to_right_primer, 0)
+
+            # Combine seen with inferred unseen and expected primer legnths.
+            inferred_length = length_seen_between_primers + inferred_extra_at_end + len(left_primer) + len(right_primer)
+
+        else:
+            inferred_length = -1
 
         return inferred_length
 

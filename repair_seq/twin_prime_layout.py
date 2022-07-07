@@ -187,7 +187,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
     def categorize(self):
         self.outcome = None
-        self.trust_inferred_length = True
 
         if len(self.seq) <= self.target_info.combined_primer_length + 10:
             self.category = 'nonspecific amplification'
@@ -205,7 +204,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             self.subcategory = 'uncategorized'
             self.details = 'n/a'
             self.outcome = None
-            self.trust_inferred_length = False
 
         elif self.single_read_covering_target_alignment:
             target_alignment = self.single_read_covering_target_alignment
@@ -356,17 +354,11 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             self.details = 'n/a'
             self.relevant_alignments = self.target_edge_alignments_list + self.nonspecific_amplification
 
-            # If a single-end read doesn't reach the right primer, the amplicon length is unknown.
-            if not sam.overlaps_feature(self.target_edge_alignments['right'], self.target_info.primers_by_side_of_read['right'], require_same_strand=False):
-                self.trust_inferred_length = False
-
         else:
             self.category = 'uncategorized'
             self.subcategory = 'uncategorized'
             self.details = 'n/a'
 
-            self.trust_inferred_length = False
-                
             self.relevant_alignments = self.uncategorized_relevant_alignments
 
         self.relevant_alignments = sam.make_nonredundant(self.relevant_alignments)
