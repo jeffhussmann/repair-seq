@@ -1227,7 +1227,8 @@ class Layout(layout.Categorizer):
                     self.subcategory += ', no SNV'
 
                 if details['longest_edge_deletion'] is not None:
-                    self.subcategory += ', with deletion'
+                    if details['longest_edge_deletion'] != self.target_info.pegRNA_intended_deletion:
+                        self.subcategory += ', with deletion'
 
         self.relevant_alignments = relevant_alignments
         self.special_alignment = details['candidate_alignment']
@@ -1248,32 +1249,16 @@ class Layout(layout.Categorizer):
         for insertion_feature in self.target_info.pegRNA_programmed_insertions:
             shares_HA = {side: (side, side) in details['shared_HAs'] for side in ['left', 'right']}
             overlaps_feature = sam.overlaps_feature(donor_al, insertion_feature, require_same_strand=False)
-            no_big_indels = not any(indel.length > 1 for indel, _ in indels)
+            no_indels = len(indels) == 0
 
             reaches_read_edge = details['insertion_query_bounds'][3] == self.whole_read.end
 
-            if overlaps_feature and no_big_indels:
+            if overlaps_feature and no_indels:
                 if shares_HA['left']:
                     if shares_HA['right'] or reaches_read_edge:
                         matches = True
         
         return matches
-
-    @memoized_property
-    def intended_deletion(self):
-        return None
-
-    #@memoized_property
-    #def intended_deletion(self):
-    #    ti = self.target_info
-    #    pegRNA_names_string = '_'.join(sorted(ti.pegRNA_names))
-    #    intended_deletion_feature = ti.features.get((ti.target, f'intended_deletion_{pegRNA_names_string}'))
-    #    if intended_deletion_feature is None:
-    #        return None
-    #    else:
-    #        intended_deletion = DegenerateDeletion([intended_deletion_feature.start], len(intended_deletion_feature))
-    #        intended_deletion = ti.expand_degenerate_indel(intended_deletion)
-    #        return intended_deletion
 
     def shared_HAs(self, donor_al, target_edge_als):
         if self.target_info.homology_arms is None:
@@ -1571,7 +1556,8 @@ class Layout(layout.Categorizer):
     def possible_templated_insertions(self):
         # Make some shorter aliases.
         ti = self.target_info
-        edge_als = self.get_target_edge_alignments(self.parsimonious_target_alignments, split=False)
+        # 22.07.14: Removed split=False argument to get_target_edge_alignemnts here.
+        edge_als = self.get_target_edge_alignments(self.parsimonious_target_alignments)
 
         if edge_als['left'] is not None:
             # If a target alignment to the start of the read exists,
@@ -1687,7 +1673,7 @@ class Layout(layout.Categorizer):
             elif len(interesting_indels) == 1:
                 indel = interesting_indels[0]
 
-                if self.intended_deletion is not None and indel == self.intended_deletion:
+                if indel.kind == 'D' and indel == self.target_info.pegRNA_intended_deletion:
                     self.category = 'intended edit'
                     if len(self.non_donor_SNVs) > 0:
                         self.subcategory = 'deletion + unintended mismatches'
@@ -1698,7 +1684,7 @@ class Layout(layout.Categorizer):
                     self.outcome = HDROutcome(self.donor_SNV_string, [indel])
                     self.details = str(self.outcome)
 
-                    self.relevant_alignments = [target_alignment] + self.donor_alignments
+                    self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
 
                 else: # one indel, not a donor deletion
                     if self.has_donor_SNV:
@@ -1712,7 +1698,7 @@ class Layout(layout.Categorizer):
                             deletion_outcome = DeletionOutcome(indel)
                             self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
                             self.details = str(self.outcome)
-                            self.relevant_alignments = self.parsimonious_target_alignments + list(self.pegRNA_extension_als.values())
+                            self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
 
                         elif indel.kind == 'I' and indel.length == 1:
                             self.category = 'edit + indel'
@@ -1721,7 +1707,7 @@ class Layout(layout.Categorizer):
                             insertion_outcome = InsertionOutcome(indel)
                             self.outcome = HDRPlusInsertionOutcome(HDR_outcome, insertion_outcome)
                             self.details = str(self.outcome)
-                            self.relevant_alignments = self.parsimonious_target_alignments + self.donor_alignments
+                            self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
 
                         else:
                             self.category = 'uncategorized'
@@ -1761,11 +1747,11 @@ class Layout(layout.Categorizer):
                     self.relevant_alignments = self.uncategorized_relevant_alignments
 
                 elif len(self.indels) == 2:
-                    if self.intended_deletion is not None and self.intended_deletion in self.indels:
+                    if self.target_info.pegRNA_intended_deletion in self.indels:
                         self.category = 'edit + indel'
                         self.subcategory = 'edit + deletion'
-                        HDR_outcome = HDROutcome(self.donor_SNV_string, [self.intended_deletion])
-                        indel = [indel for indel in self.indels if indel != self.intended_deletion][0]
+                        HDR_outcome = HDROutcome(self.donor_SNV_string, [self.target_info.pegRNA_intended_deletion])
+                        indel = [indel for indel in self.indels if indel != self.target_info.pegRNA_intended_deletion][0]
                         deletion_outcome = DeletionOutcome(indel)
                         self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
                         self.details = str(self.outcome)
@@ -1789,7 +1775,10 @@ class Layout(layout.Categorizer):
                     self.details = 'n/a'
                     self.relevant_alignments = self.uncategorized_relevant_alignments
 
-        elif self.duplication is None and self.donor_insertion is not None:
+        # 22.07.14: This logic needs to be cleaned up.
+        # Empirically, some non-extension als trigger false positives
+        # that should be duplications.
+        elif self.donor_insertion is not None and (len(self.possible_pegRNA_extension_als_list) > 0 or not self.duplication_covers_whole_read):
             self.register_donor_insertion()
 
         elif self.duplication is not None:
@@ -1804,11 +1793,11 @@ class Layout(layout.Categorizer):
 
                 self.subcategory = subcategory
                 self.details = str(self.outcome)
-                self.relevant_alignments = merged_als
+                self.relevant_alignments = self.possible_pegRNA_extension_als_list + merged_als
 
             elif len(indels) == 1 and indels[0].kind == 'D':
                 indel = indels[0]
-                if self.intended_deletion is not None and indel == self.intended_deletion:
+                if indel == self.target_info.pegRNA_intended_deletion:
                     self.category = 'edit + duplication'
                 else:
                     self.category = 'deletion + duplication'
@@ -1818,7 +1807,7 @@ class Layout(layout.Categorizer):
                 self.outcome = DeletionPlusDuplicationOutcome(deletion_outcome, duplication_outcome)
                 self.subcategory = subcategory
                 self.details = str(self.outcome)
-                self.relevant_alignments = merged_als
+                self.relevant_alignments = self.possible_pegRNA_extension_als_list + merged_als
 
             else:
                 self.category = 'uncategorized'
@@ -2093,6 +2082,15 @@ class Layout(layout.Categorizer):
 
         return subcategory, ref_junctions, indels, als_with_donor_SNVs, merged_als
 
+    @memoized_property
+    def duplication_covers_whole_read(self):
+        if self.duplication is None:
+            return False
+        else:
+            _, _, _, _, merged_als = self.duplication
+            not_covered = self.whole_read - interval.get_disjoint_covered(merged_als)
+            return not_covered.total_length == 0
+
     def extend_target_PBS_alignment(self, pegRNA_al):
         ''' If a potential transition from a pegRNA alignment back to 
         genomic (target) sequence at a PBS occurs close to the end of a read,
@@ -2129,8 +2127,6 @@ class Layout(layout.Categorizer):
 
             query_start = min(pegRNA_feature_offset_to_q.values())
             query_end = max(pegRNA_feature_offset_to_q.values())
-
-            print(query_start, query_end)
 
             al = pysam.AlignedSegment(ti.header)
 
@@ -2245,6 +2241,31 @@ class Layout(layout.Categorizer):
 
         return inferred_length
 
+    @memoized_property
+    def manual_anchors(self):
+        ''' Anchors for drawing knock-knock ref-centric diagrams with overlap in pegRNA aligned.
+        '''
+        ti = self.target_info
+
+        manual_anchors = {}
+
+        extension_als = [al for al in self.pegRNA_extension_als.values() if al is not None]
+
+        if len(extension_als) > 0:
+            pegRNA_name = ti.pegRNA_names[0]
+            extension_al = extension_als[0]
+
+            PBS_offset_to_qs = self.feature_offset_to_q(extension_al, 'PBS')
+                
+            anchor_offset = sorted(PBS_offset_to_qs)[0]
+            q = PBS_offset_to_qs[anchor_offset]
+
+            ref_p = ti.feature_offset_to_ref_p(pegRNA_name, 'PBS')[anchor_offset]
+
+            manual_anchors[pegRNA_name] = (q, ref_p)
+                
+        return manual_anchors
+
     def plot(self, relevant=True, **manual_diagram_kwargs):
         if not self.categorized:
             self.categorize()
@@ -2274,6 +2295,7 @@ class Layout(layout.Categorizer):
             split_at_indels=True,
             label_offsets=label_offsets,
             features_to_show=ti.features_to_show,
+            manual_anchors=self.manual_anchors,
             refs_to_draw={ti.target, *ti.pegRNA_names},
             label_overrides={name: 'protospacer' for name in ti.sgRNAs},
             inferred_amplicon_length=self.inferred_amplicon_length,
@@ -2293,8 +2315,11 @@ class Layout(layout.Categorizer):
                                                     **manual_diagram_kwargs,
                                                    )
 
+        # Note that diagram.alignments may be different than als_to_plot
+        # due to application of parsimony.
+
         # Draw the pegRNA.
-        if any(al.reference_name in ti.pegRNA_names for al in als_to_plot):
+        if any(al.reference_name in ti.pegRNA_names for al in diagram.alignments):
             ref_y = diagram.max_y + diagram.target_and_donor_y_gap
 
             # To ensure that features on pegRNAs that extend far to the right of

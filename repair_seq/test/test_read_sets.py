@@ -68,7 +68,7 @@ class ReadSet:
         if self.details['experiment_type'] == 'twin_prime':
             from repair_seq.twin_prime_layout import Layout
             categorizer = Layout
-        elif self.details['experiment_type'] == 'prime_editing_layout':
+        elif self.details['experiment_type'] in ('prime_editing', 'prime_editing_layout'):
             from repair_seq.prime_editing_layout import Layout
             categorizer = Layout
         else:
@@ -148,71 +148,77 @@ def build_pooled_screen_read_set(set_name):
 
     read_set.expected_values_fn.write_text(yaml.safe_dump(read_info, sort_keys=False))
         
-def build_arrayed_group_read_sets(only_new=False):
+def build_all_arrayed_group_read_sets(only_new=False):
     src_read_sets_dir = base_dir / 'manual_read_sets' / 'arrayed_groups'
     read_set_fns = src_read_sets_dir.glob('*.yaml')
 
     for read_set_fn in read_set_fns:
         set_name = read_set_fn.stem
 
-        manual_details = yaml.safe_load(read_set_fn.read_text())
-
         read_set = ReadSet(set_name)
 
         if read_set.dir.is_dir() and only_new:
             continue
+        else:
+            build_arrayed_group_read_set(set_name)
 
-        read_set.dir.mkdir(exist_ok=True, parents=True)
+def build_arrayed_group_read_set(set_name):
+    read_set_fn = base_dir / 'manual_read_sets' / 'arrayed_groups' / f'{set_name}.yaml'
+    manual_details = yaml.safe_load(read_set_fn.read_text())
 
-        exps = rs.arrayed_experiment_group.get_all_experiments(manual_details['base_dir'])
-        exp = exps[manual_details['batch_name'], manual_details['group_name'], manual_details['exp_name']]
-        exp_type = exp.experiment_group.description['experiment_type']
+    read_set = ReadSet(set_name)
 
-        # Experiments may specify specialized values for some target_info
-        # parameters that need to be passed along.
-        possible_target_info_kwargs_keys = [
-            'pegRNAs',
-            'sequencing_start_feature_name',
-            'primer_names',
-        ]
+    read_set.dir.mkdir(exist_ok=True, parents=True)
 
-        target_info_kwargs = {
-            key: exp.description[key]
-            for key in possible_target_info_kwargs_keys
-            if key in exp.description
-        }
+    exps = rs.arrayed_experiment_group.get_all_experiments(manual_details['base_dir'])
+    exp = exps[manual_details['batch_name'], manual_details['group_name'], manual_details['exp_name']]
+    exp_type = exp.experiment_group.description['experiment_type']
 
-        new_target_info_dir = base_dir / 'targets' / exp.target_info.name
-        existing_target_info_dir = exp.target_info.dir
+    # Experiments may specify specialized values for some target_info
+    # parameters that need to be passed along.
+    possible_target_info_kwargs_keys = [
+        'pegRNAs',
+        'sequencing_start_feature_name',
+        'primer_names',
+    ]
 
-        if new_target_info_dir.is_dir():
-            approved_deletion = input(f'Deleting target directory {new_target_info_dir}, proceed?') == 'y'
-            if approved_deletion:
-                shutil.rmtree(new_target_info_dir)
+    target_info_kwargs = {
+        key: exp.description[key]
+        for key in possible_target_info_kwargs_keys
+        if key in exp.description
+    }
 
-        shutil.copytree(existing_target_info_dir, new_target_info_dir)
+    new_target_info_dir = base_dir / 'targets' / exp.target_info.name
+    existing_target_info_dir = exp.target_info.dir
 
-        alignment_sorter = hits.sam.AlignmentSorter(read_set.bam_fn, exp.combined_header, by_name=True)
-        
-        read_info = {
-            'experiment_type': exp_type,
-            'target_info': exp.target_info.name,
-            'target_info_kwargs': target_info_kwargs,
-            'expected_values': {},
-        }
+    if new_target_info_dir.is_dir():
+        approved_deletion = input(f'Deleting target directory {new_target_info_dir}, proceed?') == 'y'
+        if approved_deletion:
+            shutil.rmtree(new_target_info_dir)
 
-        with alignment_sorter:
-            for read_id, details in manual_details['expected_values'].items():
-                als = exp.get_read_alignments(read_id)
-                for al in als:
-                    # Overwrite potential common sequence query_name. 
-                    al.query_name = read_id
-                    alignment_sorter.write(al)
-                    
-                read_info['expected_values'][read_id] = details
+    shutil.copytree(existing_target_info_dir, new_target_info_dir)
 
-        read_set.expected_values_fn.write_text(yaml.safe_dump(read_info, sort_keys=False))
+    alignment_sorter = hits.sam.AlignmentSorter(read_set.bam_fn, exp.combined_header, by_name=True)
     
+    read_info = {
+        'experiment_type': exp_type,
+        'target_info': exp.target_info.name,
+        'target_info_kwargs': target_info_kwargs,
+        'expected_values': {},
+    }
+
+    with alignment_sorter:
+        for read_id, details in manual_details['expected_values'].items():
+            als = exp.get_read_alignments(read_id)
+            for al in als:
+                # Overwrite potential common sequence query_name. 
+                al.query_name = read_id
+                alignment_sorter.write(al)
+                
+            read_info['expected_values'][read_id] = details
+
+    read_set.expected_values_fn.write_text(yaml.safe_dump(read_info, sort_keys=False))
+
 def test_read_sets():
     read_set_dirs = sorted([p for p in (base_dir / 'read_sets').iterdir() if p.is_dir()])
 

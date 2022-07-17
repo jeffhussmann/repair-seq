@@ -1,0 +1,21 @@
+experiment_type: prime_editing
+target_info: HEK3
+target_info_kwargs:
+  pegRNAs: HEK3_4g_del1-5
+expected_values:
+  010288035:0000000032:
+    category: wild type
+    subcategory: clean
+    note: n/a
+  010288035:0000000024:
+    category: intended edit
+    subcategory: deletion
+    note: n/a
+  010288035:0000000020:
+    category: unintended annealing of RT'ed sequence
+    subcategory: includes scaffold, no SNV
+    note: rejoins near PE3 nick
+  010288035:0000002037:
+    category: unintended annealing of RT'ed sequence
+    subcategory: no scaffold, no SNV
+    note: weirdly restores original length

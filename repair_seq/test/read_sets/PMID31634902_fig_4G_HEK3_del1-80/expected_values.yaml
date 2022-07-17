@@ -1,0 +1,25 @@
+experiment_type: prime_editing
+target_info: HEK3
+target_info_kwargs:
+  pegRNAs: HEK3_4g_del1-80
+expected_values:
+  010288018:0000000028:
+    category: wild type
+    subcategory: clean
+    note: n/a
+  010288018:0000000007:
+    category: intended edit
+    subcategory: deletion
+    note: n/a
+  010288018:0000000119:
+    category: unintended annealing of RT'ed sequence
+    subcategory: no scaffold, no SNV
+    note: includes part of RTT, rejoins just upstream of nick
+  010288018:0000000045:
+    category: unintended annealing of RT'ed sequence
+    subcategory: includes scaffold, no SNV
+    note: currently misclassified as edit + duplication
+  010288018:0000000126:
+    category: unintended annealing of RT'ed sequence
+    subcategory: includes scaffold, no SNV
+    note: currently misclassified as edit + duplication
