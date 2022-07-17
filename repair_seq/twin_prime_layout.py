@@ -1,10 +1,11 @@
-from collections import Counter, defaultdict
+from collections import defaultdict
 
+import hits.visualize
 from hits import interval, sam
-from hits import utilities
 from hits.utilities import memoized_property
 
 import knock_knock.visualize
+import knock_knock.pegRNAs
 from knock_knock.outcome import *
 
 import repair_seq.prime_editing_layout
@@ -24,6 +25,12 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             ),
         ),
         ('unintended annealing of RT\'ed sequence',
+            ('left pegRNA',
+             'right pegRNA',
+             'both pegRNAs',
+            ),
+        ),
+        ('flipped pegRNA incorporation',
             ('left pegRNA',
              'right pegRNA',
              'both pegRNAs',
@@ -116,7 +123,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
     @memoized_property
     def is_intended_replacement(self):
-        if self.target_info.twin_pegRNA_intended_deletion is not None:
+        if self.target_info.pegRNA_intended_deletion is not None:
             status = False
         else:
             if not self.has_intended_pegRNA_overlap:
@@ -128,6 +135,10 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                     status = self.intended_SNVs_replaced
 
         return status
+
+    @memoized_property
+    def has_any_flipped_pegRNA_al(self):
+        return {side for side in ['left', 'right'] if len(self.flipped_pegRNA_als[side]) > 0}
 
     @memoized_property
     def nonspecific_amplification(self):
@@ -270,7 +281,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                         self.details = 'n/a'
                         self.relevant_alignments = self.uncategorized_relevant_alignments
                     else:
-                        if indel == self.target_info.twin_pegRNA_intended_deletion:
+                        if indel == self.target_info.pegRNA_intended_deletion:
                             self.category = 'intended edit'
                             self.subcategory = 'deletion'
                             self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
@@ -340,6 +351,19 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
                 self.outcome = Outcome('n/a')
                 self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
+
+        elif len(self.has_any_flipped_pegRNA_al) > 0:
+            self.category = 'flipped pegRNA incorporation'
+            if len(self.has_any_flipped_pegRNA_al) == 1:
+                side = sorted(self.has_any_flipped_pegRNA_al)[0]
+                self.subcategory = f'{side} pegRNA'
+            elif len(self.has_any_flipped_pegRNA_al) == 2:
+                self.subcategory = f'both pegRNAs'
+            else:
+                raise ValueError(len(self.has_any_flipped_pegRNA_al))
+
+            self.outcome = Outcome('n/a')
+            self.relevant_alignments = self.target_edge_alignments_list + self.flipped_pegRNA_als['left'] + self.flipped_pegRNA_als['right']
 
         elif self.non_primer_nts <= 50:
             self.category = 'nonspecific amplification'
@@ -413,8 +437,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             # If there is any offset present in both sides, use it as the anchor.
             # Otherwise, pick any offset present in either side arbitrarily.
             # If there is no such offset, don't make anchors for the pegRNAs.
-            # Check overlap length to exclude prime del.
-            if overlap_length > 5 and (present_in_both or present_in_either):
+            if overlap_length > 5 and present_in_either:
                 if present_in_both:
                     anchor_offset = present_in_both[0]
                     qs = [overlap_offset_to_qs[side][anchor_offset] for side in ['left', 'right']] 
@@ -455,8 +478,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
                 PAM_name = f'{ps_name}_PAM'
                 color_overrides[PAM_name] = color
-
-        #print(self.manual_anchors)
 
         diagram_kwargs = dict(
             draw_sequence=True,

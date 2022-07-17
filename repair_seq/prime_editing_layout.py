@@ -326,6 +326,32 @@ class Layout(layout.Categorizer):
         return ambiguous_als
 
     @memoized_property
+    def flipped_pegRNA_als(self):
+        ''' Identify flipped pegRNA alignments that pair the pegRNA protospacer with target protospacer. '''
+
+        ti = self.target_info
+
+        flipped_als = {}
+
+        for side, pegRNA_name in ti.pegRNA_names_by_side_of_read.items():
+            flipped_als[side] = []
+
+            # Note: can't use parsimonious here.
+            pegRNA_als = self.pegRNA_alignments[pegRNA_name]
+            target_al = self.target_edge_alignments[side]
+
+            ps_name = knock_knock.pegRNAs.protospacer_name(pegRNA_name)
+
+            scaffold_feature = ti.features[pegRNA_name, 'scaffold']
+
+            for pegRNA_al in pegRNA_als:
+                if self.share_feature(target_al, ps_name, pegRNA_al, 'protospacer'):
+                    if sam.feature_overlap_length(pegRNA_al, scaffold_feature) >= 10:
+                        flipped_als[side].append(pegRNA_al)
+                        
+        return flipped_als
+
+    @memoized_property
     def extra_alignments(self):
         ti = self.target_info
         extra_ref_names = {n for n in ti.reference_sequences if n not in [ti.target, *ti.pegRNA_names]}
