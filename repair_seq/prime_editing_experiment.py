@@ -4,64 +4,15 @@ from collections import defaultdict, Counter
 import h5py
 import numpy as np
 
-from hits import fastq, utilities, adapters
-from knock_knock import experiment, svg
+from hits import utilities
+from knock_knock import illumina_experiment, svg
 from repair_seq import prime_editing_layout, twin_prime_layout, pooled_layout
 
 from hits.utilities import memoized_property
 
-class PrimeEditingExperiment(experiment.Experiment):
+class PrimeEditingExperiment(illumina_experiment.IlluminaExperiment):
     def __init__(self, base_dir, group, sample_name, **kwargs):
         super().__init__(base_dir, group, sample_name, **kwargs)
-
-        self.read_types = [
-            'trimmed',
-        ]
-
-        self.layout_mode = 'amplicon'
-        self.max_qual = 41
-
-        self.fns['templated_insertion_details'] = self.results_dir / 'templated_insertion_details.hdf5'
-
-        self.outcome_fn_keys = ['outcome_list']
-
-        self.length_plot_smooth_window = 0
-        self.x_tick_multiple = 50
-
-        self.read_types = [
-            'trimmed',
-            'trimmed_by_name',
-            'nonredundant',
-        ]
-
-    @memoized_property
-    def diagram_kwargs(self):
-        label_offsets = {feature_name: 1 for _, feature_name in self.target_info.PAM_features}
-
-        for pegRNA in self.target_info.pegRNA_names:
-            label_offsets[f'insertion_{pegRNA}'] = 1
-
-        features_to_show = {*self.target_info.features_to_show, *set(self.target_info.PAM_features)}
-        
-        diagram_kwargs = dict(
-            ref_centric=True,
-            center_on_primers=True,
-            flip_target=self.target_info.sequencing_direction == '-',
-            highlight_SNPs=True,
-            split_at_indels=True,
-            label_offsets=label_offsets,
-            features_to_show=features_to_show,
-        )
-
-        return diagram_kwargs
-
-    @property
-    def default_read_type(self):
-        return 'trimmed_by_name'
-
-    @property
-    def preprocessed_read_type(self):
-        return 'trimmed_by_name'
 
     @property
     def read_types_to_align(self):
@@ -85,54 +36,14 @@ class PrimeEditingExperiment(experiment.Experiment):
             for read in self.reads_by_type(self.preprocessed_read_type):
                 fh.write(str(read))
 
-    @property
-    def reads(self):
-        fastq_fn = self.data_dir / self.description['fastq_fn']
+    def visualize(self):
+        lengths_fig = self.length_distribution_figure()
+        lengths_fig.savefig(self.fns['lengths_figure'], bbox_inches='tight')
+        self.generate_all_outcome_length_range_figures()
+        svg.decorate_outcome_browser(self)
+        self.generate_all_outcome_example_figures(num_examples=5)
 
-        # Standardizing names is important for sorting.
-        reads = fastq.reads(fastq_fn, standardize_names=True)
-
-        return reads
-
-    def trim_reads(self):
-        ''' Trim a (potentially variable-length) barcode from the beginning of a read
-        by searching for the expected sequence that the amplicon should begin with.
-        '''
-
-        ti = self.target_info
-
-        if ti.sequencing_direction == '+':
-            start = ti.sequencing_start.start
-            prefix = ti.target_sequence[start:start + 6]
-        else:
-            end = ti.sequencing_start.end
-            prefix = utilities.reverse_complement(ti.target_sequence[end - 5:end + 1])
-
-        prefix = prefix.upper()
-
-        trimmed_fn = self.fns_by_read_type['fastq']['trimmed']
-        with gzip.open(trimmed_fn, 'wt', compresslevel=1) as trimmed_fh:
-            for read in self.progress(self.reads, desc='Trimming reads'):
-                try:
-                    start = read.seq.index(prefix, 0, 30)
-                except ValueError:
-                    start = 0
-
-                end = adapters.trim_by_local_alignment(adapters.truseq_R2_rc, read.seq)
-                trimmed_fh.write(str(read[start:end]))
-
-    def sort_trimmed_reads(self):
-        reads = sorted(self.reads_by_type('trimmed'), key=lambda read: read.name)
-        fn = self.fns_by_read_type['fastq']['trimmed_by_name']
-        with gzip.open(fn, 'wt', compresslevel=1) as sorted_fh:
-            for read in reads:
-                sorted_fh.write(str(read))
-
-    def preprocess(self):
-        self.trim_reads()
-        self.sort_trimmed_reads()
-
-    def process(self, stage):
+    def process_old(self, stage):
         try:
             if stage == 'preprocess':
                 self.preprocess()
@@ -156,11 +67,7 @@ class PrimeEditingExperiment(experiment.Experiment):
                 self.record_sanitized_category_names()
 
             elif stage == 'visualize':
-                lengths_fig = self.length_distribution_figure()
-                lengths_fig.savefig(self.fns['lengths_figure'], bbox_inches='tight')
-                self.generate_all_outcome_length_range_figures()
-                svg.decorate_outcome_browser(self)
-                self.generate_all_outcome_example_figures(num_examples=5)
+                self.visualize()
         except:
             print(self.group, self.sample_name)
             raise

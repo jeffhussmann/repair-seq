@@ -11,11 +11,12 @@ import pandas as pd
 import pysam
 from ipywidgets import Layout, Select
 
+import knock_knock.illumina_experiment
 import knock_knock.explore
 import knock_knock.outcome
 from hits import utilities, sam
 
-from . import prime_editing_experiment, single_end_experiment, paired_end_experiment
+from . import prime_editing_experiment, single_end_experiment
 import repair_seq.experiment_group
 
 memoized_property = utilities.memoized_property
@@ -170,14 +171,23 @@ class Batch:
                     shutil.rmtree(new_target_info_dir)
 
                 shutil.copytree(old_group.target_info.dir, new_target_info_dir)
-    
+
+    @memoized_property
+    def category_fractions(self):
+        fs = {gn: group.category_fractions for gn, group in self.groups.items()}
+        return pd.concat(fs, axis='columns').fillna(0)
+
+    @memoized_property
+    def subcategory_fractions(self):
+        fs = {gn: group.subcategory_fractions for gn, group in self.groups.items()}
+        return pd.concat(fs, axis='columns').fillna(0)
 
 def get_batch(base_dir, batch_name, progress=None, **kwargs):
     group_dir = Path(base_dir) / 'data' / batch_name
     group_descriptions_fn = group_dir / 'group_descriptions.csv'
 
     if group_descriptions_fn.exists():
-        batch = Batch(base_dir, batch_name, progress, **kwargs)
+        batch = Batch(base_dir, batch_name, progress=progress, **kwargs)
     else:
         batch = None
 
@@ -352,9 +362,9 @@ class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
 
     def common_sequence_chunk_exp_from_name(self, chunk_name):
         chunk_exp = self.CommonSequencesExperimentType(self.base_dir, self.batch, self.group, chunk_name,
-                                        experiment_group=self,
-                                        description=self.description,
-                                       )
+                                                       experiment_group=self,
+                                                       description=self.description,
+                                                      )
         return chunk_exp
 
     @memoized_property
@@ -695,7 +705,7 @@ class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
 class ArrayedExperiment:
     def __init__(self, base_dir, batch, group, sample_name, experiment_group=None):
         if experiment_group is None:
-            experiment_group = ArrayedExperimentGroup(base_dir, batch, group, type(self))
+            experiment_group = ArrayedExperimentGroup(base_dir, batch, group)
 
         self.base_dir = Path(base_dir)
         self.batch = batch
@@ -808,7 +818,10 @@ class ArrayedExperiment:
                     layout.query_name = name
 
                 else:
-                    layout = self.categorizer(als, self.target_info, error_corrected=self.has_UMIs, mode=self.layout_mode)
+                    layout = self.categorizer(als, self.target_info,
+                                              error_corrected=self.has_UMIs,
+                                              mode=self.layout_mode,
+                                             )
 
                     try:
                         layout.categorize()
@@ -822,7 +835,12 @@ class ArrayedExperiment:
 
                 outcome_to_qnames[layout.category, layout.subcategory].append(name)
 
-                outcome = self.final_Outcome.from_layout(layout)
+                try:
+                    outcome = self.final_Outcome.from_layout(layout)
+                except:
+                    print()
+                    print(self.sample_name, name)
+                    raise
 
                 outcome_fh.write(f'{outcome}\n')
 
@@ -872,8 +890,8 @@ class ArrayedExperiment:
 
 def arrayed_specialized_experiment_factory(experiment_kind):
     experiment_kind_to_class = {
-        'paired_end': paired_end_experiment.PairedEndExperiment,
         'single_end': single_end_experiment.SingleEndExperiment,
+        'illumina': knock_knock.illumina_experiment.IlluminaExperiment,
         'prime_editing': prime_editing_experiment.PrimeEditingExperiment,
         'twin_prime': prime_editing_experiment.TwinPrimeExperiment,
     }
@@ -917,7 +935,11 @@ class ArrayedGroupExplorer(knock_knock.explore.Explorer):
 
     def populate_replicates(self, change):
         with self.output:
-            condition = self.widgets['condition'].value
+            if len(self.group.conditions) > 0:
+                condition = self.widgets['condition'].value
+            else:
+                condition = tuple()
+
             exps = self.group.condition_replicates(condition)
 
             self.widgets['replicate'].options = [(exp.description['replicate'], exp) for exp in exps]

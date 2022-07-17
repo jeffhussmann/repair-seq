@@ -19,14 +19,16 @@ def run_stage(GroupClass, group_args, sample_name, stage):
     group = GroupClass(*group_args)
 
     if sample_name in group.sample_names:
-        # Important to do this branch first, since preprocssing happens before common sequence collection.
+        # Important to do this branch first, since preprocessing happens before common sequence collection.
         exp = group.sample_name_to_experiment(sample_name, no_progress=True)
     elif sample_name in group.common_sequence_chunk_exp_names:
         exp = group.common_sequence_chunk_exp_from_name(sample_name)
     else:
         raise ValueError(sample_name)
 
+    logging.info(f'Starting {sample_name} {stage}')
     exp.process(stage=stage)
+    logging.info(f'Finished {sample_name} {stage}')
 
 class ExperimentGroup:
     def __init__(self):
@@ -49,7 +51,7 @@ class ExperimentGroup:
         logger.propagate = False
         logger.setLevel(logging.INFO)
         file_handler = logging.FileHandler(log_fn)
-        formatter = logging.Formatter(fmt='%(asctime)s: %(message)s',
+        formatter = logging.Formatter(fmt='%(asctime)s: %(name)s %(levelname)s %(message)s',
                                       datefmt='%y-%m-%d %H:%M:%S',
                                      )
         file_handler.setFormatter(formatter)
@@ -80,7 +82,7 @@ class ExperimentGroup:
             for stage in [
                 'align',
                 'categorize',
-                #'visualize',
+                'visualize',
             ]:
 
                 logger.info(f'Processing unique sequences, stage {stage}')
@@ -205,22 +207,19 @@ class ExperimentGroup:
 
     def get_read_layout(self, name, **kwargs):
         als = self.get_read_alignments(name)
-        l = self.categorizer(als, self.target_info, mode=self.layout_mode, error_corrected=False, **kwargs)
-        return l
+        layout = self.categorizer(als, self.target_info, mode=self.layout_mode, error_corrected=False, **kwargs)
+        return layout
 
-    def get_read_diagram(self, read_id, only_relevant=True, **diagram_kwargs):
+    def get_read_diagram(self, read_id, relevant=True, **diagram_kwargs):
         layout = self.get_read_layout(read_id)
 
-        if only_relevant:
+        if relevant:
             layout.categorize()
-            to_plot = layout.relevant_alignments
-        else:
-            to_plot = layout.alignments
             
         for k, v in self.diagram_kwargs.items():
             diagram_kwargs.setdefault(k, v)
 
-        diagram = knock_knock.visualize.ReadDiagram(to_plot, self.target_info, **diagram_kwargs)
+        diagram = layout.plot(relevant=relevant, **diagram_kwargs)
 
         return diagram
 
