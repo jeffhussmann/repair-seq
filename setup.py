@@ -33,12 +33,12 @@ setup(
 
     install_requires=[
         'h5py>=3.1.0',
-        'hdbscan==0.8.26',
+        'hdbscan',
         'hits>=0.3.3',
         'knock_knock>=0.3.8',
-        'numba==0.51.2',
+        'numba',
         'seaborn>=0.11.0',
-        'umap-learn==0.4.6',
+        'umap-learn',
     ],
 
     setup_requires=['cython'],
