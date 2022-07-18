@@ -53,7 +53,7 @@ class Batch:
 
         self.condition_colors_fn = self.data_dir / 'condition_colors.csv'
         if self.condition_colors_fn.exists():
-            self.condition_colors = pd.read_csv(self.condition_colors_fn, index_col='perturbation', squeeze=True)
+            self.condition_colors = pd.read_csv(self.condition_colors_fn, index_col='perturbation').squeeze()
         else:
             self.condition_colors = None
 

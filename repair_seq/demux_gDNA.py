@@ -568,7 +568,12 @@ if __name__ == '__main__':
     shutil.rmtree(str(chunk_dir))
 
     merged_fn = Path(base_dir) / 'data' / batch / 'id_stats.txt'
-    id_counts = pd.read_csv(merged_fn, sep='\t', header=None, names=['pool', 'fixed_guide', 'variable_guide', 'num_reads'], index_col=[0, 1, 2], squeeze=True)
+    id_counts = pd.read_csv(merged_fn,
+                            sep='\t',
+                            header=None,
+                            names=['pool', 'fixed_guide', 'variable_guide', 'num_reads'],
+                            index_col=[0, 1, 2],
+                           ).squeeze()
 
     for pool_name in pool_details:
         if pool_name in id_counts:

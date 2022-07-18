@@ -56,7 +56,7 @@ class GuideLibrary:
     @memoized_property
     def best_promoters(self):
         if self.fns['best_promoters'].exists():
-            best_promoters = pd.read_csv(self.fns['best_promoters'], index_col='gene', squeeze=True, sep='\t')
+            best_promoters = pd.read_csv(self.fns['best_promoters'], index_col='gene', sep='\t').squeeze()
         else:
             best_promoters = {}
 
@@ -64,7 +64,7 @@ class GuideLibrary:
 
     @memoized_property
     def old_gene_to_new_gene(self):
-        updated_gene_names = pd.read_csv(self.fns['updated_gene_names'], index_col=0, squeeze=True, seq='\t')
+        updated_gene_names = pd.read_csv(self.fns['updated_gene_names'], index_col=0, seq='\t').squeeze()
         return updated_gene_names
     
     @memoized_property

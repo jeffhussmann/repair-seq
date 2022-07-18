@@ -287,7 +287,7 @@ class PerturbseqLane:
         names_fn = '/lab/solexa_weissman/indices/refdata-cellranger-hg19-1.2.0/kallisto/transcripts_to_genes_hg19.txt'
 
         updated_names_fn = self.base_dir / 'guides' / 'DDR_library' / 'updated_gene_names.txt'
-        updated_names = pd.read_csv(updated_names_fn, sep='\t', index_col='old_name', squeeze=True)
+        updated_names = pd.read_csv(updated_names_fn, sep='\t', index_col='old_name').squeeze()
         ENSG_to_name = {}
 
         names_seen = Counter()
