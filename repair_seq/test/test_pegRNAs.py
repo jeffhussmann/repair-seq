@@ -5,7 +5,6 @@ import knock_knock.target_info
 
 base_dir = Path(__file__).parent
 
-
 def test_intended_insertion_inferrence():
     for pegRNA_name, (start, end, strand)  in [
         ('pPC1044', (132, 152, '-')),
@@ -13,7 +12,7 @@ def test_intended_insertion_inferrence():
         ti = knock_knock.target_info.TargetInfo(base_dir,
                                                 'pPC1000',
                                                 pegRNAs=pegRNA_name,
-                                            )
+                                               )
         assert len(ti.pegRNA_programmed_insertions) == 1
         inferred_insertion = ti.pegRNA_programmed_insertions[0]
         assert (inferred_insertion.start == start)

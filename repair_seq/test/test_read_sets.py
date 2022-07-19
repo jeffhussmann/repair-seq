@@ -219,6 +219,34 @@ def build_arrayed_group_read_set(set_name):
 
     read_set.expected_values_fn.write_text(yaml.safe_dump(read_info, sort_keys=False))
 
+def process_read_set(set_name):
+    read_set = ReadSet(set_name)
+
+    tested_layouts = {
+        'passed': [],
+        'failed': [],
+    }
+
+    for qname, als in hits.sam.grouped_by_name(read_set.bam_fn):
+        try:
+            layout = read_set.categorizer(als, read_set.target_info)
+            layout.categorize()
+
+        except:
+            layout.category = 'error'
+            layout.subcategory = 'error'
+
+        expected = read_set.expected_values[qname]
+
+        if expected['category'] != layout.category or expected['subcategory'] != layout.subcategory:
+            result_key = 'failed'
+        else:
+            result_key = 'passed'
+
+        tested_layouts[result_key].append((layout, expected))
+
+    return tested_layouts
+
 def test_read_sets():
     read_set_dirs = sorted([p for p in (base_dir / 'read_sets').iterdir() if p.is_dir()])
 
@@ -228,34 +256,19 @@ def test_read_sets():
     discrepancies = []
 
     for read_set_dir in read_set_dirs:
+
         set_name = read_set_dir.name
+        tested_layouts = process_read_set(set_name)
 
-        read_set = ReadSet(set_name)
+        num_tested = len(tested_layouts['passed']) + len(tested_layouts['failed'])
 
-        num_tested = 0
-
-        for qname, als in hits.sam.grouped_by_name(read_set.bam_fn):
-            try:
-                layout = read_set.categorizer(als, read_set.target_info)
-                layout.categorize()
-
-                category = layout.category
-                subcategory = layout.subcategory
-
-            except:
-                category = 'error'
-                subcategory = 'error'
-
-            expected = read_set.expected_values[qname]
-
-            if expected['category'] != category or expected['subcategory'] != subcategory:
-                discrepancies.append((set_name, qname, expected, category, subcategory))
-
-            num_tested += 1
+        for layout, expected in tested_layouts['failed']:
+            discrepancies.append((set_name, layout.query_name, expected, layout.category, layout.subcategory))
 
         print(f'Tested {num_tested: >3d} sequences for {set_name}.') 
 
     diagnostic_messages = []
+
     for set_name, qname, expected, category, subcategory in discrepancies:
 
         diagnostic_message = f'''
