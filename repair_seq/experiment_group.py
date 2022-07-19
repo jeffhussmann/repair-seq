@@ -51,7 +51,7 @@ class ExperimentGroup:
         logger.propagate = False
         logger.setLevel(logging.INFO)
         file_handler = logging.FileHandler(log_fn)
-        formatter = logging.Formatter(fmt='%(asctime)s: %(name)s %(levelname)s %(message)s',
+        formatter = logging.Formatter(fmt='%(asctime)s: %(message)s',
                                       datefmt='%y-%m-%d %H:%M:%S',
                                      )
         file_handler.setFormatter(formatter)
