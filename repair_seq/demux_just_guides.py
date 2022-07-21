@@ -1,5 +1,4 @@
 import argparse
-from email.mime import base
 import gzip
 import multiprocessing
 import itertools
