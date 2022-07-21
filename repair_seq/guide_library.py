@@ -83,10 +83,17 @@ class GuideLibrary:
                 fh.write(str(record))
 
     def make_guides_fasta(self):
+        ''' Make fasta of "full" sequence of each guide, including
+        promoter from sequencing primer onward and scaffold afterwards.
+        '''
         with open(self.fns['guides_fasta'], 'w') as fh:
             for name, seq in self.guides_df['full_seq'].items():
                 record = fasta.Record(name, seq)
                 fh.write(str(record))
+
+    @memoized_property
+    def full_guide_seqs(self):
+        return fasta.to_dict(self.fns['guides_fasta'])
 
     @memoized_property
     def guides(self):
