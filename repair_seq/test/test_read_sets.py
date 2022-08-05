@@ -20,10 +20,10 @@ memoized_property = hits.utilities.memoized_property
 base_dir = Path(__file__).parent
 
 class ReadSet:
-    def __init__(self, set_name):
-        self.set_name = set_name
+    def __init__(self, name):
+        self.name = name
 
-        self.dir = base_dir / 'read_sets' / self.set_name
+        self.dir = base_dir / 'read_sets' / self.name
         
         self.bam_fn =  self.dir / 'alignments.bam'
         self.expected_values_fn = self.dir / 'expected_values.yaml'
@@ -76,6 +76,37 @@ class ReadSet:
 
         return categorizer
 
+    def process(self):
+        tested_layouts = {
+            'passed': [],
+            'failed': [],
+        }
+
+        for qname, als in hits.sam.grouped_by_name(self.bam_fn):
+            try:
+                layout = self.categorizer(als, self.target_info)
+                layout.categorize()
+
+            except:
+                layout.category = 'error'
+                layout.subcategory = 'error'
+
+            expected = self.expected_values[qname]
+
+            if expected['category'] != layout.category or expected['subcategory'] != layout.subcategory:
+                result_key = 'failed'
+            else:
+                result_key = 'passed'
+
+            tested_layouts[result_key].append((layout, expected))
+
+        return tested_layouts
+
+def get_all_read_sets():
+    read_set_names = sorted([d.name for d in (base_dir / 'read_sets').iterdir() if d.is_dir()])
+    read_sets = [ReadSet(name) for name in read_set_names]
+    return read_sets
+
 def build_all_pooled_screen_read_sets(only_new=False):
     src_read_sets_dir = base_dir / 'manual_read_sets' / 'pooled_screens'
     read_set_fns = src_read_sets_dir.glob('*.yaml')
@@ -108,8 +139,11 @@ def build_pooled_screen_read_set(set_name):
 
     if new_target_info_dir.is_dir():
         approved_deletion = input(f'Deleting target directory {new_target_info_dir}, proceed?') == 'y'
+
         if approved_deletion:
             shutil.rmtree(new_target_info_dir)
+        else:
+            raise ValueError
 
     shutil.copytree(existing_target_info_dir, new_target_info_dir)
 
@@ -188,13 +222,21 @@ def build_arrayed_group_read_set(set_name):
         if key in exp.description
     }
 
-    new_target_info_dir = base_dir / 'targets' / exp.target_info.name
+    new_target_info_name = exp.target_info.name
+    if 'target_info_prefix_to_add' in manual_details:
+        prefix = manual_details['target_info_prefix_to_add']
+        new_target_info_name = f'{prefix}_{new_target_info_name}'
+
+    new_target_info_dir = base_dir / 'targets' / new_target_info_name
     existing_target_info_dir = exp.target_info.dir
 
     if new_target_info_dir.is_dir():
         approved_deletion = input(f'Deleting target directory {new_target_info_dir}, proceed?') == 'y'
+
         if approved_deletion:
             shutil.rmtree(new_target_info_dir)
+        else:
+            raise ValueError
 
     shutil.copytree(existing_target_info_dir, new_target_info_dir)
 
@@ -202,7 +244,7 @@ def build_arrayed_group_read_set(set_name):
     
     read_info = {
         'experiment_type': exp_type,
-        'target_info': exp.target_info.name,
+        'target_info': new_target_info_name,
         'target_info_kwargs': target_info_kwargs,
         'expected_values': {},
     }
@@ -221,51 +263,25 @@ def build_arrayed_group_read_set(set_name):
 
 def process_read_set(set_name):
     read_set = ReadSet(set_name)
-
-    tested_layouts = {
-        'passed': [],
-        'failed': [],
-    }
-
-    for qname, als in hits.sam.grouped_by_name(read_set.bam_fn):
-        try:
-            layout = read_set.categorizer(als, read_set.target_info)
-            layout.categorize()
-
-        except:
-            layout.category = 'error'
-            layout.subcategory = 'error'
-
-        expected = read_set.expected_values[qname]
-
-        if expected['category'] != layout.category or expected['subcategory'] != layout.subcategory:
-            result_key = 'failed'
-        else:
-            result_key = 'passed'
-
-        tested_layouts[result_key].append((layout, expected))
-
-    return tested_layouts
+    return read_set.process()
 
 def test_read_sets():
-    read_set_dirs = sorted([p for p in (base_dir / 'read_sets').iterdir() if p.is_dir()])
+    read_sets = get_all_read_sets()
 
     # Ensure that at least one read set was found. 
-    assert len(read_set_dirs) > 0
+    assert len(read_sets) > 0
 
     discrepancies = []
 
-    for read_set_dir in read_set_dirs:
-
-        set_name = read_set_dir.name
-        tested_layouts = process_read_set(set_name)
+    for read_set in read_sets:
+        tested_layouts = read_set.process()
 
         num_tested = len(tested_layouts['passed']) + len(tested_layouts['failed'])
 
         for layout, expected in tested_layouts['failed']:
-            discrepancies.append((set_name, layout.query_name, expected, layout.category, layout.subcategory))
+            discrepancies.append((read_set.name, layout.query_name, expected, layout.category, layout.subcategory))
 
-        print(f'Tested {num_tested: >3d} sequences for {set_name}.') 
+        print(f'Tested {num_tested: >3d} sequences for {read_set.name}.') 
 
     diagnostic_messages = []
 

@@ -58,7 +58,7 @@ def test_twin_prime_intended_deletion_inferrence():
             assert (ti.pegRNA_intended_deletion == expected)
             assert (ti.is_prime_del == is_prime_del)
 
-def test_pegRNA_feature_inferrence():
+def test_pegRNA_PBS_and_RTT_inferrence():
     ti = knock_knock.target_info.TargetInfo(base_dir, 'PAH_E4-2_45_EvoPreQ1-4_43_EvoPreQ1')
 
     feature = ti.features['PAH_E4', 'HA_PBS_PAH_E4.2_45_EvoPreQ1']
@@ -66,6 +66,19 @@ def test_pegRNA_feature_inferrence():
 
     feature = ti.features['PAH_E4', 'HA_PBS_PAH_E4.4_43_EvoPreQ1'] 
     assert (feature.start, feature.end, feature.strand) == (536, 547, '+')
+
+    # EMX1 has repetitive sequence at the nick that leads to a spurious
+    # 7-mer match of nick sequence to the wrong part of the pegRNA and 
+    # could cause incorrect PBS inferrence.
+
+    ti = knock_knock.target_info.TargetInfo(base_dir, 'EMX1', pegRNAs='EMX1_3b')
+
+    target_PBS = ti.features['EMX1', 'EMX1_3b_PBS']
+    assert (target_PBS.start, target_PBS.end, target_PBS.strand) == (653, 667, '+')
+    pegRNA_PBS = ti.features['EMX1_3b', 'PBS']
+    assert (pegRNA_PBS.start, pegRNA_PBS.end, pegRNA_PBS.strand) == (109, 123, '-')
+    pegRNA_RTT = ti.features['EMX1_3b', 'RTT']
+    assert (pegRNA_RTT.start, pegRNA_RTT.end, pegRNA_RTT.strand) == (96, 108, '-')
 
 def test_twin_prime_overlap_inferrence():
     ti = knock_knock.target_info.TargetInfo(base_dir, 'HEK3_attB_A30_B30')
