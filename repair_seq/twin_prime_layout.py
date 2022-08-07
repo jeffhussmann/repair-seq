@@ -69,6 +69,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         ),
         ('nonspecific amplification',
             ('hg19',
+             'hg38',
              'bosTau7',
              'e_coli',
              'primer dimer',
@@ -140,31 +141,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
     def has_any_flipped_pegRNA_al(self):
         return {side for side in ['left', 'right'] if len(self.flipped_pegRNA_als[side]) > 0}
 
-    @memoized_property
-    def nonspecific_amplification(self):
-        # TODO: port over more sophisticated strategy from kk.layout
-        
-        covered_from_edges = interval.get_disjoint_covered(list(self.target_edge_alignments.values()))
-        
-        need_to_cover = self.whole_read - covered_from_edges
-
-        # Try to avoid false positives
-        if need_to_cover.total_length <= 20:
-            return []
-
-        covering_als = []
-        for al in self.supplemental_alignments:
-            covered = interval.get_covered(al)
-            if len(need_to_cover - covered) == 0:
-                covering_als.append(al)
-                
-        if len(covering_als) == 0:
-            covering_als = None
-        else:
-            covering_als = interval.make_parsimonious(covering_als)
-
-        return covering_als
-
     def alignment_SNV_summary(self, al):
         ''' Identifies any positions in al that correspond to sequence differences
         between the target and pegRNAs and separates them based on whether they
@@ -227,12 +203,12 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                         self.category = 'intended edit'
                         self.subcategory = self.is_intended_replacement
                         self.outcome = Outcome('n/a')
-                        self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
+                        self.relevant_alignments = self.target_edge_alignments_list + self.pegRNA_extension_als_list
 
                     else:
                         self.category = 'wild type'
 
-                        if len(self.non_donor_SNVs) == 0 and len(uninteresting_indels) == 0:
+                        if len(self.non_pegRNA_SNVs) == 0 and len(uninteresting_indels) == 0:
                             self.subcategory = 'clean'
                             self.outcome = Outcome('n/a')
 
@@ -254,7 +230,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
                         else:
                             self.subcategory = 'mismatches'
-                            self.outcome = MismatchOutcome(self.non_donor_SNVs)
+                            self.outcome = MismatchOutcome(self.non_pegRNA_SNVs)
 
                         self.relevant_alignments = [target_alignment]
 
@@ -269,7 +245,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             elif len(interesting_indels) == 1:
                 indel = interesting_indels[0]
 
-                if len(self.non_donor_SNVs) > 0:
+                if len(self.non_pegRNA_SNVs) > 0:
                     self.subcategory = 'mismatches'
                 else:
                     self.subcategory = 'clean'
@@ -284,7 +260,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                         if indel == self.target_info.pegRNA_intended_deletion:
                             self.category = 'intended edit'
                             self.subcategory = 'deletion'
-                            self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
+                            self.relevant_alignments = [target_alignment] + self.pegRNA_extension_als_list
 
                         else:
                             self.category = 'deletion'
@@ -312,32 +288,22 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                     self.details = 'n/a'
                     self.relevant_alignments = self.uncategorized_relevant_alignments
 
-        elif self.duplication is not None:
+        elif self.duplication_covers_whole_read:
             subcategory, ref_junctions, indels, als_with_donor_SNVs, merged_als = self.duplication
-            if len(indels) == 0:
-                self.outcome = DuplicationOutcome(ref_junctions)
+            self.outcome = DuplicationOutcome(ref_junctions)
 
-                if als_with_donor_SNVs == 0:
-                    self.category = 'duplication'
-                else:
-                    self.category = 'edit + duplication'
+            self.category = 'duplication'
 
-                self.subcategory = subcategory
-                self.details = str(self.outcome)
-                self.relevant_alignments = merged_als
-
-            else:
-                self.category = 'uncategorized'
-                self.subcategory = 'uncategorized'
-                self.details = 'n/a'
-                self.relevant_alignments = self.uncategorized_relevant_alignments
+            self.subcategory = subcategory
+            self.details = str(self.outcome)
+            self.relevant_alignments = merged_als
 
         elif len(self.has_any_pegRNA_extension_al) > 0:
             if self.is_intended_replacement:
                 self.category = 'intended edit'
                 self.subcategory = self.is_intended_replacement
                 self.outcome = Outcome('n/a')
-                self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
+                self.relevant_alignments = self.target_edge_alignments_list + self.pegRNA_extension_als_list
 
             else:
                 self.category = 'unintended annealing of RT\'ed sequence'
@@ -350,7 +316,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                     raise ValueError(len(self.has_any_pegRNA_extension_al))
 
                 self.outcome = Outcome('n/a')
-                self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
+                self.relevant_alignments = self.target_edge_alignments_list + self.pegRNA_extension_als_list
 
         elif len(self.has_any_flipped_pegRNA_al) > 0:
             self.category = 'flipped pegRNA incorporation'
@@ -462,7 +428,10 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         ti = self.target_info
 
-        color_overrides = {primer_name: 'lightgrey' for primer_name in ti.primer_names}
+        color_overrides = {}
+        if ti.primer_names is not None:
+            for primer_name in ti.primer_names:
+                color_overrides[primer_name] = 'lightgrey'
 
         pegRNA_names = ti.pegRNA_names
         if pegRNA_names is None:
@@ -479,18 +448,62 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                 PAM_name = f'{ps_name}_PAM'
                 color_overrides[PAM_name] = color
 
+        features_to_show = {*ti.features_to_show}
+        features_to_show.update(sorted(ti.PAM_features))
+        label_offsets = {feature_name: 1 for _, feature_name in ti.PAM_features}
+        label_overrides = {name: 'protospacer' for name in ti.sgRNAs}
+        feature_heights = {}
+
+        for deletion in self.target_info.pegRNA_programmed_deletions:
+            label_offsets[deletion.ID] = 2
+            label_overrides[deletion.ID] = 'intended deletion'
+            feature_heights[deletion.ID] = 0.5
+
+        if self.target_info.integrase_sites:
+            suffixes = [
+                'attP_left',
+                'attP_right',
+                'attB_left',
+                'attB_right',
+            ]
+
+            for _, name in self.target_info.integrase_sites:
+                for suffix in suffixes:
+                    if name.endswith(suffix):
+                        label_overrides[name] = '\n'.join(suffix.split('_'))
+            
+            label_offsets['RTT'] = 2
+
+            for ref_name, name in self.target_info.integrase_sites:
+                if 'left' in name or 'right' in name:
+                    features_to_show.add((ref_name, name))
+
+        if 'features_to_show' in manual_diagram_kwargs:
+            features_to_show.update(manual_diagram_kwargs.pop('features_to_show'))
+
+        if 'color_overrides' in manual_diagram_kwargs:
+            color_overrides.update(manual_diagram_kwargs.pop('color_overrides'))
+
+        if 'label_overrides' in manual_diagram_kwargs:
+            label_overrides.update(manual_diagram_kwargs.pop('label_overrides'))
+
+        refs_to_draw= {ti.target, *pegRNA_names}
+        if 'refs_to_draw' in manual_diagram_kwargs:
+            refs_to_draw.update(manual_diagram_kwargs.pop('refs_to_draw'))
+
         diagram_kwargs = dict(
             draw_sequence=True,
             flip_target=ti.sequencing_direction == '-',
             split_at_indels=True,
-            label_offsets={feature_name: 1 for _, feature_name in ti.PAM_features},
-            features_to_show=ti.features_to_show,
+            label_offsets=label_offsets,
+            features_to_show=features_to_show,
             manual_anchors=self.manual_anchors,
-            refs_to_draw={ti.target, *pegRNA_names},
-            label_overrides={name: 'protospacer' for name in ti.sgRNAs},
+            refs_to_draw=refs_to_draw,
+            label_overrides=label_overrides,
             inferred_amplicon_length=self.inferred_amplicon_length,
             center_on_primers=True,
             color_overrides=color_overrides,
+            feature_heights=feature_heights,
         )
 
         diagram_kwargs.update(**manual_diagram_kwargs)

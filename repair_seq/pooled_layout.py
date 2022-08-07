@@ -312,20 +312,21 @@ class Layout(layout.Categorizer):
         return a single (possibly deletion containing) alignment that does this.
         '''
         edge_als = self.perfect_edge_alignments
+        ti = self.target_info
 
         if self.covers_whole_read(edge_als['left']):
             merged_al = edge_als['left']
         elif self.covers_whole_read(edge_als['right']):
             merged_al = edge_als['right']
         else:
-            merged_al = sam.merge_adjacent_alignments(edge_als['left'], edge_als['right'], self.target_info.reference_sequences)
+            merged_al = sam.merge_adjacent_alignments(edge_als['left'], edge_als['right'], ti.reference_sequences)
 
             if merged_al is None and edge_als['right'] is not None:
-                extended_right_al = sw.extend_alignment_with_one_nt_deletion(edge_als['right'], self.target_info.target_sequence_bytes)
+                extended_right_al = sw.extend_alignment_with_one_nt_deletion(edge_als['right'], ti.reference_sequence_bytes[ti.target])
                 if self.covers_whole_read(extended_right_al):
                     merged_al = extended_right_al
                 else:
-                    merged_al = sam.merge_adjacent_alignments(edge_als['left'], extended_right_al, self.target_info.reference_sequences)
+                    merged_al = sam.merge_adjacent_alignments(edge_als['left'], extended_right_al, ti.reference_sequences)
 
         return merged_al
     
@@ -385,10 +386,7 @@ class Layout(layout.Categorizer):
         for al in self.target_alignments + self.donor_alignments:
             split_als = layout.comprehensively_split_alignment(al, self.target_info, 'illumina', self.ins_size_to_split_at, self.del_size_to_split_at)
 
-            if al.reference_name == self.target_info.target:
-                seq_bytes = self.target_info.target_sequence_bytes
-            else:
-                seq_bytes = self.target_info.donor_sequence_bytes
+            seq_bytes = self.target_info.reference_sequence_bytes[al.reference_name]
 
             extended = [sw.extend_alignment(split_al, seq_bytes) for split_al in split_als]
 
@@ -444,10 +442,10 @@ class Layout(layout.Categorizer):
                                 N_matches=False,
                                )
             
-            extended_target_als = [sw.extend_alignment(al, ti.target_sequence_bytes) for al in als if al.reference_name == ti.target]
+            extended_target_als = [sw.extend_alignment(al, ti.reference_sequence_bytes[ti.target]) for al in als if al.reference_name == ti.target]
 
             if ti.donor is not None:
-                extended_donor_als = [sw.extend_alignment(al, ti.donor_sequence_bytes) for al in als if al.reference_name == ti.donor]
+                extended_donor_als = [sw.extend_alignment(al, ti.reference_sequence_bytes[ti.donor]) for al in als if al.reference_name == ti.donor]
             else:
                 extended_donor_als = []
             
