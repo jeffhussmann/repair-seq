@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 import hits.utilities
 import hits.visualize
 
-from knock_knock.target_info import degenerate_indel_from_string, SNV, SNVs, effectors
+from knock_knock.target_info import degenerate_indel_from_string, SNV, SNVs
 from knock_knock.outcome import *
 
 import repair_seq.visualize
@@ -330,6 +330,7 @@ def plot(outcome_order,
 
         if on_top or not draw_wild_type_on_top:
             draw_sequence(y, source_name, alpha=1)
+
             if guides_to_draw is None:
                 guides_to_draw = [ti.primary_sgRNA]
 
@@ -354,6 +355,7 @@ def plot(outcome_order,
                 draw_rect(source_name, guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, None, color=protospacer_color)
                 draw_rect(source_name, PAM_start, PAM_end, y - wt_height / 2, y + wt_height / 2, None, color=PAM_color)
 
+
             if not on_top:
                 # Draw PAMs. Needs to be updated to support multiple sgRNAs.
                 draw_rect(source_name, window_left - 0.5, min(PAM_start, guide_start), y - wt_height / 2, y + wt_height / 2, block_alpha)
@@ -361,6 +363,26 @@ def plot(outcome_order,
 
         else:
             draw_rect(source_name, window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+
+        if on_top:
+            for feature_name in features_to_draw:
+                feature = ti.features[ti.target, feature_name]
+
+                start = feature.start - 0.5 - offset
+                end = feature.end + 0.5 - offset
+
+                color = feature.attribute['color']
+
+                draw_rect(source_name, start, end, y - wt_height / 2, y + wt_height / 2, 0.8, color)
+                ax.annotate(feature_name,
+                            xy=(np.mean([start, end]), y + wt_height / 2),
+                            xytext=(0, 5),
+                            textcoords='offset points',
+                            color='black',
+                            annotation_clip=False,
+                            ha='center',
+                            va='bottom',
+                           )
 
     def draw_donor(y, HDR_outcome, deletion_outcome, insertion_outcome, source_name, on_top=False):
         ti = target_infos[source_name]
@@ -427,7 +449,7 @@ def plot(outcome_order,
                     y_buffer = 0.7
                     draw_rect(source_name, start - x_buffer, end + x_buffer, y - y_buffer * wt_height, y + y_buffer * wt_height, 0.5, fill=False)
         
-        all_deletions = [(d, 'red', False) for d in HDR_outcome.donor_deletions]
+        all_deletions = [(d, 'red', True) for d in HDR_outcome.donor_deletions]
         if deletion_outcome is not None:
             all_deletions.append((deletion_outcome.deletion, 'black', True))
 
@@ -487,7 +509,10 @@ def plot(outcome_order,
         else:
             background_color = 'black'
             
-        if category == 'deletion' or (category == 'simple indel' and subcategory.startswith('deletion')):
+        if category == 'deletion' or \
+           (category == 'simple indel' and subcategory.startswith('deletion')) or \
+           (category == 'wild type' and subcategory == 'short indel far from cut' and degenerate_indel_from_string(details).kind == 'D'):
+
             deletion = DeletionOutcome.from_string(details).undo_anchor_shift(ti.anchor).deletion
             deletion = ti.expand_degenerate_indel(deletion)
 
@@ -573,7 +598,12 @@ def plot(outcome_order,
             if draw_all_sequence:
                 draw_sequence(y, source_name, xs_to_skip, alpha=sequence_alpha)
 
-        elif category == 'donor' or category == 'donor + deletion' or category == 'donor + insertion':
+        elif category == 'donor' or \
+             category == 'donor + deletion' or \
+             category == 'donor + insertion' or \
+             (category == 'intended edit' and subcategory == 'deletion') or \
+             category == 'edit + indel':
+
             if category == 'donor':
                 HDR_outcome = HDROutcome.from_string(details)
                 deletion_outcome = None
@@ -585,17 +615,38 @@ def plot(outcome_order,
                 deletion_outcome = HDR_plus_deletion_outcome.deletion_outcome
                 insertion_outcome = None
 
+            elif category == 'intended edit' and subcategory == 'deletion':
+                HDR_outcome = HDROutcome.from_string(details).undo_anchor_shift(ti.anchor)
+                deletion_outcome = None
+                insertion_outcome = None
+
             elif category == 'donor + insertion':
                 HDR_plus_insertion_outcome = HDRPlusInsertionOutcome.from_string(details).undo_anchor_shift(ti.anchor)
                 HDR_outcome = HDR_plus_insertion_outcome.HDR_outcome
                 deletion_outcome = None
                 insertion_outcome = HDR_plus_insertion_outcome.insertion_outcome
+
+            elif category == 'edit + indel':
+                if subcategory == 'edit + insertion':
+                    HDR_plus_insertion_outcome = HDRPlusInsertionOutcome.from_string(details).undo_anchor_shift(ti.anchor)
+                    HDR_outcome = HDR_plus_insertion_outcome.HDR_outcome
+                    deletion_outcome = None
+                    insertion_outcome = HDR_plus_insertion_outcome.insertion_outcome
+
+                elif subcategory == 'edit + deletion':
+                    HDR_plus_deletion_outcome = HDRPlusDeletionOutcome.from_string(details).undo_anchor_shift(ti.anchor)
+                    HDR_outcome = HDR_plus_deletion_outcome.HDR_outcome
+                    deletion_outcome = HDR_plus_deletion_outcome.deletion_outcome
+                    insertion_outcome = None
+
+            else:
+                raise ValueError
     
             draw_donor(y, HDR_outcome, deletion_outcome, insertion_outcome, source_name, False)
 
         elif category == 'duplication' and subcategory == 'simple':
             duplication_outcome = DuplicationOutcome.from_string(details)
-            draw_duplication(y, duplication_outcome)
+            draw_duplication(y, duplication_outcome, source_name)
             
         else:
             label = f'{category}, {subcategory}, {details}'
