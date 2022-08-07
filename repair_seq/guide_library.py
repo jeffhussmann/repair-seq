@@ -175,13 +175,22 @@ class GuideLibrary:
     def non_targeting_guide_sets(self):
         non_targeting_guide_sets = {}
 
-        with open(self.fns['non_targeting_guide_sets']) as fh:
-            for i, line in enumerate(fh):
-                guides = line.strip().split(',')
+        if self.fns['non_targeting_guide_sets'].exists():
+            with open(self.fns['non_targeting_guide_sets']) as fh:
+                for i, line in enumerate(fh):
+                    guides = line.strip().split(',')
 
-                set_name = f'non-targeting_set_{i:05d}'
+                    set_name = f'non-targeting_set_{i:05d}'
 
-                non_targeting_guide_sets[set_name] = list(guides)
+                    non_targeting_guide_sets[set_name] = list(guides)
+        else:
+            group_size = 4
+            offset, remainder = divmod(len(self.non_targeting_guides), group_size)
+            assert remainder == 0
+
+            sets = [self.non_targeting_guides[i::offset] for i in range(offset)]
+
+            non_targeting_guide_sets = {f'non-targeting_set_{i:05d}': s for i, s in enumerate(sets)}
 
         return non_targeting_guide_sets
 
