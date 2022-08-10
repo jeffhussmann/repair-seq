@@ -61,7 +61,7 @@ expected_values:
     subcategory: simple
     note: duplication with edit with 1 mismatch
   01:01105:032208:029716_:
-    category: edit + indel
+    category: edit + deletion
     subcategory: edit + deletion
     note: consistent with deletion between nicks that preserves both nicking target,
       followed by intended edit

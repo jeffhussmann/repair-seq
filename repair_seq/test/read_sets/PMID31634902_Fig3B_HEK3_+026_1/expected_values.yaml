@@ -1,0 +1,29 @@
+experiment_type: prime_editing
+target_info: PMID31634902_HEK3
+target_info_kwargs:
+  pegRNAs: HEK3_3b
+expected_values:
+  010287238:0000000010:
+    category: wild type
+    subcategory: clean
+    note: n/a
+  010287238:0000000003:
+    category: intended edit
+    subcategory: SNV
+    note: n/a
+  010287238:0000055494:
+    category: edit + deletion
+    subcategory: edit + deletion
+    note: once miscategorized as unintended annealing
+  010287238:0000000054:
+    category: edit + deletion
+    subcategory: edit + deletion
+    note: deletion removes part of RTT annealing region in target
+  010287238:0000000014:
+    category: edit + deletion
+    subcategory: edit + deletion
+    note: mismatch between edit and deletion
+  010287238:0000000182:
+    category: deletion
+    subcategory: mismatches
+    note: once miscategorized as unintended annealing
