@@ -136,27 +136,32 @@ class Layout(layout.Categorizer):
 
     def __init__(self, alignments, target_info, error_corrected=False, mode=None):
         self.alignments = [al for al in alignments if not al.is_unmapped]
+
         self.target_info = target_info
         
         alignment = alignments[0]
+
         self.query_name = alignment.query_name
+
         self.seq = sam.get_original_seq(alignment)
         if self.seq is None:
             self.seq = ''
 
         self.seq_bytes = self.seq.encode()
-        self.qual = np.array(sam.get_original_qual(alignment))
+
+        # Note: don't try to make this anything but a python array.
+        # pysam will internally try to evaluate it's truth status
+        # and fail.
+        self.qual = sam.get_original_qual(alignment)
 
         self.primary_ref_names = set(self.target_info.reference_sequences)
-
-        self.required_sw = False
 
         self.special_alignment = None
         
         self.relevant_alignments = self.alignments
 
-        # 220104: This should probably be 1 - only makes sense to be >1 for DSBs.
-        # 220203: doing so breaks current extension from intended annealing logic.
+        # 22.01.04: This should probably be 1 - only makes sense to be >1 for DSBs.
+        # 22.02.03: doing so breaks current extension from intended annealing logic.
         self.ins_size_to_split_at = 3
         self.del_size_to_split_at = 2
 
@@ -2178,7 +2183,7 @@ class Layout(layout.Categorizer):
             al = pysam.AlignedSegment(ti.header)
 
             al.query_sequence = self.seq
-            al.query_qualities = sam.get_original_qual(self.alignments[0])
+            al.query_qualities = self.qual
 
             soft_clip_before = query_start
             soft_clip_after = len(self.seq) - 1 - query_end
@@ -2190,8 +2195,10 @@ class Layout(layout.Categorizer):
             ]
 
             if ti.sequencing_direction == '-':
+                # Need to extract query_qualities before overwriting query_sequence.
+                flipped_query_qualities = al.query_qualities[::-1]
                 al.query_sequence = utilities.reverse_complement(al.query_sequence)
-                al.query_qualities = al.query_qualities[::-1]
+                al.query_qualities = flipped_query_qualities
                 al.is_reverse = True
                 al.cigar = al.cigar[::-1]
 
