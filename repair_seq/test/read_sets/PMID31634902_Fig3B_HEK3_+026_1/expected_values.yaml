@@ -14,7 +14,7 @@ expected_values:
   010287238:0000055494:
     category: edit + deletion
     subcategory: edit + deletion
-    note: once miscategorized as unintended annealing
+    note: once miscategorized as unintended rejoining
   010287238:0000000054:
     category: edit + deletion
     subcategory: edit + deletion
@@ -26,4 +26,4 @@ expected_values:
   010287238:0000000182:
     category: deletion
     subcategory: mismatches
-    note: once miscategorized as unintended annealing
+    note: once miscategorized as unintended rejoining

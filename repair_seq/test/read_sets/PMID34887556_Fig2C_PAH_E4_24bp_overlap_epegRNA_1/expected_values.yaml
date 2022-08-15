@@ -12,12 +12,12 @@ expected_values:
     subcategory: partial replacement
     note: has a mismatch in the overlap region
   017171944:0000000028:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: left pegRNA
     note: tests whether a pegRNA extension alignment is incorrectly called when the
       target alignment explains it better
   017171944:0000000056:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: left pegRNA
     note: rejoins close to left nick
   017171944:0000000954:
@@ -25,7 +25,7 @@ expected_values:
     subcategory: simple
     note: was once incorrectly called a pegRNA extension alignment on the right
   017171944:0000000722:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: left pegRNA
     note: target alignment explains better than right pegRNA alignment, but right
       extends slightly farther out

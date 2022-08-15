@@ -12,10 +12,10 @@ expected_values:
     subcategory: deletion
     note: n/a
   010288035:0000000020:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: includes scaffold, no SNV
     note: rejoins near PE3 nick
   010288035:0000002037:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: no scaffold, no SNV
     note: weirdly restores original length

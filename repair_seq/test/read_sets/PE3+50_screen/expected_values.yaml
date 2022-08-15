@@ -6,38 +6,38 @@ expected_values:
     subcategory: clean
     note: wild type, no errors
   01:01101:023547:034507_:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: includes scaffold
     note: unintended rejoining, small amount of scaffold, rejoins with partially duplicated
       HA_RT
   01:01105:012093:004178_:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: includes scaffold
     note: unintended rejoining, medium amount of scaffold, rejoins midway between
       nicks
   01:01105:012192:030968_:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: includes scaffold
     note: unintended rejoining, medium amount of scaffold, with 3 mismatches
   01:01105:012364:004022_:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: includes scaffold
     note: unintended rejoining, medium amount of scaffold, rejoins well past +50 nick
   01:01105:016206:031125_:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: includes scaffold
     note: unintended rejoining, medium amount of scaffold, with mismatches in scaffold
       and target
   01:01102:007401:007639_:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: includes scaffold, no SNV
     note: unintended rejoining, medium amount of scaffold but no intended SNV
   01:01107:012427:010551_:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: no scaffold
     note: unintended rejoining, no scaffold, rejoins with partially duplicated HA_RT
   01:01123:032551:017942_:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: no scaffold
     note: unintended rejoining, no scaffold, rejoins with fully duplicated HA_RT
   01:01101:003667:009283_:

@@ -14,10 +14,10 @@ expected_values:
     subcategory: deletion
     note: n/a
   01:01101:017226:028572:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: right pegRNA
     note: left target extends slightly farther than left pegRNA extension
   01:01101:023201:008704:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: left pegRNA
     note: n/a

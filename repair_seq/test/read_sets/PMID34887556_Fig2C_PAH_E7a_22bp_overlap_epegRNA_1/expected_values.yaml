@@ -4,12 +4,12 @@ target_info_kwargs:
   pegRNAs: PAH_E7.2_34_EvoPreQ1;PAH_E7.5_34_EvoPreQ1
 expected_values:
   017171854:0000000394:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: left pegRNA
     note: tests whether a pegRNA extension alignment is incorrectly called on the
       right when the target alignment explains it better
   017171854:0000000499:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: right pegRNA
     note: tests whether a pegRNA extension alignment is incorrectly called on the
       left when the target alignment explains it better

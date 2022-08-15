@@ -12,23 +12,23 @@ expected_values:
     subcategory: deletion
     note: primer overlaps spacer on right
   017171774:0000000084:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: right pegRNA
     note: pegRNA alignment reaches end of read
   017171774:0000000125:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: left pegRNA
     note: n/a
   017171774:0000000127:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: right pegRNA
     note: rejoins past the opposite nick
   017171774:0000000596:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: both pegRNAs
     note: n/a
   017171774:0000001622:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: both pegRNAs
     note: n/a
   017171774:0000001263:

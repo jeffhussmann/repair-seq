@@ -16,4 +16,4 @@ expected_values:
   01:01101:010280:009502:
     category: duplication
     subcategory: simple
-    note: was once misclassified as unintended annealing
+    note: was once misclassified as unintended rejoining

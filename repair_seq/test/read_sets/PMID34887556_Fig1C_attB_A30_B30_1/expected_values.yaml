@@ -16,10 +16,10 @@ expected_values:
     subcategory: replacement
     note: has UMI at the beginning of the read
   017171720:0000000162:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: left pegRNA
     note: covers whole read, rejoins at right nick
   017171720:0000000072:
-    category: unintended annealing of RT'ed sequence
+    category: unintended rejoining of RT'ed sequence
     subcategory: right pegRNA
     note: covers whole read, rejoins roughly halfway between nicks

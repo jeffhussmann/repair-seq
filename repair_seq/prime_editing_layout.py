@@ -1,3 +1,4 @@
+import array
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -33,15 +34,16 @@ class Layout(layout.Categorizer):
              'insertion + unintended mismatches',
             ),
         ),
-        ('edit + indel',
-            ('edit + deletion',
-             'edit + insertion',
-            ),
-        ),
-        ('edit + duplication',
-            ('simple',
-             'iterated',
-             'complex',
+        ('unintended rejoining of RT\'ed sequence',
+            ('includes scaffold',
+             'includes scaffold, no SNV',
+             'includes scaffold, with deletion',
+             'includes scaffold, no SNV, with deletion',
+             'no scaffold',
+             'no scaffold, no SNV',
+             'no scaffold, with deletion',
+             'no scaffold, no SNV, with deletion',
+             'doesn\'t include insertion',
             ),
         ),
         ('deletion',
@@ -50,8 +52,20 @@ class Layout(layout.Categorizer):
              'multiple',
             ),
         ),
-        ('deletion + adjacent mismatch',
-            ('deletion + adjacent mismatch',
+        ('edit + deletion',
+            ('edit + deletion',
+            ),
+        ),
+        ('duplication',
+            ('simple',
+             'iterated',
+             'complex',
+            ),
+        ),
+        ('edit + duplication',
+            ('simple',
+             'iterated',
+             'complex',
             ),
         ),
         ('deletion + duplication',
@@ -65,26 +79,8 @@ class Layout(layout.Categorizer):
              'mismatches',
             ),
         ),
-        ('duplication',
-            ('simple',
-             'iterated',
-             'complex',
-            ),
-        ),
         ('extension from intended annealing',
             ('n/a',
-            ),
-        ),
-        ('unintended annealing of RT\'ed sequence',
-            ('includes scaffold',
-             'includes scaffold, no SNV',
-             'includes scaffold, with deletion',
-             'includes scaffold, no SNV, with deletion',
-             'no scaffold',
-             'no scaffold, no SNV',
-             'no scaffold, with deletion',
-             'no scaffold, no SNV, with deletion',
-             'doesn\'t include insertion',
             ),
         ),
         ('genomic insertion',
@@ -97,10 +93,6 @@ class Layout(layout.Categorizer):
         ('truncation',
             ('clean',
              'mismatches',
-            ),
-        ),
-        ('phiX',
-            ('phiX',
             ),
         ),
         ('uncategorized',
@@ -124,7 +116,8 @@ class Layout(layout.Categorizer):
              'bosTau7',
              'e_coli',
              'primer dimer',
-             'unknown',
+             'short nknown',
+             'plasmid',
             ),
         ),
         ('malformed layout',
@@ -222,6 +215,82 @@ class Layout(layout.Categorizer):
         return pegRNA_alignments
 
     @memoized_property
+    def primary_alignments(self):
+        p_als = [
+            al for al in self.alignments
+            if al.reference_name in self.primary_ref_names
+        ]
+        
+        return p_als
+
+    def pegRNA_alignment_extends_target_alignment(self, pegRNA_al, target_al):
+        ti = self.target_info
+
+        pegRNA_name = pegRNA_al.reference_name
+        pegRNA_seq = ti.reference_sequences[pegRNA_name]
+        PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
+        side = ti.pegRNA_name_to_side_of_read[pegRNA_name]
+
+        after_first_difference_feature = ti.features[pegRNA_name, f'after_first_difference_{pegRNA_name}']
+
+        if self.share_feature(target_al, PBS_name, pegRNA_al, 'PBS'):
+            # If the target edge alignment extends past the candidate pegRNA extension alignment,
+            # ensure that the RTT part of the candidate pegRNA extension alignment isn't explained
+            # better by the target edge alignment.
+            target_interval = interval.get_covered(target_al)
+            pegRNA_interval = interval.get_covered(pegRNA_al)
+
+            if side == 'right':
+                # Include +2 wiggle room here in case pegRNA alignments extends slightly farther by chance.
+                if target_interval.start <= pegRNA_interval.start + 2:
+                    # Find the farthest right left point from the target al to the pegRNA al.
+                    switch_results = sam.find_best_query_switch_after(target_al, pegRNA_al, ti.target_sequence, pegRNA_seq, min)
+                    cropped_pegRNA_extension_al = sam.crop_al_to_query_int(pegRNA_al, switch_results['switch_after'] + 1, len(self.seq))
+                else:
+                    cropped_pegRNA_extension_al = pegRNA_al
+
+            else:
+                if target_interval.end >= pegRNA_interval.end:
+                    # Find the farthest left switch point from the pegRNA al to the target al.
+                    switch_results = sam.find_best_query_switch_after(pegRNA_al, target_al, pegRNA_seq, ti.target_sequence, max)
+                    cropped_pegRNA_extension_al = sam.crop_al_to_query_int(pegRNA_al, 0, switch_results['switch_after'])
+                else:
+                    cropped_pegRNA_extension_al = pegRNA_al
+
+            # If the cropped pegRNA alignment doesn't extend past the point where
+            # pegRNA and target diverge, this is not an extension alignment that
+            # best explains this part of the read.
+            past_first_difference_length = sam.feature_overlap_length(cropped_pegRNA_extension_al, after_first_difference_feature)
+
+            # If the target alignment doesn't explain query outside of the pegRNA alignments,
+            # this is not an extension alignment.
+
+            if past_first_difference_length > 0 and target_interval not in pegRNA_interval:
+                status = 'definite'
+            else:
+                status = 'ambiguous'
+        else:
+            status = None
+            cropped_pegRNA_extension_al = None
+
+        return status, cropped_pegRNA_extension_al
+
+    def find_target_alignment_extending_pegRNA_alignment(self, pegRNA_al):
+        manually_extended_al = self.extend_target_PBS_alignment(pegRNA_al)
+        target_als = self.split_target_alignments + self.target_edge_alignments_list + [manually_extended_al]
+        target_als = sam.make_noncontained(target_als)
+
+        relevant_target_al = None
+
+        for target_al in sorted(target_als, key=lambda al: al.query_alignment_length, reverse=True):
+            status, cropped_pegRNA_extension_al = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_al)
+            if status == 'definite':
+                relevant_target_al = target_al
+                break
+
+        return relevant_target_al
+
+    @memoized_property
     def possible_pegRNA_extension_als(self):
         ''' Identify pegRNA alignments that extend into the RTT and explain
         the observed sequence better than alignment to the target does.
@@ -229,96 +298,103 @@ class Layout(layout.Categorizer):
         ti = self.target_info
 
         extension_als = {
-            'definite': {},
-            'ambiguous': {},
-            'multiple': {},
+            'edge_definite': {},
+            'edge_ambiguous': {},
+            'internal_definite': {},
+            'internal_ambiguous': {},
         }
 
+        target_als = self.split_target_alignments + self.target_edge_alignments_list
+        target_als = sam.make_nonredundant(target_als)
+
         for side, pegRNA_name in ti.pegRNA_names_by_side_of_read.items():
-            pegRNA_seq = ti.reference_sequences[pegRNA_name]
-            PBS_name = ti.PBS_names_by_side_of_read[side]
-
-            after_first_difference_feature = ti.features[pegRNA_name, f'after_first_difference_{pegRNA_name}']
-
             # Note: can't use parsimonious here.
             pegRNA_als = self.pegRNA_alignments[pegRNA_name]
-            target_al = self.target_edge_alignments[side]
 
             candidate_als = {
-                'definite': [],
-                'ambiguous': [],
+                'edge_definite': [],
+                'edge_ambiguous': [],
+                'internal_definite': [],
+                'internal_ambiguous': [],
             }
-            for target_al in self.parsimonious_target_alignments:
+            for target_al in target_als:
                 for pegRNA_al in pegRNA_als:
-                    if self.share_feature(target_al, PBS_name, pegRNA_al, 'PBS'):
-                        # If the target edge alignment extends past the candidate pegRNA extension alignment,
-                        # ensure that the RTT part of the candidate pegRNA extension alignment isn't explained
-                        # better by the target edge alignment.
-                        if side == 'right':
-                            target_al_start = interval.get_covered(target_al).start
-                            pegRNA_al_start = interval.get_covered(pegRNA_al).start
+                    definite_status, cropped_pegRNA_extension_al = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_al)
 
-                            # Include +2 wiggle room here in case pegRNA alignments extends slightly farther by chance.
-                            if target_al_start <= pegRNA_al_start + 2:
-                                # Find the farthest right left point from the target al to the pegRNA al.
-                                switch_results = sam.find_best_query_switch_after(target_al, pegRNA_al, ti.target_sequence, pegRNA_seq, min)
-                                cropped_pegRNA_extension_al = sam.crop_al_to_query_int(pegRNA_al, switch_results['switch_after'] + 1, len(self.seq))
-                            else:
-                                cropped_pegRNA_extension_al = pegRNA_al
-
+                    if definite_status is not None:
+                        if target_al == self.target_edge_alignments[side]:
+                            edge_status = 'edge'
                         else:
-                            target_al_end = interval.get_covered(target_al).end
-                            pegRNA_al_end = interval.get_covered(pegRNA_al).end
+                            edge_status = 'internal'
 
-                            if target_al_end >= pegRNA_al_end:
-                                # Find the farthest left switch point from the pegRNA al to the target al.
-                                switch_results = sam.find_best_query_switch_after(pegRNA_al, target_al, pegRNA_seq, ti.target_sequence, max)
-                                cropped_pegRNA_extension_al = sam.crop_al_to_query_int(pegRNA_al, 0, switch_results['switch_after'])
-                            else:
-                                cropped_pegRNA_extension_al = pegRNA_al
+                        key = f'{edge_status}_{definite_status}'
+                        
+                        candidate_als[key].append(cropped_pegRNA_extension_al)
 
-                        # If the cropped pegRNA alignment doesn't extend past the point where
-                        # pegRNA and target diverge, this is not an extension alignment that
-                        # best explains this part of the read.
-                        past_first_difference_length = sam.feature_overlap_length(cropped_pegRNA_extension_al, after_first_difference_feature)
-                        if past_first_difference_length > 0:
-                            candidate_als['definite'].append(cropped_pegRNA_extension_al)
-                        else:
-                            candidate_als['ambiguous'].append(cropped_pegRNA_extension_al)
+            for pegRNA_al in pegRNA_als:
+                # If a reasonably long pegRNA alignment reaches the end of the read before switching back to target,
+                # parsimoniously assume that it eventually does so.
+                covered = interval.get_covered(pegRNA_al)
 
-                    else:
-                        # If a reasonably long pegRNA alignment reaches the end of the read before switching back to target,
-                        # parsimoniously assume that it eventually does so.
-                        covered = interval.get_covered(pegRNA_al)
-                        if side == 'right' and covered.end == self.whole_read.end and len(covered) > 20:
-                            candidate_als['definite'].append(pegRNA_al)
-                        elif side == 'left' and covered.start == 0 and len(covered) > 20:
-                            candidate_als['definite'].append(pegRNA_al)
+                reaches_right = (side == 'right' and covered.end == self.whole_read.end and len(covered) > 20)
+                reaches_left = (side == 'left' and covered.start == 0 and len(covered) > 20)
+
+                # To handle the edge case in which scaffold sequence exists in the target nearby (e.g. in
+                # some repair-seq settings), exclude alignments that are entirely covered by
+                # a single target alignment.
+                within_target_cover = any(covered in interval.get_covered(al) for al in target_als)
+
+                if (reaches_right or reaches_left) and not within_target_cover:
+                    # 22.08.08: what status should these get?
+                    key = 'edge_definite'
+
+                    candidate_als[key].append(pegRNA_al)
 
             for status, als in candidate_als.items():
                 als = sam.make_nonredundant(als)
-                if len(als) == 1:
-                    extension_als[status][side] = als[0]
-                elif len(als) > 1 and status == 'definite':
-                    extension_als['definite'][side] = None
-                    extension_als['multiple'][side] = als
-                else:
-                    extension_als[status][side] = None
+                extension_als[status][side] = als
 
         return extension_als
 
     @memoized_property
     def pegRNA_extension_als_list(self):
         ''' For plotting/adding to relevant_als '''
-        extension_als = list(self.possible_pegRNA_extension_als['definite'].values())
-        extension_als.extend(self.possible_pegRNA_extension_als['ambiguous'].values())
-        for side, als in self.possible_pegRNA_extension_als['multiple'].items():
+        extension_als = []
+
+        for side, als in self.possible_pegRNA_extension_als['edge_definite'].items():
             extension_als.extend(als)
+
+        extension_als = sam.make_nonredundant(extension_als)
+
+        return extension_als
+
+    @memoized_property
+    def possible_pegRNA_extension_als_list(self):
+        ''' For plotting/adding to relevant_als '''
+        extension_als = []
+
+        for key, als_dict in self.possible_pegRNA_extension_als.items():
+            for side, als in als_dict.items():
+                extension_als.extend(als)
+
+        extension_als = sam.make_nonredundant(extension_als)
+
         return extension_als
 
     @memoized_property
     def pegRNA_extension_als(self):
-        return self.possible_pegRNA_extension_als['definite']
+        ''' Unique edge extension als. '''
+
+        extension_als = {
+            'left': None,
+            'right': None,
+        }
+
+        for side, als in self.possible_pegRNA_extension_als['edge_definite'].items():
+            if len(als) == 1:
+                extension_als[side] = als[0]
+
+        return extension_als
 
     @memoized_property
     def ambiguous_pegRNA_extension_als(self):
@@ -418,23 +494,6 @@ class Layout(layout.Categorizer):
 
         return final_als
     
-    @memoized_property
-    def phiX_alignments(self):
-        als = [
-            al for al in self.alignments
-            if al.reference_name == 'phiX'
-        ]
-        
-        return als
-
-    def covers_whole_read(self, al):
-        if al is None:
-            return False
-
-        covered = interval.get_covered(al)
-
-        return len(self.whole_read - covered) == 0
-
     @memoized_property
     def parsimonious_target_alignments(self):
         ti = self.target_info
@@ -602,11 +661,12 @@ class Layout(layout.Categorizer):
 
             covered = interval.get_covered(al)
 
-            if covered.start <= 5 or self.overlaps_primer(al, 'left'):
-                edge_alignments['left'].append(al)
-            
-            if covered.end >= len(self.seq) - 1 - 5 or self.overlaps_primer(al, 'right'):
-                edge_alignments['right'].append(al)
+            if covered.total_length >= 10:
+                if covered.start <= 5 or self.overlaps_primer(al, 'left'):
+                    edge_alignments['left'].append(al)
+                
+                if covered.end >= len(self.seq) - 1 - 5 or self.overlaps_primer(al, 'right'):
+                    edge_alignments['right'].append(al)
 
         for edge in ['left', 'right']:
             if len(edge_alignments[edge]) == 0:
@@ -982,6 +1042,12 @@ class Layout(layout.Categorizer):
         return self.whole_read - covered
 
     @memoized_property
+    def not_covered_by_primary_alignments(self):
+        relevant_als = self.primary_alignments
+        covered = interval.get_disjoint_covered(relevant_als)
+        return self.whole_read - covered
+
+    @memoized_property
     def perfect_gap_als(self):
         all_gap_als = []
 
@@ -998,15 +1064,11 @@ class Layout(layout.Categorizer):
         
         for al in self.supplemental_alignments:
             covered = interval.get_covered(al)
-            novel_covered = covered & self.not_covered_by_target_or_pegRNA
+            novel_covered = covered & self.not_covered_by_target_or_pegRNA & self.not_covered_by_primary_alignments
             if novel_covered:
                 nonredundant.append(al)
 
         return nonredundant
-
-    @memoized_property
-    def original_header(self):
-        return self.alignments[0].header
 
     @memoized_property
     def read(self):
@@ -1071,9 +1133,7 @@ class Layout(layout.Categorizer):
         primer_alignments = {}
         for side in ['left', 'right']:
             al = self.target_edge_alignments[side]
-            primer_interval = interval.Interval.from_feature(primers[side])
-            al_cropped_to_primer = sam.crop_al_to_ref_int(al, primer_interval.start, primer_interval.end)
-            primer_alignments[side] = al_cropped_to_primer
+            primer_alignments[side] = sam.crop_al_to_feature(al, primers[side])
 
         return primer_alignments
 
@@ -1082,7 +1142,11 @@ class Layout(layout.Categorizer):
         return interval.get_disjoint_covered(self.primer_alignments.values())
 
     @memoized_property
-    def not_covered_between_primers(self):
+    def not_covered_by_primers(self):
+        ''' More complicated than function name suggests. If there are primer
+        alignments, returns the interval between but not covered by them, ignoring
+        region outside of them, which is likely to be the result of incorrect trimming.
+        '''
         if self.covered_by_primers.is_empty:
             return self.whole_read
         elif self.primer_alignments['left'] and not self.primer_alignments['right']:
@@ -1092,31 +1156,94 @@ class Layout(layout.Categorizer):
     
     @memoized_property
     def non_primer_nts(self):
-        if any(al is None for al in self.primer_alignments.values()):
-            return len(self.seq)
-        else:
-            return self.not_covered_between_primers.total_length
+        return self.not_covered_by_primers.total_length
 
     @memoized_property
     def nonspecific_amplification(self):
-        need_to_cover = self.not_covered_between_primers
+        ''' Nonspecific amplification if any of following apply:
+         - read is empty after adapter trimming
+         - read is short after adapter trimming, in which case inferrence of
+            nonspecific amplification per se is less clear but
+            sequence is unlikely to be informative of any other process
+         - read starts with an alignment to the expected primer, but
+            this alignment does not extend substantially past the primer.
+            Rest of the read is covered by a single alignment to some other
+            source that either reaches the end of the read, or reaches an
+            an alignment to the other primer (that does not extend 
+            substantially past the primer.
+        '''
+        results = {}
 
-        # Try to avoid false positives
-        if need_to_cover.total_length <= 20:
-            return []
+        valid = False
 
-        covering_als = []
-        for al in self.supplemental_alignments:
-            covered = interval.get_covered(al)
-            if len(need_to_cover - covered) == 0:
-                covering_als.append(al)
-                
-        if len(covering_als) == 0:
-            covering_als = None
+        if len(self.seq) <= self.target_info.combined_primer_length + 10:
+            valid = True
+            results['covering_als'] = None
+
+        elif self.non_primer_nts <= 10:
+            valid = True
+            results['covering_als'] = None
+
         else:
-            covering_als = interval.make_parsimonious(covering_als)
+            target_nts_past_primer = {}
+            for side in ['left', 'right']:
+                target_past_primer = interval.get_covered(self.target_edge_alignments[side]) - interval.get_covered(self.primer_alignments[side])
+                target_nts_past_primer[side] = target_past_primer.total_length 
 
-        return covering_als
+            if self.primer_alignments['left'] is not None:
+                if target_nts_past_primer['left'] <= 10 and target_nts_past_primer['right'] <= 10:
+                    covering_als = []
+
+                    for al in self.supplemental_alignments + self.split_pegRNA_alignments + self.extra_alignments:
+                        covered_by_al = interval.get_covered(al)
+                        if len(self.not_covered_by_primers - covered_by_al) == 0:
+                            covering_als.append(al)
+                
+                    if len(covering_als) > 0:
+                        valid = True
+                        results['covering_als'] = covering_als
+
+        if not valid:
+            results = None
+
+        return results
+
+    def register_nonspecific_amplification(self):
+        results = self.nonspecific_amplification
+
+        self.category = 'nonspecific amplification'
+        self.details = 'n/a'
+
+        if results['covering_als'] is None:
+            if self.non_primer_nts <= 2:
+                self.subcategory = 'primer dimer'
+                self.relevant_alignments = self.target_edge_alignments_list
+            else:
+                self.subcategory = 'short unknown'
+                self.relevant_alignments = sam.make_noncontained(self.uncategorized_relevant_alignments)
+        else:
+            if self.target_info.pegRNA_names is None:
+                pegRNA_names = []
+            else:
+                pegRNA_names = self.target_info.pegRNA_names
+
+            if any(al.reference_name in pegRNA_names for al in results['covering_als']):
+                # amplification off of pegRNA-expressing plasmid
+                self.subcategory = 'plasmid'
+
+            elif any(al in self.extra_alignments for al in results['covering_als']):
+                # amplification off of other plasmid
+                self.subcategory = 'plasmid'
+            
+            elif any(al.reference_name not in self.primary_ref_names for al in results['covering_als']):
+                organisms = {self.target_info.remove_organism_from_alignment(al)[0] for al in results['covering_als']}
+                organism = sorted(organisms)[0]
+                self.subcategory = organism
+
+            else:
+                raise ValueError
+
+            self.relevant_alignments = self.target_edge_alignments_list + results['covering_als']
 
     def register_genomic_insertion(self):
         details = self.genomic_insertion
@@ -1233,7 +1360,7 @@ class Layout(layout.Categorizer):
                 self.category = 'intended edit'
                 self.subcategory = 'insertion'
             else:
-                self.category = 'edit + indel'
+                self.category = 'edit + deletion'
                 self.subcategory = 'edit + deletion'
 
                 HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [])
@@ -1247,7 +1374,7 @@ class Layout(layout.Categorizer):
             self.subcategory = 'n/a'
 
         else:
-            self.category = 'unintended annealing of RT\'ed sequence'
+            self.category = 'unintended rejoining of RT\'ed sequence'
             if details['shared_HAs'] == {('left', 'right')}:
                 self.subcategory = 'doesn\'t include insertion'
             else:
@@ -1549,10 +1676,10 @@ class Layout(layout.Categorizer):
             if distance_from_end > 0 and shared_HAs is not None and PAM_distal_paired_HA not in shared_HAs and insertion_skipping_paired_HA not in shared_HAs:
                 failures.append('doesn\'t share relevant HA')
 
-        if gap_before_length > 5:
+        if gap_before_length > 0:
             failures.append(f'gap_before_length = {gap_before_length}')
 
-        if gap_after_length > 5:
+        if gap_after_length > 0:
             failures.append(f'gap_after_length = {gap_after_length}')
 
         max_allowable_edit_distance = 5
@@ -1614,22 +1741,14 @@ class Layout(layout.Categorizer):
     def categorize(self):
         self.outcome = None
 
-        if len(self.seq) <= self.target_info.combined_primer_length + 10:
-            self.category = 'nonspecific amplification'
-            
-            if self.non_primer_nts <= 2:
-                self.subcategory = 'primer dimer'
-            else:
-                self.subcategory = 'unknown'
-
-            self.details = 'n/a'
-            self.relevant_alignments = self.uncategorized_relevant_alignments
-
-        elif self.no_alignments_detected:
+        if self.no_alignments_detected:
             self.category = 'malformed layout'
             self.subcategory = 'no alignments detected'
             self.details = 'n/a'
             self.outcome = None
+
+        elif self.nonspecific_amplification:
+            self.register_nonspecific_amplification()
 
         elif self.single_read_covering_target_alignment:
             target_alignment = self.single_read_covering_target_alignment
@@ -1712,7 +1831,7 @@ class Layout(layout.Categorizer):
                     self.outcome = HDROutcome(self.pegRNA_SNV_string, [indel])
                     self.details = str(self.outcome)
 
-                    self.relevant_alignments = [target_alignment] + self.pegRNA_extension_als_list
+                    self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
 
                 else: # one indel, not a pegRNA deletion
                     if self.has_pegRNA_SNV:
@@ -1720,22 +1839,13 @@ class Layout(layout.Categorizer):
                             # If the deletion overlaps with HA_RT on the target, consider this an unintended pegRNA integration.                            
                             #if self.deletion_overlaps_HA_RT(indel) and self.pegRNA_insertion is not None:
                             #    self.register_pegRNA_insertion()
-                            self.category = 'edit + indel'
+                            self.category = 'edit + deletion'
                             self.subcategory = 'edit + deletion'
                             HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [])
                             deletion_outcome = DeletionOutcome(indel)
                             self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
                             self.details = str(self.outcome)
-                            self.relevant_alignments = [target_alignment] + self.pegRNA_extension_als_list
-
-                        elif indel.kind == 'I' and indel.length == 1:
-                            self.category = 'edit + indel'
-                            self.subcategory = 'edit + insertion'
-                            HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [])
-                            insertion_outcome = InsertionOutcome(indel)
-                            self.outcome = HDRPlusInsertionOutcome(HDR_outcome, insertion_outcome)
-                            self.details = str(self.outcome)
-                            self.relevant_alignments = [target_alignment] + self.pegRNA_extension_als_list
+                            self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
 
                         else:
                             self.category = 'uncategorized'
@@ -1750,16 +1860,10 @@ class Layout(layout.Categorizer):
                             self.subcategory = 'clean'
 
                         if indel.kind == 'D':
-                            if self.non_primer_nts <= 10:
-                                self.category = 'nonspecific amplification'
-                                self.subcategory = 'primer dimer'
-                                self.details = 'n/a'
-                                self.relevant_alignments = self.uncategorized_relevant_alignments
-                            else:
-                                self.category = 'deletion'
-                                self.outcome = DeletionOutcome(indel)
-                                self.details = str(self.outcome)
-                                self.relevant_alignments = [target_alignment]
+                            self.category = 'deletion'
+                            self.outcome = DeletionOutcome(indel)
+                            self.details = str(self.outcome)
+                            self.relevant_alignments = [target_alignment]
 
                         elif indel.kind == 'I':
                             self.category = 'insertion'
@@ -1768,29 +1872,24 @@ class Layout(layout.Categorizer):
                             self.relevant_alignments = [target_alignment]
 
             else: # more than one indel
-                if self.non_primer_nts <= 50:
-                    self.category = 'nonspecific amplification'
-                    self.subcategory = 'unknown'
-                    self.details = 'n/a'
-                    self.relevant_alignments = self.uncategorized_relevant_alignments
-
-                elif len(self.indels) == 2:
+                if len(self.indels) == 2:
                     indels = [indel for indel, near_cut in self.indels]
                     if self.target_info.pegRNA_intended_deletion in indels:
-                        self.category = 'edit + indel'
+                        self.category = 'edit + deletion'
                         HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [self.target_info.pegRNA_intended_deletion])
                         indel = [indel for indel in indels if indel != self.target_info.pegRNA_intended_deletion][0]
                         if indel.kind  == 'D':
                             self.subcategory = 'edit + deletion'
                             deletion_outcome = DeletionOutcome(indel)
                             self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
-                        elif indel.kind == 'I':
-                            self.subcategory = 'edit + insertion'
-                            insertion_outcome = InsertionOutcome(indel)
-                            self.outcome = HDRPlusInsertionOutcome(HDR_outcome, insertion_outcome)
+                            self.details = str(self.outcome)
+                            self.relevant_alignments = self.parsimonious_target_alignments + self.pegRNA_alignments
 
-                        self.details = str(self.outcome)
-                        self.relevant_alignments = self.parsimonious_target_alignments + self.pegRNA_alignments
+                        else:
+                            self.category = 'uncategorized'
+                            self.subcategory = 'uncategorized'
+                            self.details = 'n/a'
+                            self.relevant_alignments = self.uncategorized_relevant_alignments
 
                     elif len([indel for indel in interesting_indels if indel.kind == 'D']) == 2:
                         self.category = 'deletion'
@@ -1821,7 +1920,7 @@ class Layout(layout.Categorizer):
 
             self.subcategory = subcategory
             self.details = str(self.outcome)
-            self.relevant_alignments = self.pegRNA_extension_als_list + merged_als
+            self.relevant_alignments = self.possible_pegRNA_extension_als_list + merged_als
 
         elif self.pegRNA_insertion is not None:
             self.register_pegRNA_insertion()
@@ -1838,7 +1937,7 @@ class Layout(layout.Categorizer):
 
                 self.subcategory = subcategory
                 self.details = str(self.outcome)
-                self.relevant_alignments = self.pegRNA_extension_als_list + merged_als
+                self.relevant_alignments = self.possible_pegRNA_extension_als_list + merged_als
 
             elif len(indels) == 1 and indels[0].kind == 'D':
                 indel = indels[0]
@@ -1852,7 +1951,7 @@ class Layout(layout.Categorizer):
                 self.outcome = DeletionPlusDuplicationOutcome(deletion_outcome, duplication_outcome)
                 self.subcategory = subcategory
                 self.details = str(self.outcome)
-                self.relevant_alignments = self.pegRNA_extension_als_list + merged_als
+                self.relevant_alignments = self.possible_pegRNA_extension_als_list + merged_als
 
             else:
                 self.category = 'uncategorized'
@@ -1868,12 +1967,6 @@ class Layout(layout.Categorizer):
 
         elif self.genomic_insertion is not None:
             self.register_genomic_insertion()
-
-        elif self.non_primer_nts <= 50:
-            self.category = 'nonspecific amplification'
-            self.subcategory = 'unknown'
-            self.details = 'n/a'
-            self.relevant_alignments = self.uncategorized_relevant_alignments
 
         else:
             num_Ns = Counter(self.seq)['N']
@@ -2160,7 +2253,7 @@ class Layout(layout.Categorizer):
 
         pegRNA_PBS = ti.features[pegRNA_name, 'PBS']
 
-        pegRNA_PBS_al = sam.crop_al_to_ref_int(pegRNA_al, pegRNA_PBS.start, pegRNA_PBS.end)
+        pegRNA_PBS_al = sam.crop_al_to_feature(pegRNA_al, pegRNA_PBS)
 
         if pegRNA_PBS_al is None or pegRNA_PBS_al.is_unmapped or sam.contains_indel(pegRNA_PBS_al):
             extended_al = None
@@ -2223,9 +2316,53 @@ class Layout(layout.Categorizer):
 
         return max_length
 
+    def is_pegRNA_protospacer_alignment(self, al):
+        ''' Returns True if al aligns almost entirely to a protospacer region of a pegRNA
+        typically for the purpose of deciding whether to plot it.
+        '''
+        ti = self.target_info
+        
+        if ti.pegRNA_names is None:
+            return False
+        
+        if al.reference_name not in ti.pegRNA_names:
+            return False
+        
+        PS_feature = ti.features[al.reference_name, 'protospacer']
+        outside_protospacer = sam.crop_al_to_ref_int(al, PS_feature.end + 1, np.inf)
+
+        return (outside_protospacer is None or outside_protospacer.query_alignment_length <= 3)
+
     @memoized_property
     def uncategorized_relevant_alignments(self):
-        return self.gap_covering_alignments + interval.make_parsimonious(self.nonredundant_supplemental_alignments + self.extra_alignments)
+        als = self.gap_covering_alignments + interval.make_parsimonious(self.nonredundant_supplemental_alignments + self.extra_alignments)
+        als = [al for al in als if not self.is_pegRNA_protospacer_alignment(al)]
+
+        if self.target_info.pegRNA_names is None:
+            pegRNA_names = []
+        else:
+            pegRNA_names = self.target_info.pegRNA_names
+
+        pegRNA_als = [al for al in als if al.reference_name in pegRNA_names]
+        target_als = [al for al in als if al.reference_name == self.target_info.target]
+        other_als = [al for al in als if al.reference_name not in pegRNA_names + [self.target_info.target]]
+
+        pegRNA_als = sam.make_noncontained(pegRNA_als)
+
+        for al in pegRNA_als:
+            # If it is already an extension al, the corresponding target al must already exist.
+            if al not in self.pegRNA_extension_als_list:
+                extended_al = self.extend_target_PBS_alignment(al)
+                if extended_al is not None:
+                    target_als.append(extended_al)
+
+        target_als = sam.make_noncontained(target_als)
+
+        als = pegRNA_als + target_als + other_als
+
+        als = sam.make_noncontained(als, max_length=10)
+
+        return als
 
     @property
     def inferred_amplicon_length(self):
@@ -2243,6 +2380,8 @@ class Layout(layout.Categorizer):
         if self.seq  == '':
             return 0
         elif (self.whole_read - self.covered_by_primers).total_length == 0:
+            return len(self.seq)
+        elif len(self.seq) <= 50:
             return len(self.seq)
 
         left_al = self.target_edge_alignments['left']
