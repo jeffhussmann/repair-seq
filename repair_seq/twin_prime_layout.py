@@ -25,17 +25,21 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             ),
         ),
         ('unintended rejoining of RT\'ed sequence',
-            ('left pegRNA',
-             'right pegRNA',
-             'both pegRNAs',
+            ('left RT\'ed, right not seen',
+             'left RT\'ed, right not RT\'ed',
+             'left RT\'ed, right RT\'ed',
+             'left not seen, right RT\'ed',
+             'left not RT\'ed, right RT\'ed',
             ),
         ),
-        ('unintended overlap-sharing RT\'ed sequence',
-            ('paired on left',
-             'paired on right',
-             'paired on both',
-             'complex',
-             'multiple',
+        ('unintended rejoining of overlap-extended sequence',
+            ('left not seen, right RT\'ed + overlap-extended',
+             'left not RT\'ed, right RT\'ed + overlap-extended',
+             'left RT\'ed, right RT\'ed + overlap-extended',
+             'left RT\'ed + overlap-extended, right not seen',
+             'left RT\'ed + overlap-extended, right not RT\'ed',
+             'left RT\'ed + overlap-extended, right RT\'ed',
+             'left RT\'ed + overlap-extended, right RT\'ed + overlap-extended',
             ),
         ),
         ('flipped pegRNA incorporation',
@@ -85,6 +89,10 @@ class Layout(repair_seq.prime_editing_layout.Layout):
              'plasmid',
             ),
         ),
+        ('scaffold chimera',
+            ('scaffold chimera',
+            ),
+        ),
     ]
 
     def __init__(self, *args, **kwargs):
@@ -110,35 +118,122 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         return als
 
-    @memoized_property
-    def pegRNA_alignment_pairs_with_shared_overlap(self):
-        ti = self.target_info
-        pairs = []
+    def pegRNA_alignment_extends_pegRNA_alignment(self, first_pegRNA_al, second_pegRNA_al):
+        if first_pegRNA_al is None or second_pegRNA_al is None:
+            return None
 
-        pegRNA_seqs = {side: ti.reference_sequences[ti.pegRNA_names_by_side_of_read[side]] for side in ['left', 'right']}
+        if first_pegRNA_al.reference_name == second_pegRNA_al.reference_name:
+            return None
+
+        if self.target_info.pegRNA_name_to_side_of_read[first_pegRNA_al.reference_name] == 'left':
+            left_al, right_al = first_pegRNA_al, second_pegRNA_al
+            right_al = second_pegRNA_al
+        else:
+            left_al, right_al = second_pegRNA_al, first_pegRNA_al
+
+        extension_results = self.are_mutually_extending_from_shared_feature(left_al, 'overlap', right_al, 'overlap')
+        if extension_results:
+            status = 'definite'
+        else:
+            status = None
+
+        return status
+
+    def generate_extended_pegRNA_overlap_alignment(self, pegRNA_al_to_extend):
+        if pegRNA_al_to_extend is None:
+            return None
+
+        other_pegRNA_name = [name for name in self.target_info.pegRNA_names if name != pegRNA_al_to_extend.reference_name][0]
+        return self.extend_alignment_from_shared_feature(pegRNA_al_to_extend, 'overlap', other_pegRNA_name, 'overlap')
+
+    def find_pegRNA_alignment_extending_from_overlap(self, pegRNA_al_to_extend):
+        if pegRNA_al_to_extend is None:
+            return None
+
+        # Prime-del strategies don't have a natural overlap.
+        if (pegRNA_al_to_extend.reference_name, 'overlap') not in self.target_info.features:
+            return None
+
+        other_pegRNA_name = [name for name in self.target_info.pegRNA_names if name != pegRNA_al_to_extend.reference_name][0]
+        candidate_als = self.pegRNA_alignments[other_pegRNA_name] 
+
+        manually_extended_al = self.generate_extended_pegRNA_overlap_alignment(pegRNA_al_to_extend)
+        if manually_extended_al is not None:
+            candidate_als.append(manually_extended_al)
         
-        for left_al in self.pegRNA_alignments_by_side_of_read['left']:
-            for right_al in self.pegRNA_alignments_by_side_of_read['right']:
-                if self.share_feature(left_al, 'overlap', right_al, 'overlap'):
-                    # Make sure that each alignment is contributing something
-                    # outside of the overlapping region.
-                    switch_results = sam.find_best_query_switch_after(left_al,
-                                                                      right_al,
-                                                                      pegRNA_seqs['left'],
-                                                                      pegRNA_seqs['right'],
-                                                                      min,
-                                                                     )
-                    cropped_left_al = sam.crop_al_to_query_int(left_al, 0, min(switch_results['best_switch_points']))
-                    cropped_right_al = sam.crop_al_to_query_int(right_al, max(switch_results['best_switch_points']) + 1, len(self.seq))
+        relevant_pegRNA_al = None
+        
+        for candidate_al in sorted(candidate_als, key=lambda al: al.query_length, reverse=True):
+            status = self.pegRNA_alignment_extends_pegRNA_alignment(pegRNA_al_to_extend, candidate_al)
+            if status == 'definite':
+                relevant_pegRNA_al = candidate_al
+                break
+                
+        return relevant_pegRNA_al
 
-                    if interval.get_covered(cropped_left_al).total_length > 0 and interval.get_covered(cropped_right_al).total_length > 0:
-                        pairs.append({'left': left_al, 'right': right_al})
+    def characterize_extension_chain_on_side(self, side):
+        als = []
+    
+        target_edge_al = self.target_edge_alignments[side]
+        
+        if target_edge_al is None:
+            description = 'no target'
+        else:
+            als.append(target_edge_al)
+        
+            pegRNA_al = self.find_pegRNA_alignment_extending_target_edge_al(side)
+            
+            if pegRNA_al is None:
+                description = 'not RT\'ed'
+            else:
+                als.append(pegRNA_al)
+                
+                overlap_extended_pegRNA_al = self.find_pegRNA_alignment_extending_from_overlap(pegRNA_al)
+                
+                if overlap_extended_pegRNA_al is None:
+                    description = 'RT\'ed'
+                else:
+                    als.append(overlap_extended_pegRNA_al)
+                    
+                    description = 'RT\'ed + overlap-extended'
+                    
+                    overlap_extended_target_al = self.find_target_alignment_extending_pegRNA_alignment(overlap_extended_pegRNA_al)
+                    
+                    if overlap_extended_target_al is not None:
+                        als.append(overlap_extended_target_al)
+                        
+        query_covered = interval.get_disjoint_covered(als)
 
-        return pairs
+        results = {
+            'description': description,
+            'query_covered': query_covered,
+            'alignments': als,
+        }
+
+        return results
+
+    @memoized_property
+    def extensions_chains_by_side(self):
+        chains = {side: self.characterize_extension_chain_on_side(side) for side in ['left', 'right']}
+
+        if self.not_covered_by_primers in chains['left']['query_covered']:
+            if chains['right']['description'] == 'no target':
+                chains['right']['description'] = 'not seen'
+
+        if self.not_covered_by_primers in chains['right']['query_covered']:
+            if chains['left']['description'] == 'no target':
+                chains['left']['description'] = 'not seen'
+
+        return chains
 
     @memoized_property
     def has_intended_pegRNA_overlap(self):
-        return self.pegRNA_extension_als in self.pegRNA_alignment_pairs_with_shared_overlap
+        chains = self.extensions_chains_by_side
+
+        return (chains['left']['description'] == 'RT\'ed + overlap-extended' and
+                chains['right']['description'] == 'RT\'ed + overlap-extended' and 
+                chains['left']['query_covered'] == chains['right']['query_covered']
+               )
 
     @memoized_property
     def intended_SNVs_replaced(self):
@@ -175,48 +270,38 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         return status
 
     @memoized_property
-    def is_simple_unintended_rejoining(self):
-        simple_als = self.target_edge_alignments_list + self.pegRNA_extension_als_list
-        covered_by_simple_als = interval.get_disjoint_covered(simple_als)
-        uncovered = self.not_covered_by_primers - covered_by_simple_als
+    def is_unintended_rejoining(self):
+        ''' At least one side has RT'ed sequence, and together the extension
+        chains cover the whole read.
+        '''
+        chains = self.extensions_chains_by_side
+
+        contains_RTed_sequence = any(chains[side]['description'].startswith('RT\'ed') for side in ['left', 'right'])
+
+        left_covered = chains['left']['query_covered']
+        right_covered = chains['right']['query_covered']
+
+        combined_covered = left_covered | right_covered
+        uncovered = self.not_covered_by_primers - combined_covered
 
         # Allow failure to explain the last few nts of the read.
         uncovered = uncovered & interval.Interval(0, self.whole_read.end - 2)
 
-        return len(self.has_any_pegRNA_extension_al) > 0 and uncovered.total_length == 0
+        return contains_RTed_sequence and uncovered.total_length == 0
 
-    def register_unintended_with_overlap(self):
-        self.category = 'unintended overlap-sharing RT\'ed sequence'
+    def register_unintended_rejoining(self):
+        chains = self.extensions_chains_by_side
 
-        if len(self.pegRNA_alignment_pairs_with_shared_overlap) == 1:
-            al_dict = self.pegRNA_alignment_pairs_with_shared_overlap[0]
-
-            target_extensions = {side: self.find_target_alignment_extending_pegRNA_alignment(al) for side, al in al_dict.items()}
-            has_extension = {side for side, al in target_extensions.items() if al is not None}
-
-            if len(has_extension) == 2:
-                self.subcategory = 'paired on both'
-            elif len(has_extension) == 1:
-                side = sorted(has_extension)[0]
-                self.subcategory = f'paired on {side}'
-            else:
-                self.subcategory = 'complex'
+        if any('overlap' in chains[side]['description'] for side in ['left', 'right']):
+            self.category = 'unintended rejoining of overlap-extended sequence'
         else:
-            self.subcategory = 'multiple'
+            self.category = 'unintended rejoining of RT\'ed sequence'
+
+        self.subcategory = f'left {chains["left"]["description"]}, right {chains["right"]["description"]}'
 
         self.outcome = Outcome('n/a')
 
-        pegRNA_als = [al for al in self.split_pegRNA_alignments if not self.is_pegRNA_protospacer_alignment(al)]
-        target_als = self.parsimonious_target_alignments
-        pegRNA_als = sam.make_noncontained(pegRNA_als, alignments_contained_in=pegRNA_als + target_als)
-
-        for al_dict in self.pegRNA_alignment_pairs_with_shared_overlap:
-            target_extensions = {side: self.find_target_alignment_extending_pegRNA_alignment(al) for side, al in al_dict.items()}
-            target_als.extend(target_extensions.values())
-
-        target_als = sam.make_nonredundant(target_als)
-
-        self.relevant_alignments = pegRNA_als + target_als
+        self.relevant_alignments = chains['left']['alignments'] + chains['right']['alignments']
 
     @memoized_property
     def has_any_flipped_pegRNA_al(self):
@@ -252,6 +337,21 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                     positions_seen['matches'].add(ref_i)
 
         return positions_seen
+
+    @memoized_property
+    def scaffold_chimera(self):
+        ''' Identify any alignments to plasmids that cover the entire scaffold and nearby amplicon primer. '''
+        
+        chimera_als = []
+        
+        for al in self.extra_alignments:
+            primer = self.target_info.features.get((al.reference_name, 'AVA184'))
+            scaffold = self.target_info.features.get((al.reference_name, 'scaffold'))
+            if primer is not None and scaffold is not None:
+                if sam.feature_overlap_length(al, primer) >= 5 and sam.feature_overlap_length(al, scaffold) == len(scaffold):
+                    chimera_als.append(al)
+                    
+        return chimera_als
 
     def categorize(self):
         self.outcome = None
@@ -358,28 +458,21 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             self.details = str(self.outcome)
             self.relevant_alignments = merged_als
 
+        elif self.scaffold_chimera:
+            self.category = 'scaffold chimera'
+            self.subcategory = 'scaffold chimera'
+            self.details = 'n/a'
+            self.relevant_alignments = self.uncategorized_relevant_alignments
+
         elif len(self.has_any_pegRNA_extension_al) > 0:
             if self.is_intended_replacement:
                 self.category = 'intended edit'
                 self.subcategory = self.is_intended_replacement
                 self.outcome = Outcome('n/a')
-                self.relevant_alignments = self.parsimonious_target_alignments + self.possible_pegRNA_extension_als_list
+                self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
 
-            elif self.is_simple_unintended_rejoining:
-                self.category = 'unintended rejoining of RT\'ed sequence'
-                if len(self.has_any_pegRNA_extension_al) == 1:
-                    side = sorted(self.has_any_pegRNA_extension_al)[0]
-                    self.subcategory = f'{side} pegRNA'
-                elif len(self.has_any_pegRNA_extension_al) == 2:
-                    self.subcategory = 'both pegRNAs'
-                else:
-                    raise ValueError(len(self.has_any_pegRNA_extension_al))
-
-                self.outcome = Outcome('n/a')
-                self.relevant_alignments = self.parsimonious_target_alignments + self.possible_pegRNA_extension_als_list
-
-            elif self.pegRNA_alignment_pairs_with_shared_overlap:
-                self.register_unintended_with_overlap()
+            elif self.is_unintended_rejoining:
+                self.register_unintended_rejoining()
 
             else:
                 self.category = 'uncategorized'

@@ -214,6 +214,7 @@ def build_arrayed_group_read_set(set_name):
         'pegRNAs',
         'sequencing_start_feature_name',
         'primer_names',
+        'sgRNA',
     ]
 
     target_info_kwargs = {

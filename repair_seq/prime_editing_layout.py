@@ -224,51 +224,30 @@ class Layout(layout.Categorizer):
         return p_als
 
     def pegRNA_alignment_extends_target_alignment(self, pegRNA_al, target_al):
-        ti = self.target_info
+        if pegRNA_al is None or target_al is None:
+            return None, None
 
         pegRNA_name = pegRNA_al.reference_name
-        pegRNA_seq = ti.reference_sequences[pegRNA_name]
-        PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
-        side = ti.pegRNA_name_to_side_of_read[pegRNA_name]
+        target_PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
 
-        after_first_difference_feature = ti.features[pegRNA_name, f'after_first_difference_{pegRNA_name}']
+        pegRNA_side = self.target_info.pegRNA_name_to_side_of_read[pegRNA_name]
+        if pegRNA_side == 'left':
+            left_al = target_al
+            left_feature_name = target_PBS_name
+            right_al = pegRNA_al
+            right_feature_name = 'PBS'
+            pegRNA_al_key = 'right'
+        else:
+            right_al = target_al
+            right_feature_name = target_PBS_name
+            left_al = pegRNA_al
+            left_feature_name = 'PBS'
+            pegRNA_al_key = 'left'
 
-        if self.share_feature(target_al, PBS_name, pegRNA_al, 'PBS'):
-            # If the target edge alignment extends past the candidate pegRNA extension alignment,
-            # ensure that the RTT part of the candidate pegRNA extension alignment isn't explained
-            # better by the target edge alignment.
-            target_interval = interval.get_covered(target_al)
-            pegRNA_interval = interval.get_covered(pegRNA_al)
-
-            if side == 'right':
-                # Include +2 wiggle room here in case pegRNA alignments extends slightly farther by chance.
-                if target_interval.start <= pegRNA_interval.start + 2:
-                    # Find the farthest right left point from the target al to the pegRNA al.
-                    switch_results = sam.find_best_query_switch_after(target_al, pegRNA_al, ti.target_sequence, pegRNA_seq, min)
-                    cropped_pegRNA_extension_al = sam.crop_al_to_query_int(pegRNA_al, switch_results['switch_after'] + 1, len(self.seq))
-                else:
-                    cropped_pegRNA_extension_al = pegRNA_al
-
-            else:
-                if target_interval.end >= pegRNA_interval.end:
-                    # Find the farthest left switch point from the pegRNA al to the target al.
-                    switch_results = sam.find_best_query_switch_after(pegRNA_al, target_al, pegRNA_seq, ti.target_sequence, max)
-                    cropped_pegRNA_extension_al = sam.crop_al_to_query_int(pegRNA_al, 0, switch_results['switch_after'])
-                else:
-                    cropped_pegRNA_extension_al = pegRNA_al
-
-            # If the cropped pegRNA alignment doesn't extend past the point where
-            # pegRNA and target diverge, this is not an extension alignment that
-            # best explains this part of the read.
-            past_first_difference_length = sam.feature_overlap_length(cropped_pegRNA_extension_al, after_first_difference_feature)
-
-            # If the target alignment doesn't explain query outside of the pegRNA alignments,
-            # this is not an extension alignment.
-
-            if past_first_difference_length > 0 and target_interval not in pegRNA_interval:
-                status = 'definite'
-            else:
-                status = 'ambiguous'
+        extension_results = self.are_mutually_extending_from_shared_feature(left_al, left_feature_name, right_al, right_feature_name)
+        if extension_results:
+            status = 'definite'
+            cropped_pegRNA_extension_al = extension_results['cropped_alignments'][pegRNA_al_key]
         else:
             status = None
             cropped_pegRNA_extension_al = None
@@ -276,8 +255,11 @@ class Layout(layout.Categorizer):
         return status, cropped_pegRNA_extension_al
 
     def find_target_alignment_extending_pegRNA_alignment(self, pegRNA_al):
-        manually_extended_al = self.extend_target_PBS_alignment(pegRNA_al)
-        target_als = self.split_target_alignments + self.target_edge_alignments_list + [manually_extended_al]
+        if pegRNA_al is None:
+            return None
+
+        manually_extended_al = self.generate_extended_target_PBS_alignment(pegRNA_al)
+        target_als = self.target_gap_covering_alignments + self.target_edge_alignments_list + [manually_extended_al]
         target_als = sam.make_noncontained(target_als)
 
         relevant_target_al = None
@@ -289,6 +271,26 @@ class Layout(layout.Categorizer):
                 break
 
         return relevant_target_al
+
+    def find_pegRNA_alignment_extending_target_edge_al(self, side):
+        target_edge_al = self.target_edge_alignments[side]
+        if target_edge_al is None:
+            return None
+
+        candidate_als = self.pegRNA_alignments[self.target_info.pegRNA_names_by_side_of_read[side]]
+        manually_extended_al = self.generate_extended_pegRNA_PBS_alignment(target_edge_al, side)
+        if manually_extended_al is not None:
+            candidate_als.append(manually_extended_al)
+        
+        relevant_pegRNA_al = None
+        
+        for pegRNA_al in sorted(candidate_als, key=lambda al: al.query_length, reverse=True):
+            status, _ = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_edge_al)
+            if status == 'definite':
+                relevant_pegRNA_al = pegRNA_al
+                break
+                
+        return relevant_pegRNA_al
 
     @memoized_property
     def possible_pegRNA_extension_als(self):
@@ -318,7 +320,9 @@ class Layout(layout.Categorizer):
                 'internal_ambiguous': [],
             }
             for target_al in target_als:
-                for pegRNA_al in pegRNA_als:
+                manually_extended_pegRNA_al = self.generate_extended_pegRNA_PBS_alignment(target_al, side)
+                
+                for pegRNA_al in pegRNA_als + [manually_extended_pegRNA_al]:
                     definite_status, cropped_pegRNA_extension_al = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_al)
 
                     if definite_status is not None:
@@ -361,8 +365,9 @@ class Layout(layout.Categorizer):
         ''' For plotting/adding to relevant_als '''
         extension_als = []
 
-        for side, als in self.possible_pegRNA_extension_als['edge_definite'].items():
-            extension_als.extend(als)
+        for side, al in self.pegRNA_extension_als.items():
+            if al is not None:
+                extension_als.append(al)
 
         extension_als = sam.make_nonredundant(extension_als)
 
@@ -391,8 +396,7 @@ class Layout(layout.Categorizer):
         }
 
         for side, als in self.possible_pegRNA_extension_als['edge_definite'].items():
-            if len(als) == 1:
-                extension_als[side] = als[0]
+            extension_als[side] = max(als, default=None, key=lambda al: al.query_alignment_length)
 
         return extension_als
 
@@ -2235,86 +2239,15 @@ class Layout(layout.Categorizer):
             not_covered = self.whole_read - interval.get_disjoint_covered(merged_als)
             return (not_covered.total_length == 0) and (len(indels) == 0)
 
-    def extend_target_PBS_alignment(self, pegRNA_al):
-        ''' Takes takes a pegRNA alignment and generates
-        the longest perfectly extended target alignment that pairs with the PBS.
-        Motivation: if a potential transition from a pegRNA alignment back to 
-        genomic (target) sequence at a PBS occurs close to the end of a read,
-        initial alignment generation may fail to produce a relevant target alignment
-        that potentially extends a few nts past the PBS, especially if there is a
-        mismatch in the PBS.
-        ''' 
-
-        ti = self.target_info
-
+    def generate_extended_target_PBS_alignment(self, pegRNA_al):
         pegRNA_name = pegRNA_al.reference_name
+        target_PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
+        return self.extend_alignment_from_shared_feature(pegRNA_al, 'PBS', self.target_info.target, target_PBS_name)
 
-        target_PBS = ti.features[ti.target, knock_knock.pegRNAs.PBS_name(pegRNA_name)]
-
-        pegRNA_PBS = ti.features[pegRNA_name, 'PBS']
-
-        pegRNA_PBS_al = sam.crop_al_to_feature(pegRNA_al, pegRNA_PBS)
-
-        if pegRNA_PBS_al is None or pegRNA_PBS_al.is_unmapped or sam.contains_indel(pegRNA_PBS_al):
-            extended_al = None
-        else:
-            # Reminder: feature_offset is relative to "plus-orientation version of feature",
-            # so min of feature_offsets will be the right-most for a plus-orientation feature
-            # but max will be right-most for a minus-orientation feature.
-            pegRNA_feature_offset_to_q = self.feature_offset_to_q(pegRNA_al, 'PBS')
-
-            if target_PBS.strand == '+':
-                start_offset = min(pegRNA_feature_offset_to_q)
-            else:
-                start_offset = max(pegRNA_feature_offset_to_q)
-
-            target_PBS_start = ti.feature_offset_to_ref_p(target_PBS.seqname, target_PBS.ID)[start_offset]
-
-            query_start = min(pegRNA_feature_offset_to_q.values())
-            query_end = max(pegRNA_feature_offset_to_q.values())
-
-            al = pysam.AlignedSegment(ti.header)
-
-            al.query_sequence = self.seq
-            al.query_qualities = self.qual
-
-            soft_clip_before = query_start
-            soft_clip_after = len(self.seq) - 1 - query_end
-
-            al.cigar = [
-                (sam.BAM_CSOFT_CLIP, soft_clip_before),
-                (sam.BAM_CMATCH, pegRNA_PBS_al.query_alignment_length),
-                (sam.BAM_CSOFT_CLIP, soft_clip_after),
-            ]
-
-            if ti.sequencing_direction == '-':
-                # Need to extract query_qualities before overwriting query_sequence.
-                flipped_query_qualities = al.query_qualities[::-1]
-                al.query_sequence = utilities.reverse_complement(al.query_sequence)
-                al.query_qualities = flipped_query_qualities
-                al.is_reverse = True
-                al.cigar = al.cigar[::-1]
-
-            al.reference_name = ti.target
-            al.query_name = self.read.name
-            al.next_reference_id = -1
-
-            al.reference_start = target_PBS_start
-
-            extended_al = sw.extend_alignment(al, ti.reference_sequence_bytes[ti.target])
-
-        return extended_al
-
-    @memoized_property
-    def longest_polyG(self):
-        locations = utilities.homopolymer_lengths(self.seq, 'G')
-
-        if locations:
-            max_length = max(length for p, length in locations)
-        else:
-            max_length = 0
-
-        return max_length
+    def generate_extended_pegRNA_PBS_alignment(self, target_al, side):
+        pegRNA_name = self.target_info.pegRNA_names_by_side_of_read[side]
+        target_PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
+        return self.extend_alignment_from_shared_feature(target_al, target_PBS_name, pegRNA_name, 'PBS')
 
     def is_pegRNA_protospacer_alignment(self, al):
         ''' Returns True if al aligns almost entirely to a protospacer region of a pegRNA
@@ -2352,7 +2285,7 @@ class Layout(layout.Categorizer):
         for al in pegRNA_als:
             # If it is already an extension al, the corresponding target al must already exist.
             if al not in self.pegRNA_extension_als_list:
-                extended_al = self.extend_target_PBS_alignment(al)
+                extended_al = self.generate_extended_target_PBS_alignment(al)
                 if extended_al is not None:
                     target_als.append(extended_al)
 
@@ -2462,7 +2395,7 @@ class Layout(layout.Categorizer):
                 
         return manual_anchors
 
-    def plot(self, relevant=True, **manual_diagram_kwargs):
+    def plot(self, relevant=True, manual_alignments=None, **manual_diagram_kwargs):
         if not self.categorized:
             self.categorize()
 
@@ -2522,10 +2455,12 @@ class Layout(layout.Categorizer):
         for k, v in diagram_kwargs.items():
             manual_diagram_kwargs.setdefault(k, v)
 
-        if relevant:
+        if manual_alignments is not None:
+            als_to_plot = manual_alignments
+        elif relevant:
             als_to_plot = self.relevant_alignments
         else:
-            als_to_plot = self.uncategorized_relevant_alignments
+            als_to_plot = self.alignments
 
         diagram = knock_knock.visualize.ReadDiagram(als_to_plot,
                                                     ti,

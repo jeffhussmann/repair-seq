@@ -15,9 +15,9 @@ expected_values:
     note: n/a
   01:01101:017226:028572:
     category: unintended rejoining of RT'ed sequence
-    subcategory: right pegRNA
+    subcategory: left not RT'ed, right RT'ed
     note: left target extends slightly farther than left pegRNA extension
   01:01101:023201:008704:
     category: unintended rejoining of RT'ed sequence
-    subcategory: left pegRNA
+    subcategory: left RT'ed, right not RT'ed
     note: n/a
