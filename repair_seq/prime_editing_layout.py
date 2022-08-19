@@ -206,7 +206,7 @@ class Layout(layout.Categorizer):
         else:
             pegRNA_alignments = {
                 pegRNA_name: [
-                    al for al in self.split_target_and_pegRNA_alignments
+                    al for al in self.split_pegRNA_alignments
                     if al.reference_name == pegRNA_name
                 ]
                 for pegRNA_name in self.target_info.pegRNA_names
@@ -258,8 +258,10 @@ class Layout(layout.Categorizer):
         if pegRNA_al is None:
             return None
 
+        target_als = self.target_gap_covering_alignments + self.target_edge_alignments_list
         manually_extended_al = self.generate_extended_target_PBS_alignment(pegRNA_al)
-        target_als = self.target_gap_covering_alignments + self.target_edge_alignments_list + [manually_extended_al]
+        if manually_extended_al is not None:
+            target_als = target_als + [manually_extended_al]
         target_als = sam.make_noncontained(target_als)
 
         relevant_target_al = None
@@ -280,7 +282,7 @@ class Layout(layout.Categorizer):
         candidate_als = self.pegRNA_alignments[self.target_info.pegRNA_names_by_side_of_read[side]]
         manually_extended_al = self.generate_extended_pegRNA_PBS_alignment(target_edge_al, side)
         if manually_extended_al is not None:
-            candidate_als.append(manually_extended_al)
+            candidate_als = candidate_als + [manually_extended_al]
         
         relevant_pegRNA_al = None
         
@@ -1155,9 +1157,11 @@ class Layout(layout.Categorizer):
             return self.whole_read
         elif self.primer_alignments['left'] and not self.primer_alignments['right']:
             return interval.Interval(self.covered_by_primers.end, self.whole_read.end)
+        elif self.primer_alignments['right'] and not self.primer_alignments['left']:
+            return interval.Interval(self.whole_read.start, self.covered_by_primers.start - 1)
         else:
             return interval.Interval(self.covered_by_primers.start, self.covered_by_primers.end) - self.covered_by_primers 
-    
+
     @memoized_property
     def non_primer_nts(self):
         return self.not_covered_by_primers.total_length
@@ -1170,10 +1174,10 @@ class Layout(layout.Categorizer):
             nonspecific amplification per se is less clear but
             sequence is unlikely to be informative of any other process
          - read starts with an alignment to the expected primer, but
-            this alignment does not extend substantially past the primer.
-            Rest of the read is covered by a single alignment to some other
-            source that either reaches the end of the read, or reaches an
-            an alignment to the other primer (that does not extend 
+            this alignment does not extend substantially past the primer, and
+            the rest of the read is covered by a single alignment to some other
+            source that either reaches the end of the read or reaches an
+            an alignment to the other primer that does not extend 
             substantially past the primer.
         '''
         results = {}

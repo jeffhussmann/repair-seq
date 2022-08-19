@@ -107,7 +107,10 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
     @memoized_property
     def has_any_pegRNA_extension_al(self):
-        return {side for side in ['left', 'right'] if self.pegRNA_extension_als[side] is not None}
+        chains = {side: self.characterize_extension_chain_on_side(side) for side in ['left', 'right']}
+        contains_RTed_sequence = any(chains[side]['description'].startswith('RT\'ed') for side in ['left', 'right'])
+
+        return contains_RTed_sequence
 
     @memoized_property
     def pegRNA_alignments_by_side_of_read(self):
@@ -159,7 +162,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         manually_extended_al = self.generate_extended_pegRNA_overlap_alignment(pegRNA_al_to_extend)
         if manually_extended_al is not None:
-            candidate_als.append(manually_extended_al)
+            candidate_als = candidate_als + [manually_extended_al]
         
         relevant_pegRNA_al = None
         
@@ -376,7 +379,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                         self.category = 'intended edit'
                         self.subcategory = self.is_intended_replacement
                         self.outcome = Outcome('n/a')
-                        self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
+                        self.relevant_alignments = self.target_edge_alignments_list + self.pegRNA_extension_als_list
 
                     else:
                         self.category = 'wild type'
@@ -427,7 +430,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                     if indel == self.target_info.pegRNA_intended_deletion:
                         self.category = 'intended edit'
                         self.subcategory = 'deletion'
-                        self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
+                        self.relevant_alignments = [target_alignment] + self.pegRNA_extension_als_list
 
                     else:
                         self.category = 'deletion'
@@ -464,12 +467,12 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             self.details = 'n/a'
             self.relevant_alignments = self.uncategorized_relevant_alignments
 
-        elif len(self.has_any_pegRNA_extension_al) > 0:
+        elif self.has_any_pegRNA_extension_al:
             if self.is_intended_replacement:
                 self.category = 'intended edit'
                 self.subcategory = self.is_intended_replacement
                 self.outcome = Outcome('n/a')
-                self.relevant_alignments = self.target_edge_alignments_list + self.possible_pegRNA_extension_als_list
+                self.relevant_alignments = self.target_edge_alignments_list + self.pegRNA_extension_als_list
 
             elif self.is_unintended_rejoining:
                 self.register_unintended_rejoining()
