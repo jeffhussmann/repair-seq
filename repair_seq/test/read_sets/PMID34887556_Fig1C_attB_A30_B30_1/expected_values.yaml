@@ -17,7 +17,7 @@ expected_values:
     note: has UMI at the beginning of the read
   017171720:0000000162:
     category: unintended rejoining of RT'ed sequence
-    subcategory: left RT'ed, right RT'ed
+    subcategory: left RT'ed, right not RT'ed
     note: covers whole read, rejoins at right nick. left pegRNA extension is technically enough to cover the read, but right pegRNA extension contributes additional MH.
   017171720:0000000072:
     category: unintended rejoining of RT'ed sequence

@@ -1,0 +1,68 @@
+STAR version=2.7.10a
+STAR compilation time,server,dir=2022-01-14T18:50:00-05:00 :/home/dobin/data/STAR/STARcode/STAR.master/source
+STAR git: On branch master ; commit ae26add7ea1724f3281ec8abedb71bcff6a4ae73 ; diff files: CHANGES.md README.md RELEASEnotes.md doc/STARmanual.pdf extras/doc-latex/STARmanual.tex extras/doc-latex/convertParDefToLatexTable.awk extras/doc-latex/parametersDefault.tex extras/docker/Dockerfile source/VERSION 
+##### Command Line:
+STAR --genomeDir /home/jah/indices/GRCh38_Ensembl99_sparseD3_sjdbOverhang99 --outSAMtype BAM SortedByCoordinate --outSAMunmapped None --outSAMattributes All --limitBAMsortRAM 1345513406 --alignIntronMax 1 --runThreadN 1 --readMapNumber -1 --outFileNamePrefix /home/jah/projects/prime_editing_public/PMID34887556/targets/AAVS1-1651+1652/protospacer_alignment/protospacer_ --genomeLoad LoadAndKeep --alignEndsType EndToEnd --outFilterMultimapNmax 1000 --readFilesIn /home/jah/projects/prime_editing_public/PMID34887556/targets/AAVS1-1651+1652/protospacer_alignment/protospacer.fastq
+##### Initial USER parameters from Command Line:
+outFileNamePrefix                 /home/jah/projects/prime_editing_public/PMID34887556/targets/AAVS1-1651+1652/protospacer_alignment/protospacer_
+###### All USER parameters from Command Line:
+genomeDir                     /home/jah/indices/GRCh38_Ensembl99_sparseD3_sjdbOverhang99     ~RE-DEFINED
+outSAMtype                    BAM   SortedByCoordinate        ~RE-DEFINED
+outSAMunmapped                None        ~RE-DEFINED
+outSAMattributes              All        ~RE-DEFINED
+limitBAMsortRAM               1345513406     ~RE-DEFINED
+alignIntronMax                1     ~RE-DEFINED
+runThreadN                    1     ~RE-DEFINED
+readMapNumber                 18446744073709551615     ~RE-DEFINED
+outFileNamePrefix             /home/jah/projects/prime_editing_public/PMID34887556/targets/AAVS1-1651+1652/protospacer_alignment/protospacer_     ~RE-DEFINED
+genomeLoad                    LoadAndKeep     ~RE-DEFINED
+alignEndsType                 EndToEnd     ~RE-DEFINED
+outFilterMultimapNmax         1000     ~RE-DEFINED
+readFilesIn                   /home/jah/projects/prime_editing_public/PMID34887556/targets/AAVS1-1651+1652/protospacer_alignment/protospacer.fastq        ~RE-DEFINED
+##### Finished reading parameters from all sources
+
+##### Final user re-defined parameters-----------------:
+runThreadN                        1
+genomeDir                         /home/jah/indices/GRCh38_Ensembl99_sparseD3_sjdbOverhang99
+genomeLoad                        LoadAndKeep
+readFilesIn                       /home/jah/projects/prime_editing_public/PMID34887556/targets/AAVS1-1651+1652/protospacer_alignment/protospacer.fastq   
+readMapNumber                     18446744073709551615
+limitBAMsortRAM                   1345513406
+outFileNamePrefix                 /home/jah/projects/prime_editing_public/PMID34887556/targets/AAVS1-1651+1652/protospacer_alignment/protospacer_
+outSAMtype                        BAM   SortedByCoordinate   
+outSAMattributes                  All   
+outSAMunmapped                    None   
+outFilterMultimapNmax             1000
+alignIntronMax                    1
+alignEndsType                     EndToEnd
+
+-------------------------------
+##### Final effective command line:
+STAR   --runThreadN 1   --genomeDir /home/jah/indices/GRCh38_Ensembl99_sparseD3_sjdbOverhang99   --genomeLoad LoadAndKeep   --readFilesIn /home/jah/projects/prime_editing_public/PMID34887556/targets/AAVS1-1651+1652/protospacer_alignment/protospacer.fastq      --readMapNumber 18446744073709551615   --limitBAMsortRAM 1345513406   --outFileNamePrefix /home/jah/projects/prime_editing_public/PMID34887556/targets/AAVS1-1651+1652/protospacer_alignment/protospacer_   --outSAMtype BAM   SortedByCoordinate      --outSAMattributes All      --outSAMunmapped None      --outFilterMultimapNmax 1000   --alignIntronMax 1   --alignEndsType EndToEnd
+----------------------------------------
+
+Number of fastq files for each mate = 1
+ParametersSolo: --soloCellFilterType CellRanger2.2 filtering parameters:  3000 0.99 10
+Finished loading and checking parameters
+Reading genome generation parameters:
+### /scratch/dobin/STAR/Releases/STAR-2.7.3a/bin/Linux_x86_64/STAR   --runMode genomeGenerate   --runThreadN 4   --genomeDir ./   --genomeFastaFiles Homo_sapiens.GRCh38.dna.primary_assembly.fa      --genomeSAindexNbases 12   --genomeSAsparseD 3   --limitGenomeGenerateRAM 15000000000   --limitIObufferSize 50000000   --limitSjdbInsertNsj 383200   --sjdbGTFfile Homo_sapiens.GRCh38.99.gtf   --sjdbOverhang 99
+### GstrandBit=32
+versionGenome                 2.7.1a     ~RE-DEFINED
+genomeFastaFiles              Homo_sapiens.GRCh38.dna.primary_assembly.fa        ~RE-DEFINED
+genomeSAindexNbases           12     ~RE-DEFINED
+genomeChrBinNbits             18     ~RE-DEFINED
+genomeSAsparseD               3     ~RE-DEFINED
+sjdbOverhang                  99     ~RE-DEFINED
+sjdbFileChrStartEnd           -        ~RE-DEFINED
+sjdbGTFfile                   Homo_sapiens.GRCh38.99.gtf     ~RE-DEFINED
+sjdbGTFchrPrefix              -     ~RE-DEFINED
+sjdbGTFfeatureExon            exon     ~RE-DEFINED
+sjdbGTFtagExonParentTranscripttranscript_id     ~RE-DEFINED
+sjdbGTFtagExonParentGene      gene_id     ~RE-DEFINED
+sjdbInsertSave                Basic     ~RE-DEFINED
+genomeFileSizes               3214644768   8727042096        ~RE-DEFINED
+
+EXITING because of FATAL ERROR: Genome version: 2.7.1a is INCOMPATIBLE with running STAR version: 2.7.10a
+SOLUTION: please re-generate genome from scratch with running version of STAR, or with version: 2.7.4a
+
+Aug 05 10:09:49 ...... FATAL ERROR, exiting

@@ -61,9 +61,9 @@ expected_values:
     subcategory: simple
     note: duplication with edit with 1 mismatch
   01:01105:032208:029716_:
-    category: edit + deletion
-    subcategory: edit + deletion
-    note: consistent with deletion between nicks that preserves both nicking target,
+    category: unintended rejoining of RT'ed sequence
+    subcategory: no scaffold
+    note: also consistent with deletion between nicks that preserves both nicking target,
       followed by intended edit
   01:01101:022779:005055_:
     category: deletion

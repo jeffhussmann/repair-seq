@@ -15,7 +15,7 @@ expected_values:
     note: n/a
   01:01101:002008:015620:
     category: unintended rejoining of RT'ed sequence
-    subcategory: left RT'ed, right RT'ed
+    subcategory: left RT'ed, right not RT'ed
     note: the right extension al is ambiguous - not strictly required to explain the read, but has more MH to the left extension al than the target does.
   01:01101:003084:013264:
     category: unintended rejoining of RT'ed sequence

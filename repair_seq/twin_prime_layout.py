@@ -71,6 +71,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         ),
         ('genomic insertion',
             ('hg19',
+             'hg38',
              'bosTau7',
              'e_coli',
             ),
@@ -107,7 +108,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
     @memoized_property
     def has_any_pegRNA_extension_al(self):
-        chains = {side: self.characterize_extension_chain_on_side(side) for side in ['left', 'right']}
+        chains = self.extensions_chains_by_side
         contains_RTed_sequence = any(chains[side]['description'].startswith('RT\'ed') for side in ['left', 'right'])
 
         return contains_RTed_sequence
@@ -120,6 +121,12 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             als[side] = self.pegRNA_alignments[name]
 
         return als
+
+    def other_pegRNA_name(self, pegRNA_name):
+        ti = self.target_info
+        side = ti.pegRNA_name_to_side_of_read[pegRNA_name]
+        other_name = ti.pegRNA_names_by_side_of_read[other_side[side]]
+        return other_name
 
     def pegRNA_alignment_extends_pegRNA_alignment(self, first_pegRNA_al, second_pegRNA_al):
         if first_pegRNA_al is None or second_pegRNA_al is None:
@@ -146,7 +153,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         if pegRNA_al_to_extend is None:
             return None
 
-        other_pegRNA_name = [name for name in self.target_info.pegRNA_names if name != pegRNA_al_to_extend.reference_name][0]
+        other_pegRNA_name = self.other_pegRNA_name(pegRNA_al_to_extend.reference_name)
         return self.extend_alignment_from_shared_feature(pegRNA_al_to_extend, 'overlap', other_pegRNA_name, 'overlap')
 
     def find_pegRNA_alignment_extending_from_overlap(self, pegRNA_al_to_extend):
@@ -157,7 +164,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         if (pegRNA_al_to_extend.reference_name, 'overlap') not in self.target_info.features:
             return None
 
-        other_pegRNA_name = [name for name in self.target_info.pegRNA_names if name != pegRNA_al_to_extend.reference_name][0]
+        other_pegRNA_name = self.other_pegRNA_name(pegRNA_al_to_extend.reference_name)
         candidate_als = self.pegRNA_alignments[other_pegRNA_name] 
 
         manually_extended_al = self.generate_extended_pegRNA_overlap_alignment(pegRNA_al_to_extend)
@@ -175,41 +182,48 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         return relevant_pegRNA_al
 
     def characterize_extension_chain_on_side(self, side):
-        als = []
+        als = {}
     
         target_edge_al = self.target_edge_alignments[side]
         
-        if target_edge_al is None:
-            description = 'no target'
-        else:
-            als.append(target_edge_al)
+        if target_edge_al is not None:
+            als['first target'] = target_edge_al
         
             pegRNA_al = self.find_pegRNA_alignment_extending_target_edge_al(side)
             
-            if pegRNA_al is None:
-                description = 'not RT\'ed'
-            else:
-                als.append(pegRNA_al)
+            if pegRNA_al is not None:
+                als['first pegRNA'] = pegRNA_al
                 
                 overlap_extended_pegRNA_al = self.find_pegRNA_alignment_extending_from_overlap(pegRNA_al)
                 
-                if overlap_extended_pegRNA_al is None:
-                    description = 'RT\'ed'
-                else:
-                    als.append(overlap_extended_pegRNA_al)
-                    
-                    description = 'RT\'ed + overlap-extended'
+                if overlap_extended_pegRNA_al is not None:
+                    als['second pegRNA'] = overlap_extended_pegRNA_al
                     
                     overlap_extended_target_al = self.find_target_alignment_extending_pegRNA_alignment(overlap_extended_pegRNA_al)
                     
                     if overlap_extended_target_al is not None:
-                        als.append(overlap_extended_target_al)
+                        als['second target'] = overlap_extended_target_al
                         
-        query_covered = interval.get_disjoint_covered(als)
+        al_order = [
+            'first target',
+            'first pegRNA',
+            'second pegRNA',
+            'second target',
+        ]
+
+        query_covered = interval.get_disjoint_covered([])
+        query_covered_incremental = {'none': query_covered}
+
+        for al_order_i in range(len(al_order)):
+            al_key = al_order[al_order_i]
+            if al_key in als:
+                als_up_to = [als[key] for key in al_order[:al_order_i + 1]]
+                query_covered = interval.get_disjoint_covered(als_up_to)
+                query_covered_incremental[al_key] = query_covered
 
         results = {
-            'description': description,
             'query_covered': query_covered,
+            'query_covered_incremental': query_covered_incremental,
             'alignments': als,
         }
 
@@ -219,15 +233,142 @@ class Layout(repair_seq.prime_editing_layout.Layout):
     def extensions_chains_by_side(self):
         chains = {side: self.characterize_extension_chain_on_side(side) for side in ['left', 'right']}
 
-        if self.not_covered_by_primers in chains['left']['query_covered']:
+        # If the two chains don't cover exactly the same part of the query (in which case
+        # they are usually the intended edit), check whether any members of an extension
+        # chain on one side are not necessary to make it to the other chain.
+        # (Warning: could imagine a scenario in which it would be possible to remove
+        # from either the left or right chain.)
+
+        al_order = [
+            'none',
+            'first target',
+            'first pegRNA',
+            'second pegRNA',
+            'second target',
+        ]
+
+        last_al_to_description = {
+            'none': 'no target',
+            'first target': 'not RT\'ed',
+            'first pegRNA': 'RT\'ed',
+            'second pegRNA': 'RT\'ed + overlap-extended',
+            'second target': 'RT\'ed + overlap-extended',
+        }
+
+        possible_covers = set()
+
+        if chains['left']['query_covered'] != chains['right']['query_covered']:
+            for left_key in al_order:
+                if left_key in chains['left']['alignments']:
+                    for right_key in al_order:
+                        if right_key in chains['right']['alignments']:
+                            covered_left = chains['left']['query_covered_incremental'][left_key]
+                            covered_right = chains['right']['query_covered_incremental'][right_key]
+
+                            # Check if left and right abutt each other.
+                            if covered_left.end >= covered_right.start - 1:
+                                possible_covers.add((left_key, right_key))
+                            
+        last_parsimonious_key = {}
+
+        if possible_covers:
+            last_parsimonious_key['left'], last_parsimonious_key['right'] = min(possible_covers, key=lambda pair: (al_order.index(pair[0]), al_order.index(pair[1])))
+        else:
+            for side in ['left', 'right']:
+                last_parsimonious_key[side] = max(chains[side]['alignments'], key=al_order.index, default='none')
+
+        for side in ['left', 'right']:
+            key = last_parsimonious_key[side]
+
+            chains[side]['description'] = last_al_to_description[key]
+
+            last_index = al_order.index(key)
+            chains[side]['parsimonious_alignments'] = [al for key, al in chains[side]['alignments'].items() if al_order.index(key) <= last_index]
+
+            chains[side]['query_covered'] = chains[side]['query_covered_incremental'][key]
+
+        # If one chain is absent and the other chain covers the whole read
+        # (except possibly 2 nts at either edge), classify the missing side
+        # as 'not seen'.
+
+        not_covered_by_primers_minus_edges = self.not_covered_by_primers & self.whole_read_minus_edges(2)
+
+        if not_covered_by_primers_minus_edges in chains['left']['query_covered']:
             if chains['right']['description'] == 'no target':
                 chains['right']['description'] = 'not seen'
 
-        if self.not_covered_by_primers in chains['right']['query_covered']:
+        if not_covered_by_primers_minus_edges in chains['right']['query_covered']:
             if chains['left']['description'] == 'no target':
                 chains['left']['description'] = 'not seen'
 
         return chains
+
+    def get_extension_chain_edge(self, side):
+        ''' Get the position of the far edge of an extension chain
+        in the relevant coordinate system.
+        '''
+        ti = self.target_info
+
+        this_side_pegRNA_name = ti.pegRNA_names_by_side_of_read[side]
+        other_side_pegRNA_name = self.other_pegRNA_name(this_side_pegRNA_name)
+
+        PBS_end = ti.features[this_side_pegRNA_name, 'PBS'].end
+
+        chain = self.extensions_chains_by_side[side]
+        if chain['description'] in ['not seen', 'no target']:
+            relevant_edge = None
+        else:
+            if chain['description'] == 'RT\'ed + overlap-extended':
+                if 'second target' in chain['alignments']:
+                    al = chain['alignments']['second target']
+                else:
+                    al = chain['alignments']['second pegRNA']
+
+                this_side_overlap = ti.features[this_side_pegRNA_name, 'overlap']
+                other_side_overlap = ti.features[other_side_pegRNA_name, 'overlap']
+
+                up_to_overlap_end = PBS_end - this_side_overlap.start + 1
+
+                if al.reference_name == other_side_pegRNA_name:
+                    extra_other_pegRNA = (al.reference_end - 1) - (other_side_overlap.end + 1) + 1
+
+                    relevant_edge = up_to_overlap_end + extra_other_pegRNA
+
+                elif al.reference_name == ti.target:
+                    opposite_PBS_end = ti.features[other_side_pegRNA_name, 'PBS'].end 
+                    up_to_opposite_PBS_end = opposite_PBS_end - (other_side_overlap.end + 1) + 1
+
+                    opposite_target_PBS_name = ti.PBS_names_by_side_of_read[other_side[side]]
+                    opposite_target_PBS = ti.features[ti.target, opposite_target_PBS_name]
+
+                    if opposite_target_PBS.strand == '+':
+                        extra_genomic = (opposite_target_PBS.start - 1) - al.reference_start + 1
+                    else:
+                        extra_genomic = (al.reference_end - 1) - (opposite_target_PBS.end + 1) + 1
+
+                    relevant_edge = up_to_overlap_end + up_to_opposite_PBS_end + extra_genomic
+                    
+            else:
+                if chain['description'] == 'not RT\'ed':
+                    al = chain['alignments']['first target']
+
+                    target_PBS_name = ti.PBS_names_by_side_of_read[side]
+                    target_PBS = ti.features[ti.target, target_PBS_name]
+
+                    # Positive values are towards the opposite nick,
+                    # negative values are away from the opposite nick.
+
+                    if target_PBS.strand == '+':
+                        relevant_edge = (al.reference_end - 1) - target_PBS.end
+                    else:
+                        relevant_edge = target_PBS.start - al.reference_start
+
+                elif chain['description'] == 'RT\'ed':
+                    al = chain['alignments']['first pegRNA']
+
+                    relevant_edge = PBS_end - al.reference_start
+                
+        return relevant_edge
 
     @memoized_property
     def has_intended_pegRNA_overlap(self):
@@ -288,7 +429,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         uncovered = self.not_covered_by_primers - combined_covered
 
         # Allow failure to explain the last few nts of the read.
-        uncovered = uncovered & interval.Interval(0, self.whole_read.end - 2)
+        uncovered = uncovered & self.whole_read_minus_edges(2)
 
         return contains_RTed_sequence and uncovered.total_length == 0
 
@@ -302,9 +443,12 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         self.subcategory = f'left {chains["left"]["description"]}, right {chains["right"]["description"]}'
 
-        self.outcome = Outcome('n/a')
+        left_edge = self.get_extension_chain_edge('left')
+        right_edge = self.get_extension_chain_edge('right')
 
-        self.relevant_alignments = chains['left']['alignments'] + chains['right']['alignments']
+        self.outcome = UnintendedRejoiningOutcome(left_edge, right_edge)
+
+        self.relevant_alignments = list(chains['left']['alignments'].values()) + list(chains['right']['alignments'].values())
 
     @memoized_property
     def has_any_flipped_pegRNA_al(self):
@@ -590,8 +734,8 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         if pegRNA_names is None:
             pegRNA_names = []
         else:
-            for i, pegRNA_name in enumerate(pegRNA_names):
-                color = f'C{i + 2}'
+            for pegRNA_name in pegRNA_names:
+                color = ti.pegRNA_name_to_color[pegRNA_name]
                 light_color = hits.visualize.apply_alpha(color, 0.5)
                 color_overrides[pegRNA_name] = color
                 color_overrides[pegRNA_name, 'protospacer'] = light_color
@@ -619,25 +763,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         for deletion in self.target_info.pegRNA_programmed_deletions:
             label_overrides[deletion.ID] = 'intended deletion'
             feature_heights[deletion.ID] = -0.3
-
-        if self.target_info.integrase_sites:
-            suffixes = [
-                'attP_left',
-                'attP_right',
-                'attB_left',
-                'attB_right',
-            ]
-
-            for _, name in self.target_info.integrase_sites:
-                for suffix in suffixes:
-                    if name.endswith(suffix):
-                        label_overrides[name] = '\n'.join(suffix.split('_'))
-            
-            label_offsets['RTT'] = 2
-
-            for ref_name, name in self.target_info.integrase_sites:
-                if 'left' in name or 'right' in name:
-                    features_to_show.add((ref_name, name))
 
         if 'features_to_show' in manual_diagram_kwargs:
             features_to_show.update(manual_diagram_kwargs.pop('features_to_show'))
@@ -757,3 +882,27 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             diagram.update_size()
 
         return diagram
+
+other_side = {
+    'left': 'right',
+    'right': 'left',
+}
+
+class UnintendedRejoiningOutcome(Outcome):
+    def __init__(self, left_edge, right_edge):
+        self.edges = {
+            'left': left_edge,
+            'right': right_edge,
+        }
+
+    @classmethod
+    def from_string(cls, details_string):
+        def convert(s):
+            return int(s) if s != 'None' else None
+
+        left_edge, right_edge = map(convert, details_string.split(','))
+
+        return cls(left_edge, right_edge)
+
+    def __str__(self):
+        return f'{self.edges["left"]},{self.edges["right"]}'

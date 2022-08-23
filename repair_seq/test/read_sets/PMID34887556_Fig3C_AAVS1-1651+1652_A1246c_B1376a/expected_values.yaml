@@ -83,3 +83,11 @@ expected_values:
     category: unintended rejoining of overlap-extended sequence
     subcategory: left not RT'ed, right RT'ed + overlap-extended
     note: rejoins between nicks
+  017172022:0000000692:
+    category: unintended rejoining of RT'ed sequence
+    subcategory: left RT'ed, right not RT'ed
+    note: includes a spurious overlap-extension alignnment on the left side
+  017172022:0000004626:
+    category: unintended rejoining of RT'ed sequence
+    subcategory: left RT'ed, right not RT'ed
+    note: includes a spurious overlap-extension alignnment on the left side

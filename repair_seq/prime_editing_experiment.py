@@ -2,11 +2,13 @@ import gzip
 from collections import defaultdict, Counter
 
 import h5py
+import matplotlib.pyplot as plt
 import numpy as np
 
+import hits.visualize
 from hits import utilities
-from knock_knock import illumina_experiment, svg
-from repair_seq import prime_editing_layout, twin_prime_layout, pooled_layout
+from knock_knock import illumina_experiment, pegRNAs
+from repair_seq import prime_editing_layout, twin_prime_layout, Bxb1_layout, pooled_layout
 
 from hits.utilities import memoized_property
 
@@ -36,41 +38,12 @@ class PrimeEditingExperiment(illumina_experiment.IlluminaExperiment):
             for read in self.reads_by_type(self.preprocessed_read_type):
                 fh.write(str(read))
 
-    def visualize(self):
+    def generate_figures(self):
         lengths_fig = self.length_distribution_figure()
         lengths_fig.savefig(self.fns['lengths_figure'], bbox_inches='tight')
         self.generate_all_outcome_length_range_figures()
-        svg.decorate_outcome_browser(self)
+        self.generate_outcome_browser()
         self.generate_all_outcome_example_figures(num_examples=5)
-
-    def process_old(self, stage):
-        try:
-            if stage == 'preprocess':
-                self.preprocess()
-
-            elif stage == 'align':
-                self.make_nonredundant_sequence_fastq()
-
-                for read_type in self.read_types_to_align:
-                    self.generate_alignments(read_type)
-                    self.generate_supplemental_alignments_with_STAR(read_type, min_length=20)
-                    self.combine_alignments(read_type)
-
-            elif stage == 'categorize':
-                self.categorize_outcomes()
-
-                self.generate_outcome_counts()
-                self.generate_read_lengths()
-
-                self.extract_templated_insertion_info()
-
-                self.record_sanitized_category_names()
-
-            elif stage == 'visualize':
-                self.visualize()
-        except:
-            print(self.group, self.sample_name)
-            raise
 
     def alignment_groups_to_diagrams(self, alignment_groups, num_examples, **diagram_kwargs):
         subsample = utilities.reservoir_sample(alignment_groups, num_examples)
@@ -163,9 +136,304 @@ class PrimeEditingExperiment(illumina_experiment.IlluminaExperiment):
         return xs, ys
 
 class TwinPrimeExperiment(PrimeEditingExperiment):
-    def __init__(self, base_dir, group, sample_name, **kwargs):
-        super().__init__(base_dir, group, sample_name, **kwargs)
-
     @memoized_property
     def categorizer(self):
         return twin_prime_layout.Layout
+
+    def plot_extension_chain_edges(self):
+        ti = self.target_info
+        features = ti.annotated_and_inferred_features
+
+        edge_distributions = defaultdict(Counter)
+        joint_distribution = Counter()
+
+        for outcome in self.outcome_iter():
+            if outcome.category.startswith('unintended rejoining'):
+                ur_outcome = twin_prime_layout.UnintendedRejoiningOutcome.from_string(outcome.details)
+
+                for side_description in outcome.subcategory.split(', '):
+                    side, description = side_description.split(' ', 1)
+                    edge_distributions[side, description][ur_outcome.edges[side]] += 1
+
+                joint_key = (outcome.subcategory, outcome.details)
+                joint_distribution[joint_key] += 1
+
+        # Common parameters.
+        ref_bar_height = 0.02
+        feature_height = 0.03
+        gap_between_refs = 0.01
+
+        figsize = (16, 4)
+        x_lims = (-200, 250)
+
+        # not RT'ed
+        subcategory_key = "not RT'ed"
+
+        fig, axs = plt.subplots(1, 2, figsize=figsize)
+
+        for ax, side in zip(axs, ['left', 'right']):
+            counts = edge_distributions[side, subcategory_key]
+
+            if len(counts) == 0:
+                continue
+
+            xs = np.arange(min(counts), max(counts) + 1)
+            ys = [counts[x] for x in xs]
+
+            ax.plot(xs, ys, '.-', color='black', alpha=0.5)
+
+            pegRNA_name = ti.pegRNA_names_by_side_of_read[side]
+            protospacer_name = pegRNAs.protospacer_name(pegRNA_name)
+
+            PBS_name = ti.PBS_names_by_side_of_read[side]
+            PBS = features[ti.target, PBS_name]
+
+            other_pegRNA_name = ti.pegRNA_names_by_side_of_read[twin_prime_layout.other_side[side]]
+            other_PBS_name = ti.PBS_names_by_side_of_read[twin_prime_layout.other_side[side]]
+            other_protospacer_name = pegRNAs.protospacer_name(other_pegRNA_name)
+            PAM_name = f'{protospacer_name}_PAM'
+            other_PAM_name = f'{other_protospacer_name}_PAM'
+
+            colors = {
+                protospacer_name: hits.visualize.apply_alpha(ti.pegRNA_name_to_color[pegRNA_name], 0.5),
+                other_protospacer_name: hits.visualize.apply_alpha(ti.pegRNA_name_to_color[other_pegRNA_name], 0.5),
+                PAM_name: ti.pegRNA_name_to_color[pegRNA_name],
+                other_PAM_name: ti.pegRNA_name_to_color[other_pegRNA_name],
+            }
+
+            for primer_name in ti.primer_names:
+                colors[primer_name] = 'lightgrey'
+
+            # By definition, the edge of the PBS adjacent to the nick in the target
+            # for this side's pegRNA is zero in the coordinate system.
+
+            y_start = -0.1
+
+            feature_names = [
+                protospacer_name,
+                other_protospacer_name,
+                PBS_name, other_PBS_name,
+                PAM_name,
+                other_PAM_name
+            ] + ti.primer_names
+
+            for feature_name in feature_names:
+                feature = features[ti.target, feature_name]
+                
+                # Moving towards the other nicks is moving
+                # forward in the coordinate system.
+                if PBS.strand == '+':
+                    start, end = feature.start - PBS.end - 0.5, feature.end - PBS.end + 0.5
+                else:
+                    start, end = PBS.start - feature.end - 0.5, PBS.start - feature.start + 0.5
+
+                if 'PBS' in feature_name:
+                    height = 0.015
+                else:
+                    height = 0.03
+                
+                ax.axvspan(start, end,
+                           y_start + ref_bar_height, y_start + ref_bar_height + height,
+                           facecolor=colors.get(feature_name, feature.attribute['color']),
+                           clip_on=False,
+                          )
+
+            ax.axvspan(x_lims[0], x_lims[1], y_start, y_start + ref_bar_height, facecolor='C0', clip_on=False)
+
+            for cut_after_name, cut_after in ti.cut_afters.items():
+                if PBS.strand == '+':
+                    x = cut_after - PBS.end
+                else:
+                    x = PBS.start - cut_after
+
+                name, strand = cut_after_name.rsplit('_', 1)
+
+                ref_y = y_start + 0.5 * ref_bar_height
+                cut_y_bottom = ref_y - feature_height
+                cut_y_middle = ref_y
+                cut_y_top = ref_y + feature_height
+
+                if (strand == '+' and ti.sequencing_direction == '+') or (strand == '-' and ti.sequencing_direction == '-'):
+                    ys = [cut_y_middle, cut_y_top]
+                elif (strand == '-' and ti.sequencing_direction == '+') or (strand == '+' and ti.sequencing_direction == '-'):
+                    ys = [cut_y_bottom, cut_y_middle]
+                else:
+                    raise ValueError
+
+                ax.plot([x, x],
+                         ys,
+                         '-',
+                         linewidth=1,
+                         color='black',
+                         solid_capstyle='butt',
+                         zorder=10,
+                         transform=ax.get_xaxis_transform(),
+                         clip_on=False,
+                        )
+
+            ax.set_xlim(*x_lims)
+            ax.set_ylim(0)
+
+            ax.set_title(f'{side} {subcategory_key}')
+
+            ax.set_xticklabels([])
+
+            if side == 'right':
+                ax.invert_xaxis()
+
+        # just RT'ed
+        subcategory_key = "RT\'ed"
+
+        fig, axs = plt.subplots(1, 2, figsize=figsize)
+
+        for ax, side in zip(axs, ['left', 'right']):
+            counts = edge_distributions[side, subcategory_key]
+
+            if len(counts) == 0:
+                continue
+
+            xs = np.arange(min(counts), max(counts) + 1)
+            ys = [counts[x] for x in xs]
+
+            ax.plot(xs, ys, '.-', color='black', alpha=0.5)
+
+            pegRNA_name = ti.pegRNA_names_by_side_of_read[side]
+            other_pegRNA_name = ti.pegRNA_names_by_side_of_read[twin_prime_layout.other_side[side]]
+
+            # By definition, the end of the PBS on this side's pegRNA 
+            # is zero in the coordinate system.
+            PBS_end = features[pegRNA_name, 'PBS'].end
+
+            y_start = -0.1
+
+            for feature_name in ['PBS', 'RTT', 'overlap', 'scaffold', 'protospacer']:
+                feature = features[pegRNA_name, feature_name]
+                
+                # On this side's pegRNA, moving back from the PBS end is moving
+                # forward in the coordinate system.
+                start, end = PBS_end - feature.end - 0.5, PBS_end - feature.start + 0.5
+                
+                ax.axvspan(start, end, y_start, y_start + ref_bar_height,
+                           facecolor=ti.pegRNA_name_to_color[pegRNA_name],
+                           clip_on=False,
+                          )
+                ax.axvspan(start, end, y_start + ref_bar_height, y_start + ref_bar_height + feature_height,
+                           facecolor=feature.attribute['color'],
+                           alpha=0.75,
+                           clip_on=False,
+                          )
+
+            ax.set_xlim(*x_lims)
+            ax.set_ylim(0)
+
+            ax.set_title(f'{side} {subcategory_key}')
+
+            ax.set_xticklabels([])
+                
+            if side == 'right':
+                ax.invert_xaxis()
+
+        # overlap-extended
+        subcategory_key = "RT'ed + overlap-extended"
+
+        fig, axs = plt.subplots(1, 2, figsize=figsize)
+
+        for ax, side in zip(axs, ['left', 'right']):
+            counts = edge_distributions[side, subcategory_key]
+
+            if len(counts) == 0:
+                continue
+
+            xs = np.arange(min(counts), max(counts) + 1)
+            ys = [counts[x] for x in xs]
+
+            ax.plot(xs, ys, '.-', color='black', alpha=0.5)
+
+            pegRNA_name = ti.pegRNA_names_by_side_of_read[side]
+            other_pegRNA_name = ti.pegRNA_names_by_side_of_read[twin_prime_layout.other_side[side]]
+
+            # By definition, the end of the PBS on this side's pegRNA 
+            # is zero in the coordinate system.
+            PBS_end = features[pegRNA_name, 'PBS'].end
+
+            y_start = -0.2
+
+            for feature_name in ['PBS', 'RTT', 'overlap']:
+                feature = features[pegRNA_name, feature_name]
+                
+                # On this side's pegRNA, moving back from the PBS end is moving
+                # forward in the coordinate system.
+                start, end = PBS_end - feature.end - 0.5, PBS_end - feature.start + 0.5
+                
+                ax.axvspan(start, end, y_start, y_start + ref_bar_height, facecolor=ti.pegRNA_name_to_color[pegRNA_name], clip_on=False)
+                ax.axvspan(start, end, y_start + ref_bar_height, y_start + ref_bar_height + feature_height, facecolor=feature.attribute['color'], alpha=0.75, clip_on=False)
+                
+            # The left side of the pegRNA overlap in the coordinate system is the 
+            # end of the overlap feature on this side's pegRNA.
+            overlap_start = PBS_end - features[pegRNA_name, 'overlap'].end
+
+            other_overlap = features[other_pegRNA_name, 'overlap']
+
+            overlap_start_offset = overlap_start - other_overlap.start
+
+            y_start = y_start + ref_bar_height + feature_height + gap_between_refs
+
+            for feature_name in ['PBS', 'RTT', 'overlap']:
+                feature = features[other_pegRNA_name, feature_name]
+                
+                start, end = overlap_start_offset + feature.start - 0.5, overlap_start_offset + feature.end + 0.5
+                
+                ax.axvspan(start, end, y_start, y_start + ref_bar_height, facecolor=ti.pegRNA_name_to_color[other_pegRNA_name], clip_on=False)
+                ax.axvspan(start, end, y_start + ref_bar_height, y_start + ref_bar_height + feature_height, facecolor=feature.attribute['color'], alpha=0.75, clip_on=False)
+                
+            other_PBS_name = ti.PBS_names_by_side_of_read[twin_prime_layout.other_side[side]]
+            other_protospacer_name = pegRNAs.protospacer_name(other_pegRNA_name)
+            other_PBS_target = features[ti.target, other_PBS_name]
+                
+            other_PBS_start_offset = overlap_start_offset + features[other_pegRNA_name, 'PBS'].start
+
+            y_start = y_start + ref_bar_height + feature_height + gap_between_refs
+
+            for feature_name in [other_protospacer_name,
+                                 other_PBS_name,
+                                 ti.primers_by_side_of_read[twin_prime_layout.other_side[side]].ID,
+                                ]:
+                feature = features[ti.target, feature_name]
+                
+                if other_PBS_target.strand == '+':
+                    start, end = other_PBS_start_offset + (other_PBS_target.end - feature.end) - 0.5, other_PBS_start_offset + (other_PBS_target.end - feature.start) + 0.5
+                else:
+                    start, end = other_PBS_start_offset + (feature.start - other_PBS_target.start) - 0.5, other_PBS_start_offset + (feature.end - other_PBS_target.start) + 0.5
+                    
+                start = max(start, other_PBS_start_offset - 0.5)
+                
+                if feature_name == other_PBS_name:
+                    height = 0.015
+                else:
+                    height = 0.03
+                
+                ax.axvspan(start, end,
+                           y_start + ref_bar_height,
+                           y_start + ref_bar_height + height,
+                           facecolor=colors.get(feature_name, feature.attribute['color']),
+                           clip_on=False,
+                          )
+
+            ax.axvspan(other_PBS_start_offset - 0.5, x_lims[1], y_start, y_start + ref_bar_height, facecolor='C0', clip_on=False)
+
+            ax.set_xlim(*x_lims)
+            ax.set_ylim(0)
+
+            ax.set_title(f'{side} {subcategory_key}')
+
+            ax.set_xticklabels([])
+                
+            if side == 'right':
+                ax.invert_xaxis()
+
+        return edge_distributions, joint_distribution
+
+class Bxb1TwinPrimeExperiment(TwinPrimeExperiment):
+    @memoized_property
+    def categorizer(self):
+        return Bxb1_layout.Layout
