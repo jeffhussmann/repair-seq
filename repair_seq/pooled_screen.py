@@ -30,7 +30,14 @@ import hits.visualize
 from hits import utilities, sam, fastq, fasta, interval
 from knock_knock import experiment, target_info, visualize, ranges, explore, outcome_record, parallel
 
-from . import pooled_layout, collapse, coherence, guide_library, prime_editing_layout, twin_prime_layout, statistics
+from . import annotations
+from . import coherence
+from . import collapse
+from . import guide_library
+from . import pooled_layout
+from . import prime_editing_layout
+from . import statistics
+from . import twin_prime_layout
 
 memoized_property = utilities.memoized_property
 memoized_with_args = utilities.memoized_with_args
@@ -45,6 +52,8 @@ class SingleGuideExperiment(experiment.Experiment):
         # Provide an option to pass in a premade pool to prevent excessive remaking.
         self.pool = kwargs.pop('pool', None)
         if self.pool is None:
+            if isinstance(pool_name, tuple):
+                raise NotImplementedError
             self.pool = get_pool(base_dir, pool_name, progress=kwargs.get('progress'))
 
         self.fixed_guide = fixed_guide
@@ -106,10 +115,6 @@ class SingleGuideExperiment(experiment.Experiment):
         self.x_tick_multiple = 100
         self.max_relevant_length = 1000
 
-    @memoized_property
-    def diagram_kwargs(self):
-        return self.pool.diagram_kwargs
-
     @property
     def default_read_type(self):
         return 'collapsed_R2'
@@ -133,16 +138,19 @@ class SingleGuideExperiment(experiment.Experiment):
     def target_name(self):
         prefix = self.description['target_info_prefix']
 
-        if self.fixed_guide == 'none':
-            if self.sample_name == 'unknown':
-                target_name = prefix
+        if self.pool.use_guide_specific_target_info:
+            if self.fixed_guide == 'none':
+                if self.sample_name == 'unknown':
+                    target_name = prefix
+                else:
+                    target_name = f'{prefix}_{self.pool.variable_guide_library.name}_{self.variable_guide}'
             else:
-                target_name = f'{prefix}_{self.pool.variable_guide_library.name}_{self.variable_guide}'
+                if self.fixed_guide == 'unknown':
+                    target_name = prefix
+                else:
+                    target_name = f'{prefix}-{self.fixed_guide}-{self.variable_guide}'
         else:
-            if self.fixed_guide == 'unknown':
-                target_name = prefix
-            else:
-                target_name = f'{prefix}-{self.fixed_guide}-{self.variable_guide}'
+            target_name = prefix
 
         return target_name
 
@@ -183,7 +191,7 @@ class SingleGuideExperiment(experiment.Experiment):
     def R2_read_length(self):
         return len(next(iter(self.collapsed_reads(no_progress=True))))
 
-    def preprocess_R2_reads(self):
+    def preprocess(self):
         if self.has_UMIs:
             self.collapse_UMI_reads()
         else:
@@ -199,10 +207,10 @@ class SingleGuideExperiment(experiment.Experiment):
             return
 
         def UMI_key(read):
-            return collapse.Annotations['UMI_guide'].from_identifier(read.name)['UMI']
+            return annotations.Annotations['UMI_guide'].from_identifier(read.name)['UMI']
 
         def num_reads_key(read):
-            return collapse.Annotations['collapsed_UMI'].from_identifier(read.name)['num_reads']
+            return annotations.Annotations['collapsed_UMI'].from_identifier(read.name)['num_reads']
 
         R1_read_length = 45
 
@@ -222,7 +230,7 @@ class SingleGuideExperiment(experiment.Experiment):
                 clusters = sorted(clusters, key=num_reads_key, reverse=True)
 
                 for i, cluster in enumerate(clusters):
-                    annotation = collapse.Annotations['collapsed_UMI'].from_identifier(cluster.name)
+                    annotation = annotations.Annotations['collapsed_UMI'].from_identifier(cluster.name)
                     annotation['UMI'] = UMI
                     annotation['cluster_id'] = i
 
@@ -249,7 +257,7 @@ class SingleGuideExperiment(experiment.Experiment):
 
                             mismatch_counts[mismatch] += 1
 
-                        mismatch_annotation = collapse.Annotations['collapsed_UMI_mismatch'](annotation)
+                        mismatch_annotation = annotations.Annotations['collapsed_UMI_mismatch'](annotation)
                         mismatch_annotation['mismatch'] = mismatch
 
                         cluster.name = str(mismatch_annotation)
@@ -379,11 +387,11 @@ class SingleGuideExperiment(experiment.Experiment):
                 outcomes[layout.category, layout.subcategory].append(read.name)
 
                 if isinstance(self, CommonSequenceExperiment):
-                    annotation = collapse.Annotations['common_sequence'].from_identifier(read.name)
+                    annotation = annotations.Annotations['common_sequence'].from_identifier(read.name)
                     outcome = self.final_Outcome.from_layout(layout)
 
                 elif self.has_UMIs:
-                    annotation = collapse.Annotations['collapsed_UMI_mismatch'].from_identifier(read.name)
+                    annotation = annotations.Annotations['collapsed_UMI_mismatch'].from_identifier(read.name)
 
                     outcome = coherence.Pooled_UMI_Outcome(annotation['UMI'],
                                                            annotation['mismatch'],
@@ -398,7 +406,7 @@ class SingleGuideExperiment(experiment.Experiment):
                                                           )
 
                 else:
-                    annotation = collapse.Annotations['R2_with_guide_mismatches'].from_identifier(read.name)
+                    annotation = annotations.Annotations['R2_with_guide_mismatches'].from_identifier(read.name)
                     outcome = coherence.gDNA_Outcome.from_layout(layout,
                                                                  guide_mismatches=annotation['mismatches'],
                                                                  query_name=read.name,
@@ -454,13 +462,18 @@ class SingleGuideExperiment(experiment.Experiment):
             pysam.set_verbosity(saved_verbosity)
 
         # Make special alignments bams.
-        for outcome, als in self.progress(special_als.items(), desc='Making special alignments bams'):
-            outcome_fns = self.outcome_fns(outcome)
-            bam_fn = outcome_fns['special_alignments']
-            sorter = sam.AlignmentSorter(bam_fn, header)
-            with sorter:
-                for al in als:
-                    sorter.write(al)
+
+        # 22.07.26: If there are no uncommon reads for an experiment,
+        # the bam header from sam.get_header(bam_fn) will not match 
+        # the header assumed by special alignments from common reads.
+        # Find the right way to retrieve this header.
+        #for outcome, als in self.progress(special_als.items(), desc='Making special alignments bams'):
+        #    outcome_fns = self.outcome_fns(outcome)
+        #    bam_fn = outcome_fns['special_alignments']
+        #    sorter = sam.AlignmentSorter(bam_fn, header)
+        #    with sorter:
+        #        for al in als:
+        #            sorter.write(al)
 
         return np.array(times)
 
@@ -596,10 +609,6 @@ class SingleGuideExperiment(experiment.Experiment):
         else:
             to_plot = layout.alignments
 
-        for k, v in self.diagram_kwargs.items():
-            diagram_kwargs.setdefault(k, v)
-
-
         diagram = visualize.ReadDiagram(to_plot, self.target_info, **diagram_kwargs)
 
         return diagram
@@ -671,7 +680,6 @@ class SingleGuideExperiment(experiment.Experiment):
         for (start, end), sampler in items:
             diagrams = self.alignment_groups_to_diagrams(sampler.sample,
                                                          num_examples=num_examples,
-                                                         **self.diagram_kwargs,
                                                         )
             im = hits.visualize.make_stacked_Image([d.fig for d in diagrams])
             fn = fns['length_range_figure'](start, end)
@@ -857,46 +865,33 @@ class SingleGuideExperiment(experiment.Experiment):
         range_iter = ((empty_read_info, start, end) for start, end in zip(starts, ends))
         return ranges.Ranges(self.target_info, self.target_info.target, range_iter, total_reads, exps=[self])
 
-    def process(self, stage):
-        try:
-            if stage == 'preprocess':
-                self.preprocess_R2_reads()
+    def align(self):
+        if self.use_memoized_outcomes:
+            self.make_uncommon_sequence_fastq()
+            read_type = 'collapsed_uncommon_R2'
+        else:
+            read_type = 'collapsed_R2'
 
-            elif stage == 'align':
-                if self.use_memoized_outcomes:
-                    self.make_uncommon_sequence_fastq()
-                    read_type = 'collapsed_uncommon_R2'
-                else:
-                    read_type = 'collapsed_R2'
+        self.generate_alignments(read_type)
+        self.generate_supplemental_alignments_with_STAR(read_type, min_length=20)
+        self.combine_alignments(read_type)
 
-                self.generate_alignments(read_type)
-                self.generate_supplemental_alignments_with_STAR(read_type, min_length=20)
-                self.combine_alignments(read_type)
+    def categorize(self):
+        self.categorize_outcomes()
+        self.collapse_UMI_outcomes()
 
-            elif stage == 'categorize':
-                self.categorize_outcomes()
-                self.collapse_UMI_outcomes()
+        self.generate_outcome_counts()
+        self.generate_read_lengths()
+        self.record_sanitized_category_names()
 
-                self.generate_outcome_counts()
-                self.generate_read_lengths()
-                self.record_sanitized_category_names()
-
-                self.extract_genomic_insertion_info()
-                self.extract_templated_insertion_info()
-                #self.make_reads_per_UMI()
-                #self.extract_truncation_positions()
-                #self.extract_duplication_info()
-                #self.extract_deletion_ranges()
-                #self.make_filtered_cell_bams()
-                #self.make_outcome_plots(num_examples=3)
-
-            elif stage == 'visualize':
-                self.generate_figures()
-            else:
-                raise ValueError(stage)
-        except:
-            print(f'Error in {self.pool.name}: {self.sample_name}')
-            raise
+        self.extract_genomic_insertion_info()
+        self.extract_templated_insertion_info()
+        #self.make_reads_per_UMI()
+        #self.extract_truncation_positions()
+        #self.extract_duplication_info()
+        #self.extract_deletion_ranges()
+        #self.make_filtered_cell_bams()
+        #self.make_outcome_plots(num_examples=3)
 
 class SingleGuideNoUMIExperiment(SingleGuideExperiment):
     def __init__(self, *args, **kwargs):
@@ -915,15 +910,17 @@ class SingleGuideNoUMIExperiment(SingleGuideExperiment):
             return
 
         ti = self.target_info
-        R1_primer = ti.features[ti.target, self.pool.sample_sheet['R1_primer']]
+        guide_primer = ti.features[ti.target, self.pool.sample_sheet['guide_primer']]
 
-        if R1_primer.strand == '+':
-            expected_seq = ti.target_sequence[R1_primer.start:]
+        if guide_primer.strand == '+':
+            expected_primer = ti.target_sequence[guide_primer.start:guide_primer.end + 1]
+            expected_protospacer = self.pool.variable_guide_library.guides_df.loc[self.variable_guide, 'protospacer']
+            expected_seq = expected_primer + expected_protospacer
         else:
             raise NotImplementedError
 
-        Annotation_in = collapse.Annotations['R2_with_guide']
-        Annotation_out = collapse.Annotations['R2_with_guide_mismatches']
+        Annotation_in = annotations.Annotations['R2_with_guide']
+        Annotation_out = annotations.Annotations['R2_with_guide_mismatches']
 
         with gzip.open(self.fns_by_read_type['fastq']['collapsed_R2'], 'wt', compresslevel=1) as combined_fh, \
              gzip.open(self.fns_by_read_type['fastq']['low_quality_R2'], 'wt', compresslevel=1) as low_quality_fh:
@@ -1103,14 +1100,12 @@ class PooledScreen:
         self.donor = self.sample_sheet.get('donor')
         self.pegRNAs = self.sample_sheet.get('pegRNAs')
 
-        if 'R1_primer' in self.sample_sheet and 'R2_primer' in self.sample_sheet:
-            primer_names = [self.sample_sheet['R1_primer'], self.sample_sheet['R2_primer']]
-        else:
-            primer_names = self.sample_sheet.get('primer_names')
+        self.outcome_primer = self.sample_sheet['outcome_primer']
+        self.guide_primer = self.sample_sheet['guide_primer']
 
-        self.primer_names = primer_names
+        self.primer_names = [self.outcome_primer, self.guide_primer]
 
-        self.sequencing_start_feature_name = self.sample_sheet.get('sequencing_start_feature_name')
+        self.sequencing_start_feature_name = self.sample_sheet.get('outcome_primer')
         self.target_name = self.sample_sheet['target_info_prefix']
 
         self.layout_mode = self.sample_sheet.get('layout_mode', 'cutting')
@@ -1138,6 +1133,8 @@ class PooledScreen:
             self.fixed_guide_library = guide_library.dummy_guide_library
 
         self.fixed_guides = self.fixed_guide_library.guides
+
+        self.use_guide_specific_target_info = self.sample_sheet.get('use_guide_specific_target_info', True)
 
         self.fns = {
             'read_counts': self.dir / 'read_counts.txt',
@@ -1298,7 +1295,8 @@ class PooledScreen:
         else:
             progress = self.progress
 
-        return self.Experiment(self.base_dir, self.name, fixed_guide, variable_guide, pool=self, progress=progress)
+        first_char = variable_guide[0]
+        return self.Experiment(self.base_dir, (self.name, first_char), fixed_guide, variable_guide, pool=self, progress=progress)
 
     @memoized_property
     def R2_read_length(self):
@@ -2289,8 +2287,9 @@ class PooledScreen:
 
                         merged_f.create_dataset(new_key, data=dataset[()])
 
-                with h5py.File(exp.fns[fn_key]) as exp_f:
-                    exp_f.visititems(add_to_merged)
+                if exp.fns[fn_key].exists():
+                    with h5py.File(exp.fns[fn_key]) as exp_f:
+                        exp_f.visititems(add_to_merged)
 
             for key, counts in all_counts.items():
                 
@@ -2485,7 +2484,7 @@ class PooledScreen:
     def make_common_sequences(self):
         splitter = CommonSequenceSplitter(self)
 
-        Annotation = collapse.Annotations['collapsed_UMI_mismatch']
+        Annotation = annotations.Annotations['collapsed_UMI_mismatch']
         def Read_to_num_reads(r):
             return Annotation.from_identifier(r.name)['num_reads']
 
@@ -2580,7 +2579,7 @@ class PooledScreen:
         names = self.common_sequence_chunk_exp_names
         starts = [int(n.split('-')[0]) for n in names]
         chunks = [self.common_sequence_chunk_exp_from_name(n) for n in names]
-        Annotation = collapse.Annotations['collapsed_UMI_mismatch']
+        Annotation = annotations.Annotations['collapsed_UMI_mismatch']
 
         def name_to_chunk(name):
             number = int(Annotation.from_identifier(name)['UMI'])
@@ -2619,9 +2618,6 @@ class PooledScreen:
         else:
             to_plot = layout.alignments
             
-        for k, v in self.diagram_kwargs.items():
-            diagram_kwargs.setdefault(k, v)
-
         if relevant:
             diagram = layout.plot(**diagram_kwargs)
         else:
@@ -2731,7 +2727,7 @@ class PooledScreen:
         self.merge_templated_insertion_details()
         self.extract_genomic_insertion_length_distributions()
         self.extract_category_counts()
-        self.generate_high_frequency_outcome_counts()
+        #self.generate_high_frequency_outcome_counts()
         #self.compute_deletion_boundaries()
         #self.merge_deletion_ranges()
         #self.merge_templated_insertion_details(fn_key='filtered_duplication_details')
@@ -2791,6 +2787,8 @@ class CommonSequenceSplitter:
             self.close()
             chunk_name = f'{i:010d}-{i + self.reads_per_chunk - 1:010d}'
             chunk_exp = self.pool.common_sequence_chunk_exp_from_name(chunk_name)
+            chunk_exp.results_dir.mkdir()
+
             fn = chunk_exp.fns_by_read_type['fastq']['collapsed_R2']
             self.current_chunk_fh = gzip.open(fn, 'wt', compresslevel=1)
             
@@ -2810,7 +2808,7 @@ class CommonSequenceSplitter:
    
         tuples = []
 
-        Annotation = collapse.Annotations['common_sequence']
+        Annotation = annotations.Annotations['common_sequence']
 
         i = 0 
         for seq, count in self.seq_counts.most_common():
@@ -2932,7 +2930,13 @@ def process_single_guide_experiment_stage(base_dir,
 
     logging.info(f'{progress_string} Finished {stage_string}')
 
-def process_common_sequences_chunk(base_dir, pool_name, chunk_name, progress=None, chunk_index=None, total_chunks=None):
+def process_common_sequences_chunk(base_dir,
+                                   pool_name,
+                                   chunk_name,
+                                   progress=None,
+                                   chunk_index=None,
+                                   total_chunks=None,
+                                  ):
     pool = get_pool(base_dir, pool_name, progress=progress)
     exp = pool.common_sequence_chunk_exp_from_name(chunk_name)
 
