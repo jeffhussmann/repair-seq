@@ -22,8 +22,7 @@ class Layout(repair_seq.twin_prime_layout.Layout):
             ),
         ),
         ('intended integration',
-            ('at clean prime edit',
-             'at unintended prime edit',
+            ('n/a',
             ),
         ),
         ('unintended rejoining of RT\'ed sequence',
@@ -42,6 +41,10 @@ class Layout(repair_seq.twin_prime_layout.Layout):
              'left RT\'ed + overlap-extended, right not RT\'ed',
              'left RT\'ed + overlap-extended, right RT\'ed',
              'left RT\'ed + overlap-extended, right RT\'ed + overlap-extended',
+            ),
+        ),
+        ('integration at unintended prime edit',
+            ('n/a',
             ),
         ),
         ('flipped pegRNA incorporation',
@@ -187,25 +190,25 @@ class Layout(repair_seq.twin_prime_layout.Layout):
     def register_intended_integration(self):
         # For now, hard-code in the assumption that pegRNA extension al
         # is on the left side and that this will include the central dinucleotide.
-        self.category = 'intended integration'
 
         if len(self.intended_integrations) > 1:
-            self.subcategory = 'at unintended prime edit'
+            self.category = 'integration at unintended prime edit'
         else:
             details = self.intended_integrations[0]
             reaches_read_end = self.not_covered_by_primers.end in interval.get_covered(details['donor_al'])
             from_left_edge_al = sam.fingerprint(details['pegRNA_al']) == sam.fingerprint(self.pegRNA_extension_als['left'])
 
             if reaches_read_end and from_left_edge_al:
-                self.subcategory = 'at clean prime edit'
+                self.category = 'intended integration'
             else:
-                self.subcategory = 'at unintended prime edit'
+                self.category = 'integration at unintended prime edit'
 
-        if self.subcategory == 'at clean prime edit':
+        if self.category == 'intended integration':
             self.relevant_alignments = self.target_edge_alignments_list + self.pegRNA_extension_als_list + [self.intended_integrations[0]['donor_al']]
         else:
             self.relevant_alignments = self.uncategorized_relevant_alignments
 
+        self.subcategory = 'n/a'
         self.outcome = Outcome('n/a')
 
     @memoized_property

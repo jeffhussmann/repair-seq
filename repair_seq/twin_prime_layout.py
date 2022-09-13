@@ -780,13 +780,15 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         if 'refs_to_draw' in manual_diagram_kwargs:
             refs_to_draw.update(manual_diagram_kwargs.pop('refs_to_draw'))
 
+        manual_anchors = manual_diagram_kwargs.get('manual_anchors', self.manual_anchors)
+
         diagram_kwargs = dict(
             draw_sequence=True,
             flip_target=ti.sequencing_direction == '-',
             split_at_indels=True,
             label_offsets=label_offsets,
             features_to_show=features_to_show,
-            manual_anchors=self.manual_anchors,
+            manual_anchors=manual_anchors,
             refs_to_draw=refs_to_draw,
             label_overrides=label_overrides,
             inferred_amplicon_length=self.inferred_amplicon_length,

@@ -116,7 +116,7 @@ class Layout(layout.Categorizer):
              'bosTau7',
              'e_coli',
              'primer dimer',
-             'short nknown',
+             'short unknown',
              'plasmid',
             ),
         ),
@@ -632,7 +632,7 @@ class Layout(layout.Categorizer):
     
     @memoized_property
     def target_edge_alignments(self):
-        edge_als = self.get_target_edge_alignments(self.parsimonious_target_alignments)
+        edge_als = self.get_target_edge_alignments(self.parsimonious_target_alignments + self.target_gap_covering_alignments)
 
         return edge_als
 
@@ -773,7 +773,7 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def Q30_fractions(self):
-        at_least_30 = self.qual >= 30
+        at_least_30 = np.array(self.qual) >= 30
         fracs = {
             'all': np.mean(at_least_30),
             'second_half': np.mean(at_least_30[len(at_least_30) // 2:]),
@@ -1117,6 +1117,11 @@ class Layout(layout.Categorizer):
             
         if len(valid) > 0:
             edge_al = max(valid, key=lambda al: al.query_alignment_length)
+
+            if edge_al.is_reverse:
+                edge_al.query_qualities = self.qual[::-1]
+            else:
+                edge_al.query_qualities = self.qual
 
         return edge_al
 
@@ -1844,16 +1849,16 @@ class Layout(layout.Categorizer):
                 else: # one indel, not a pegRNA deletion
                     if self.has_pegRNA_SNV:
                         if indel.kind == 'D':
-                            # If the deletion overlaps with HA_RT on the target, consider this an unintended pegRNA integration.                            
-                            #if self.deletion_overlaps_HA_RT(indel) and self.pegRNA_insertion is not None:
-                            #    self.register_pegRNA_insertion()
-                            self.category = 'edit + deletion'
-                            self.subcategory = 'edit + deletion'
-                            HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [])
-                            deletion_outcome = DeletionOutcome(indel)
-                            self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
-                            self.details = str(self.outcome)
-                            self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
+                            if self.pegRNA_insertion:
+                                self.register_pegRNA_insertion()
+                            else:
+                                self.category = 'edit + deletion'
+                                self.subcategory = 'edit + deletion'
+                                HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [])
+                                deletion_outcome = DeletionOutcome(indel)
+                                self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
+                                self.details = str(self.outcome)
+                                self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
 
                         else:
                             self.category = 'uncategorized'
