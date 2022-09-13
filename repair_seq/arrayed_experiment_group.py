@@ -175,12 +175,16 @@ class Batch:
     @memoized_property
     def category_fractions(self):
         fs = {gn: group.category_fractions for gn, group in self.groups.items()}
-        return pd.concat(fs, axis='columns').fillna(0)
+        fs = pd.concat(fs, axis='columns').fillna(0).sort_index()
+        fs.columns.names = ['group'] + fs.columns.names[1:]
+        return fs
 
     @memoized_property
     def subcategory_fractions(self):
         fs = {gn: group.subcategory_fractions for gn, group in self.groups.items()}
-        return pd.concat(fs, axis='columns').fillna(0)
+        fs = pd.concat(fs, axis='columns').fillna(0).sort_index()
+        fs.columns.names = ['group'] + fs.columns.names[1:]
+        return fs
 
 def get_batch(base_dir, batch_name, progress=None, **kwargs):
     group_dir = Path(base_dir) / 'data' / batch_name
@@ -421,7 +425,10 @@ class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
     @memoized_property
     def outcome_counts(self):
         # Ignore nonspecific amplification products in denominator of any outcome fraction calculations.
-        to_drop = ['nonspecific amplification', 'bad sequence']
+        to_drop = [
+            'nonspecific amplification',
+            #'bad sequence',
+        ]
 
         # Empirically, overall editing rates can vary considerably across arrayed 
         # experiments, presumably due to nucleofection efficiency. If self.only_edited
@@ -890,6 +897,7 @@ def arrayed_specialized_experiment_factory(experiment_kind):
         'illumina': knock_knock.illumina_experiment.IlluminaExperiment,
         'prime_editing': prime_editing_experiment.PrimeEditingExperiment,
         'twin_prime': prime_editing_experiment.TwinPrimeExperiment,
+        'Bxb1_twin_prime': prime_editing_experiment.Bxb1TwinPrimeExperiment,
     }
 
     SpecializedExperiment = experiment_kind_to_class[experiment_kind]

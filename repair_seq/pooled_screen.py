@@ -1888,7 +1888,8 @@ class PooledScreen:
 
     @memoized_property
     def subcategory_fractions(self):
-        return self.subcategory_counts / self.subcategory_counts.sum(axis=0)
+        fs = self.subcategory_counts / self.subcategory_counts.sum(axis=0)
+        return fs
 
     @memoized_property
     def subcategories_by_baseline_frequency(self):
@@ -2827,11 +2828,11 @@ class CommonSequenceSplitter:
         self.close()
 
 class MergedPools(PooledScreen):
-    def __init__(self, base_dir, name, groups, category_groupings=None, progress=None):
-        super().__init__(base_dir, name, progress=progress)
+    def __init__(self, base_dir, merged_name, pool_names, category_groupings=None, progress=None):
+        super().__init__(base_dir, merged_name, progress=progress)
 
-        self.groups = groups
-        self.pools = {group: PooledScreen(base_dir, group, category_groupings, progress) for group in groups}
+        self.pool_names = pool_names
+        self.pools = {pn: PooledScreen(base_dir, pn, category_groupings, progress) for pn in pool_names}
 
     @memoized_property
     def R2_read_length(self):
@@ -2847,7 +2848,14 @@ class MergedPools(PooledScreen):
         scipy.sparse.save_npz(self.fns['collapsed_outcome_counts'], sparse_counts)
 
         merged_counts.sum(axis=1).to_csv(self.fns['collapsed_total_outcome_counts'], header=False)
-        
+
+    def merge_category_counts(self):
+        category_counts = sum(pool.category_counts for pn, pool in self.pools.items())
+        category_counts.to_csv(self.fns['category_counts'])
+
+        subcategory_counts = sum(pool.subcategory_counts for pn, pool in self.pools.items())
+        subcategory_counts.to_csv(self.fns['subcategory_counts'])
+
     def merge_templated_insertion_details(self):
         all_counts = defaultdict(Counter)
         

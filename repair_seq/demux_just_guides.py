@@ -15,11 +15,11 @@ import yaml
 
 from hits import fastq, utilities
 import knock_knock.target_info
+
+import repair_seq.annotations
+import repair_seq.demux_gDNA
 import repair_seq.guide_library
 import repair_seq.pooled_screen
-import repair_seq.guide_library
-import repair_seq.collapse
-import repair_seq.demux_gDNA
 
 def load_sample_sheet(base_dir, batch):
     sample_sheet_fn = Path(base_dir) / 'data' / batch / 'gDNA_sample_sheet.yaml'
@@ -211,7 +211,7 @@ def demux_chunk(base_dir, batch, sample_name, chunk_number, queue):
 
     counts = defaultdict(Counter)
 
-    Annotation = repair_seq.collapse.Annotations['R2_with_guide']
+    Annotation = repair_seq.annotations.Annotations['R2_with_guide']
 
     for R1, R2 in fastq.read_pairs(fastq_fns['R1'], fastq_fns['R2'], standardize_names=True):
         if R1.name != R2.name:
@@ -226,7 +226,6 @@ def demux_chunk(base_dir, batch, sample_name, chunk_number, queue):
         counts['variable_guide'][R1.seq] += 1
         counts['id'][variable_guide] += 1
 
-        # Retain quartets with an unknown fixed guide to allow detection of weird ligations.
         if variable_guide == 'unknown':
             continue
 

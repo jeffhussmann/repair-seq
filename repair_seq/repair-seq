@@ -60,7 +60,7 @@ if __name__ == '__main__':
             pool.process(num_processes=args.num_processes)
         else:
             pools = rs.pooled_screen.get_all_pools(args.base_dir)
-            print(f'{args.pool} not found in {args.base_dir}')
+            print(f'{args.screen_name} not found in {args.base_dir}')
             if len(pools) == 0:
                 print('There are no screens in {args.base_dir} - is this base_dir correct?')
             else:

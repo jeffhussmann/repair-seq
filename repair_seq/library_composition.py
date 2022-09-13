@@ -10,9 +10,6 @@ import knock_knock.target_info
 import repair_seq.guide_library
 
 def count_guides(base_dir, batch, sample_name):
-    ''' target_info should have a feature annotating where the sequencing primer anneals,
-    and this feature should be followed immediately by protospacer sequence.
-    '''
 
     data_dir = Path(base_dir) / 'data' / batch
     sample_sheet_fn = data_dir / 'sample_sheet.yaml'
@@ -70,7 +67,17 @@ def count_guides(base_dir, batch, sample_name):
 def load_guide_counts(base_dir, batch, sample_name):
     data_dir = Path(base_dir) / 'data' / batch
     csv_fn = data_dir / f'{sample_name}_guide_counts.csv'
-    guide_counts = pd.read_csv(csv_fn, index_col=0).squeeze()
+
+    if csv_fn.exists():
+        guide_counts = pd.read_csv(csv_fn, index_col=0).squeeze()
+    else:
+        csv_fn = data_dir / f'{sample_name}_id_stats.txt'
+        if csv_fn.exists():
+            guide_counts = pd.read_csv(csv_fn, index_col=0, sep='\t', header=None, names=['guide', 'read_count']).squeeze()
+        else:
+            raise ValueError(base_dir, batch, sample_name)
+
+    guide_counts = guide_counts.fillna(0).astype(int).drop('unknown', errors='ignore')
     return guide_counts
 
 def load_batch_guide_counts(base_dir, batch):
@@ -82,4 +89,10 @@ def load_batch_guide_counts(base_dir, batch):
     for sample_name in sample_sheet['samples']:
         all_counts[sample_name] = load_guide_counts(base_dir, batch, sample_name) 
 
-    return pd.DataFrame(all_counts)
+    if 'sample_pairs' in sample_sheet:
+        for pair_name, sample_names in sample_sheet['sample_pairs'].items():
+            all_counts[pair_name] = sum(all_counts[sample_name] for sample_name in sample_names)
+
+    df = pd.DataFrame(all_counts).fillna(0).astype(int)
+
+    return df

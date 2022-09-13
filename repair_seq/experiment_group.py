@@ -43,7 +43,7 @@ class ExperimentGroup:
             'genomic_insertion_length_distributions': self.results_dir / 'genomic_insertion_length_distribution.txt',
         }
 
-    def process(self, num_processes=18):
+    def process(self, num_processes=18, verbose=True):
         self.results_dir.mkdir(exist_ok=True, parents=True)
         log_fn = self.results_dir / f'log_{datetime.datetime.now():%y%m%d-%H%M%S}.out'
 
@@ -58,7 +58,8 @@ class ExperimentGroup:
         file_handler.setLevel(logging.INFO)
         logger.addHandler(file_handler)
 
-        print(f'Logging in {log_fn}')
+        if verbose:
+            print(f'Logging in {log_fn}')
 
         with knock_knock.parallel.PoolWithLoggerThread(num_processes, logger) as pool:
             logger.info('Preprocessing')
@@ -82,7 +83,7 @@ class ExperimentGroup:
             for stage in [
                 'align',
                 'categorize',
-                'visualize',
+                #'generate_figures',
             ]:
 
                 logger.info(f'Processing unique sequences, stage {stage}')
@@ -92,7 +93,10 @@ class ExperimentGroup:
         logger.removeHandler(file_handler)
         file_handler.close()
 
+        logger.info('Collecting outcome counts')
         self.make_outcome_counts()
+
+        logger.info('Done')
 
     def make_common_sequences(self):
         ''' Identify all sequences that occur more than once across preprocessed

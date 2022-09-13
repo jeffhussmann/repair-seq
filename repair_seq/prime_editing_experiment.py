@@ -233,7 +233,7 @@ class TwinPrimeExperiment(PrimeEditingExperiment):
                     height = 0.03
                 
                 ax.axvspan(start, end,
-                           y_start + ref_bar_height, y_start + ref_bar_height + height,
+                           y_start, y_start - height,
                            facecolor=colors.get(feature_name, feature.attribute['color']),
                            clip_on=False,
                           )

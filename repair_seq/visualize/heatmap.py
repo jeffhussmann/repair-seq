@@ -1678,8 +1678,7 @@ def pooled_screen_categories(pool,
         grid.add_colorbar()
         
     grid.set_xlim('freq', freq_xlims)
-    grid.axs_by_name['log10_freq'].set_xlim(*log10_freq_xlims)
-
+    grid.set_xlim('log10_freq', log10_freq_xlims)
     grid.set_xlim('log2_fc', log2_fc_xlims)
 
     grid.style_log10_frequency_ax('log10_freq')

@@ -602,7 +602,7 @@ def plot(outcome_order,
              category == 'donor + deletion' or \
              category == 'donor + insertion' or \
              (category == 'intended edit' and subcategory == 'deletion') or \
-             category == 'edit + indel':
+             category == 'edit + deletion':
 
             if category == 'donor':
                 HDR_outcome = HDROutcome.from_string(details)
@@ -626,18 +626,11 @@ def plot(outcome_order,
                 deletion_outcome = None
                 insertion_outcome = HDR_plus_insertion_outcome.insertion_outcome
 
-            elif category == 'edit + indel':
-                if subcategory == 'edit + insertion':
-                    HDR_plus_insertion_outcome = HDRPlusInsertionOutcome.from_string(details).undo_anchor_shift(ti.anchor)
-                    HDR_outcome = HDR_plus_insertion_outcome.HDR_outcome
-                    deletion_outcome = None
-                    insertion_outcome = HDR_plus_insertion_outcome.insertion_outcome
-
-                elif subcategory == 'edit + deletion':
-                    HDR_plus_deletion_outcome = HDRPlusDeletionOutcome.from_string(details).undo_anchor_shift(ti.anchor)
-                    HDR_outcome = HDR_plus_deletion_outcome.HDR_outcome
-                    deletion_outcome = HDR_plus_deletion_outcome.deletion_outcome
-                    insertion_outcome = None
+            elif category == 'edit + deletion':
+                HDR_plus_deletion_outcome = HDRPlusDeletionOutcome.from_string(details).undo_anchor_shift(ti.anchor)
+                HDR_outcome = HDR_plus_deletion_outcome.HDR_outcome
+                deletion_outcome = HDR_plus_deletion_outcome.deletion_outcome
+                insertion_outcome = None
 
             else:
                 raise ValueError
