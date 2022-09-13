@@ -216,9 +216,6 @@ class ExperimentGroup:
         if relevant:
             layout.categorize()
             
-        for k, v in self.diagram_kwargs.items():
-            diagram_kwargs.setdefault(k, v)
-
         diagram = layout.plot(relevant=relevant, **diagram_kwargs)
 
         return diagram

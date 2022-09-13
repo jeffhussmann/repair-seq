@@ -28,32 +28,6 @@ class SingleEndExperiment(knock_knock.experiment.Experiment):
         self.layout_mode = 'amplicon'
 
     @memoized_property
-    def diagram_kwargs(self):
-        features_to_show = copy.deepcopy(self.target_info.features_to_show)
-        # Remove any annotated HAs and replace them with inferred HAs.
-
-        for seq_name, name in sorted(features_to_show):
-            if name.startswith('HA'):
-                features_to_show.remove((seq_name, name))
-                
-        if (self.target_info.donor, self.target_info.donor_specific) in features_to_show:
-            features_to_show.remove((self.target_info.donor, self.target_info.donor_specific))
-            
-        if self.target_info.inferred_HA_features is not None:
-            for k in self.target_info.inferred_HA_features:
-                features_to_show.add(k)
-
-        diagram_kwargs = dict(
-            draw_sequence=True,
-            flip_target=self.target_info.sequencing_direction == '-',
-            highlight_SNPs=True,
-            center_on_primers=True,
-            split_at_indels=True,
-        )
-
-        return diagram_kwargs
-
-    @memoized_property
     def max_relevant_length(self):
         return 600
 

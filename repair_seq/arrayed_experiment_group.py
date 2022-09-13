@@ -356,10 +356,6 @@ class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
     def target_info(self):
         return self.first_experiment.target_info
 
-    @property
-    def diagram_kwargs(self):
-        return self.first_experiment.diagram_kwargs
-
     def common_sequence_chunk_exp_from_name(self, chunk_name):
         chunk_exp = self.CommonSequencesExperimentType(self.base_dir, self.batch, self.group, chunk_name,
                                                        experiment_group=self,
