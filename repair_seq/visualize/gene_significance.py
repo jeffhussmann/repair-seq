@@ -10,6 +10,7 @@ import matplotlib.gridspec
 import bokeh.palettes
 
 from repair_seq import pooled_screen
+import repair_seq.visualize
 from repair_seq.visualize import outcome_diagrams
 from hits import utilities
 
@@ -645,35 +646,8 @@ def gene_significance_simple(pool, outcomes,
                             ha='left',
                             size=10,
                             va='center',
-                            )
-
-
-    letter_xs = defaultdict(list)
-
-    for x, guide in enumerate(df.index):
-        first_letter = guide[0]
-        letter_xs[first_letter].append(x)
-        
-    first_letter_xs = [min(xs) for l, xs in sorted(letter_xs.items())]
-    boundaries = list(np.array(first_letter_xs) - 0.5) + [len(df) - 1 + 0.5]
-    mean_xs = {l: np.mean(xs) for l, xs in letter_xs.items()}
-
-    ax.set_xticks(boundaries[1:-1])
-    ax.set_xticklabels([])
-
-    for l, x in mean_xs.items():
-        if l == 'n':
-            l = 'non-\ntargeting'
-        ax.annotate(l,
-                    xy=(x, 0),
-                    xycoords=('data', 'axes fraction'),
-                    xytext=(0, -18),
-                    textcoords='offset points',
-                    ha='center',
-                    va='center',
-                )
-
-    ax.set_xlim(-0.005 * len(df), len(df))
+                           )
+    repair_seq.visualize.add_alphabetical_x_ticks(ax, df)
 
     if title is None:
         title = pool.group

@@ -1,7 +1,9 @@
 import copy
+from collections import defaultdict
 
 import bokeh.palettes
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 import knock_knock.outcome
@@ -152,3 +154,36 @@ def assign_category_colors(outcomes, target_info):
     category_to_color = category_colors[target_info.effector.name]
     colors = [category_to_color[c] for c in combined_categories]
     return colors
+
+def add_alphabetical_x_ticks(ax, df):
+    ''' Given a DataFrame df whose index is guides in alphabetical order 
+    and an ax that has a column from df plotted on its y-axis, add ticks
+    to partition the x-axis into spans of guides starting with each letter.
+    '''
+    letter_xs = defaultdict(list)
+
+    for x, guide in enumerate(df.index):
+        first_letter = guide[0]
+        letter_xs[first_letter].append(x)
+
+    first_letter_xs = [min(xs) for letter, xs in sorted(letter_xs.items())]
+    boundaries = list(np.array(first_letter_xs) - 0.5) + [len(df) - 1 + 0.5]
+    mean_xs = {letter: np.mean(xs) for letter, xs in letter_xs.items()}
+
+    ax.set_xticks(boundaries[1:-1])
+    ax.set_xticklabels([])
+
+    for letter, x in mean_xs.items():
+        if letter == 'n':
+            letter = 'non-\ntargeting'
+
+        ax.annotate(letter,
+                    xy=(x, 0),
+                    xycoords=('data', 'axes fraction'),
+                    xytext=(0, -18),
+                    textcoords='offset points',
+                    ha='center',
+                    va='center',
+                   )
+
+    ax.set_xlim(-0.001 * len(df), 1.001 * len(df))
