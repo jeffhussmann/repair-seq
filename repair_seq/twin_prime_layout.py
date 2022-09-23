@@ -659,8 +659,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         return self.category, self.subcategory, self.details, self.outcome
 
-    @memoized_property
-    def manual_anchors(self):
+    def manual_anchors(self, alignments_to_plot):
         ''' Anchors for drawing knock-knock ref-centric diagrams with overlap in pegRNA aligned.
         '''
         ti = self.target_info
@@ -679,7 +678,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             for side, expected_strand in [('left', '-'), ('right', '+')]:
                 pegRNA_name = ti.pegRNA_names_by_side_of_read[side]
                 
-                pegRNA_als = [al for al in self.pegRNA_alignments[pegRNA_name] if sam.get_strand(al) == expected_strand]
+                pegRNA_als = [al for al in alignments_to_plot if al.reference_name == pegRNA_name and sam.get_strand(al) == expected_strand]
 
                 if len(pegRNA_als) == 0:
                     continue
@@ -780,7 +779,15 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         if 'refs_to_draw' in manual_diagram_kwargs:
             refs_to_draw.update(manual_diagram_kwargs.pop('refs_to_draw'))
 
-        manual_anchors = manual_diagram_kwargs.get('manual_anchors', self.manual_anchors)
+
+        if manual_alignments is not None:
+            als_to_plot = manual_alignments
+        elif relevant:
+            als_to_plot = self.relevant_alignments
+        else:
+            als_to_plot = self.uncategorized_relevant_alignments
+
+        manual_anchors = manual_diagram_kwargs.get('manual_anchors', self.manual_anchors(als_to_plot))
 
         diagram_kwargs = dict(
             draw_sequence=True,
@@ -798,13 +805,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         )
 
         diagram_kwargs.update(**manual_diagram_kwargs)
-
-        if manual_alignments is not None:
-            als_to_plot = manual_alignments
-        elif relevant:
-            als_to_plot = self.relevant_alignments
-        else:
-            als_to_plot = self.uncategorized_relevant_alignments
 
         diagram = knock_knock.visualize.ReadDiagram(als_to_plot,
                                                     ti,
