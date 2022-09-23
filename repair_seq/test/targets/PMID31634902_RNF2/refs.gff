@@ -1,0 +1,8 @@
+##gff-version 3
+RNF2	.	misc_feature	501	522	.	+	.	ID=reverse_primer;color=%239eafd2
+RNF2	.	sgRNA	596	615	.	+	.	ID=RNF2_3b_%2B67;color=%23c6c9d1;effector=SpCas9H840A
+RNF2	.	sgRNA	622	641	.	+	.	ID=RNF2_3b_%2B41;color=%23c6c9d1;effector=SpCas9H840A
+RNF2	.	sgRNA	622	641	.	+	.	ID=RNF2_4c_%2B41;color=%23c6c9d1;effector=SpCas9H840A
+RNF2	.	misc_feature	699	718	.	-	.	ID=forward_primer;color=%2375C6A9
+RNF2	.	misc_feature	714	718	.	-	.	ID=sequencing_start
+RNF2	.	misc_feature	714	718	.	-	.	ID=anchor

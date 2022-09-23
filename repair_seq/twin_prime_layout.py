@@ -461,7 +461,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         ''' 
 
         ti = self.target_info
-        SNPs = ti.pegRNA_SNVs
+        SNVs = ti.pegRNA_SNVs
         
         positions_seen = {
             'matches': set(),
@@ -473,7 +473,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         ref_seq = ti.reference_sequences[al.reference_name]
 
-        pegRNA_SNP_positions = {SNPs[al.reference_name][name]['position'] for name in SNPs[al.reference_name]}
+        pegRNA_SNP_positions = {SNVs[al.reference_name][name]['position'] for name in SNVs[al.reference_name]}
 
         for true_read_i, read_b, ref_i, ref_b, qual in sam.aligned_tuples(al, ref_seq):
             # Note: read_b and ref_b are as if the read is the forward strand

@@ -1,0 +1,12 @@
+##gff-version 3
+FANCF	.	misc_feature	501	518	.	+	.	ID=reverse_primer;color=%239eafd2
+FANCF	.	sgRNA	502	520	.	+	.	ID=FANCF_3b_%2B48;color=%23c6c9d1;effector=SpCas9H840A
+FANCF	.	sgRNA	502	520	.	+	.	ID=FANCF_4d_%2B48;color=%23c6c9d1;effector=SpCas9H840A
+FANCF	.	sgRNA	528	547	.	+	.	ID=FANCF_3b_%2B21;color=%23c6c9d1;effector=SpCas9H840A
+FANCF	.	sgRNA	567	585	.	+	.	ID=FANCF_3b_-17;color=%23c6c9d1;effector=SpCas9H840A
+FANCF	.	sgRNA	577	595	.	+	.	ID=FANCF_3b_-27;color=%23c6c9d1;effector=SpCas9H840A
+FANCF	.	sgRNA	599	618	.	+	.	ID=FANCF_3b_-50;color=%23c6c9d1;effector=SpCas9H840A
+FANCF	.	sgRNA	628	646	.	+	.	ID=FANCF_3b_-78;color=%23c6c9d1;effector=SpCas9H840A
+FANCF	.	misc_feature	663	682	.	-	.	ID=forward_primer;color=%2375C6A9
+FANCF	.	misc_feature	678	682	.	-	.	ID=sequencing_start
+FANCF	.	misc_feature	678	682	.	-	.	ID=anchor

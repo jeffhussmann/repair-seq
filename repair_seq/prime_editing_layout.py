@@ -8,7 +8,7 @@ from hits import interval, sam, utilities, sw, fastq
 from hits.utilities import memoized_property
 
 import knock_knock.pegRNAs
-from knock_knock.target_info import DegenerateDeletion, DegenerateInsertion, SNV, SNVs
+import knock_knock.target_info
 from knock_knock import layout
 
 from knock_knock.outcome import *
@@ -782,39 +782,50 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def SNVs_summary(self):
-        SNPs = self.target_info.donor_SNVs
-        if SNPs is None:
-            position_to_name = {}
-            donor_SNV_locii = {}
-        else:
-            position_to_name = {SNPs['target'][name]['position']: name for name in SNPs['target']}
-            donor_SNV_locii = {name: [] for name in SNPs['target']}
+        SNVs = self.target_info.pegRNA_SNVs
 
-        non_donor_SNVs = []
+        target = self.target_info.target
+        pegRNA = self.target_info.pegRNA_names[0]
+
+        if SNVs is None:
+            target_position_to_name = {}
+            pegRNA_SNV_locii = {}
+        else:
+            target_position_to_name = {SNVs[target][name]['position']: name for name in SNVs[target]}
+            pegRNA_SNV_locii = {name: [] for name in SNVs[target]}
+
+        non_pegRNA_SNVs = []
 
         for al in self.parsimonious_target_alignments:
             for true_read_i, read_b, ref_i, ref_b, qual in sam.aligned_tuples(al, self.target_info.target_sequence):
-                if ref_i in position_to_name:
-                    name = position_to_name[ref_i]
+                if ref_i in target_position_to_name:
+                    name = target_position_to_name[ref_i]
 
-                    if SNPs['target'][name]['strand'] == '-':
+                    if SNVs[target][name]['strand'] == '-':
                         read_b = utilities.reverse_complement(read_b)
 
-                    donor_SNV_locii[name].append((read_b, qual))
+                    pegRNA_SNV_locii[name].append((read_b, qual))
+                else:
+                    name = None
 
                 if read_b != '-' and ref_b != '-' and read_b != ref_b:
-                    donor_base = self.target_info.simple_donor_SNVs.get((self.target_info.target, ref_i))
-
-                    if donor_base is not None and donor_base == read_b:
-                        # Matches donor SNV.
-                        pass
+                    if name is None:
+                        matches_pegRNA = False
                     else:
-                        snv = SNV(ref_i, read_b, qual)
-                        non_donor_SNVs.append(snv)
+                        pegRNA_base = SNVs[pegRNA][name]['base']
 
-        non_donor_SNVs = SNVs(non_donor_SNVs)
+                        if SNVs[pegRNA][name]['strand'] == '-':
+                            pegRNA_base = utilities.reverse_complement(pegRNA_base)
 
-        return donor_SNV_locii, non_donor_SNVs
+                        matches_pegRNA = (pegRNA_base == read_b)
+
+                    if not matches_pegRNA:
+                        SNV = knock_knock.target_info.SNV(ref_i, read_b, qual)
+                        non_pegRNA_SNVs.append(SNV)
+
+        non_pegRNA_SNVs = knock_knock.target_info.SNVs(non_pegRNA_SNVs)
+
+        return pegRNA_SNV_locii, non_pegRNA_SNVs
 
     @memoized_property
     def non_pegRNA_SNVs(self):
@@ -847,37 +858,48 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def pegRNA_SNV_locii_summary(self):
-        SNPs = self.target_info.donor_SNVs
-        donor_SNV_locii, _ = self.SNVs_summary
-        
-        genotype = {}
+        SNVs = self.target_info.pegRNA_SNVs
+        if SNVs is None:
+            has_pegRNA_SNV = False
+            string_summary = ''
+        else:
+            pegRNA_SNV_locii, _ = self.SNVs_summary
 
-        has_donor_SNV = False
+            target = self.target_info.target
+            pegRNA = self.target_info.pegRNA_names[0]
+            
+            genotype = {}
 
-        for name in sorted(SNPs['target']):
-            bs = defaultdict(list)
+            has_pegRNA_SNV = False
 
-            for b, q in donor_SNV_locii[name]:
-                bs[b].append(q)
+            for name in sorted(SNVs[target]):
+                bs = defaultdict(list)
 
-            if len(bs) == 0:
-                genotype[name] = '-'
-            elif len(bs) != 1:
-                genotype[name] = 'N'
-            else:
-                b, qs = list(bs.items())[0]
+                for b, q in pegRNA_SNV_locii[name]:
+                    bs[b].append(q)
 
-                if b == SNPs['target'][name]['base']:
-                    genotype[name] = '_'
+                if len(bs) == 0:
+                    genotype[name] = '-'
+                elif len(bs) != 1:
+                    genotype[name] = 'N'
                 else:
-                    genotype[name] = b
-                
-                    if b == SNPs['donor'][name]['base']:
-                        has_donor_SNV = True
+                    b, qs = list(bs.items())[0]
 
-        string_summary = ''.join(genotype[name] for name in sorted(SNPs['target']))
+                    if b == SNVs[target][name]['base']:
+                        genotype[name] = '_'
+                    else:
+                        genotype[name] = b
 
-        return has_donor_SNV, string_summary
+                        pegRNA_base = SNVs[pegRNA][name]['base']
+                        if SNVs[pegRNA][name]['strand'] == '-':
+                            pegRNA_base = utilities.reverse_complement(pegRNA_base)
+                    
+                        if b == pegRNA_base:
+                            has_pegRNA_SNV = True
+
+            string_summary = ''.join(genotype[name] for name in sorted(SNVs[target]))
+
+        return has_pegRNA_SNV, string_summary
 
     @memoized_property
     def has_pegRNA_SNV(self):
@@ -896,10 +918,6 @@ class Layout(layout.Categorizer):
     @memoized_property
     def indels(self):
         return self.extract_indels_from_alignments(self.parsimonious_target_alignments)
-
-    @memoized_property
-    def one_base_deletions(self):
-        return [indel for indel, near_cut in self.indels if indel.kind == 'D' and indel.length == 1]
 
     def alignment_scaffold_overlap(self, al):
         ti = self.target_info
@@ -980,7 +998,7 @@ class Layout(layout.Categorizer):
 
                     indel_interval = interval.Interval(starts_at, ends_at)
 
-                    indel = DegenerateDeletion([starts_at], length)
+                    indel = knock_knock.target_info.DegenerateDeletion([starts_at], length)
 
                 elif cigar_op == sam.BAM_CINS:
                     ref_nucs_before = sam.total_reference_nucs(al.cigar[:i])
@@ -991,7 +1009,7 @@ class Layout(layout.Categorizer):
                     read_nucs_before = sam.total_read_nucs(al.cigar[:i])
                     insertion = al.query_sequence[read_nucs_before:read_nucs_before + length]
 
-                    indel = DegenerateInsertion([starts_after], [insertion])
+                    indel = knock_knock.target_info.DegenerateInsertion([starts_after], [insertion])
                     
                 else:
                     continue
