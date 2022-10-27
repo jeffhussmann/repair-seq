@@ -1124,16 +1124,6 @@ class PooledScreen:
 
         self.min_reads_per_UMI = self.sample_sheet.get('min_reads_per_UMI', 4)
 
-        self.variable_guide_library = guide_library.GuideLibrary(self.base_dir, self.sample_sheet['variable_guide_library'])
-        self.variable_guides = self.variable_guide_library.guides
-
-        if 'fixed_guide_library' in self.sample_sheet:
-            self.fixed_guide_library = guide_library.GuideLibrary(self.base_dir, self.sample_sheet['fixed_guide_library'])
-        else:
-            self.fixed_guide_library = guide_library.dummy_guide_library
-
-        self.fixed_guides = self.fixed_guide_library.guides
-
         self.use_guide_specific_target_info = self.sample_sheet.get('use_guide_specific_target_info', True)
 
         self.fns = {
@@ -1180,6 +1170,25 @@ class PooledScreen:
 
     def __repr__(self):
         return f'{type(self).__name__}: {self.name} (base_dir={self.base_dir})'
+
+    @memoized_property
+    def variable_guide_library(self):
+        return guide_library.GuideLibrary(self.base_dir, self.sample_sheet['variable_guide_library'])
+
+    @memoized_property
+    def variable_guides(self):
+        return self.variable_guide_library.guides
+
+    @memoized_property
+    def fixed_guide_library(self):
+        if 'fixed_guide_library' in self.sample_sheet:
+            return guide_library.GuideLibrary(self.base_dir, self.sample_sheet['fixed_guide_library'])
+        else:
+            return guide_library.dummy_guide_library
+
+    @memoized_property
+    def fixed_guides(self):
+        return self.fixed_guide_library.guides
 
     @memoized_property
     def supplemental_indices(self):
