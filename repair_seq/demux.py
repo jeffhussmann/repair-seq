@@ -83,6 +83,9 @@ def load_SRA_pool_sample_sheet(screen_name):
         sample_sheet['quartets'][SRR_accession] = {which: f'{SRR_accession}_{which[-1]}' for which in ['R1', 'R2']}
         sample_sheet['quartets'][SRR_accession]['num_reads'] = num_reads
 
+    sample_sheet['R1_primer'] = 'forward_primer'
+    sample_sheet['R2_primer'] = 'reverse_primer'
+
     return sample_sheet
 
 def write_SRA_pool_sample_sheet(base_dir, screen_name):
@@ -569,7 +572,6 @@ def demux_group(base_dir, group, debug=False, reads_per_chunk=int(5e6), from_SRA
             if not chunk_result.successful():
                 print(chunk_result.get())
                 
-
         demux_pool.close()
                 
         demux_pool.join()

@@ -75,7 +75,7 @@ if __name__ == '__main__':
 
     initial_setup_subparser = SRA_subparsers.add_parser('initial_setup',
                                                         help='Perform intial setup of metadata and reference genomes.',
-                                                    )
+                                                       )
     add_base_dir_arg(initial_setup_subparser)
     add_num_processes_arg(initial_setup_subparser)
 

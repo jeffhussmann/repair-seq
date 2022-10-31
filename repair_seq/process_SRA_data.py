@@ -30,27 +30,22 @@ def install_metadata(base_dir):
     logging.info(f'Metadata installed in {base_dir}')
 
 def build_targets(base_dir, num_processes):
-    logging.info(f'Building guide-specific targets in {base_dir}')
-
     SRA_sample_sheet = repair_seq.demux.load_SRA_sample_sheet()
 
-    guide_library_names = SRA_sample_sheet['variable_guide_library'].unique()
+    pairs_to_build = set(zip(SRA_sample_sheet['variable_guide_library'], SRA_sample_sheet['target_info_prefix']))
 
-    target_info_prefixes = SRA_sample_sheet['target_info_prefix'].unique()
-    if len(target_info_prefixes) != 1:
-        raise ValueError(target_info_prefixes)
+    for variable_guide_library, target_info_prefix in pairs_to_build:
+        logging.info(f'Building guide-specific targets in {base_dir} for {target_info_prefix} {variable_guide_library}')
 
-    target_info_prefix = target_info_prefixes[0]
+        original_target = target_info_prefix
+        original_genbank_name = target_info_prefix
 
-    original_target = target_info_prefix
-    original_genbank_name = target_info_prefix
-
-    repair_seq.build_guide_specific_targets.build_all_singles(base_dir,
-                                                              original_target,
-                                                              original_genbank_name,
-                                                              guide_library_names,
-                                                              num_processes=num_processes,
-                                                             )
+        repair_seq.build_guide_specific_targets.build_all_singles(base_dir,
+                                                                  original_target,
+                                                                  original_genbank_name,
+                                                                  [variable_guide_library],
+                                                                  num_processes=num_processes,
+                                                                 )
 
 def download_and_build_indices(base_dir, num_processes):
     for genome_name in ['hg19', 'bosTau7']:

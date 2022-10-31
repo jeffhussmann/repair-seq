@@ -1,5 +1,6 @@
 import argparse
 import gzip
+import logging
 import multiprocessing
 import itertools
 import shutil
@@ -18,17 +19,12 @@ import knock_knock.target_info
 import repair_seq.guide_library
 import repair_seq.pooled_screen
 import repair_seq.guide_library
-import repair_seq.collapse
+import repair_seq.demux
 
-def load_sample_sheet(base_dir, batch):
-    sample_sheet_fn = Path(base_dir) / 'data' / batch / 'gDNA_sample_sheet.yaml'
-    sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
+from repair_seq.annotations import Annotations
 
-    pool_details = load_pool_details(base_dir, batch)
-    if pool_details is not None:
-        sample_sheet['pool_details'] = pool_details
-
-    data_dir = base_dir / 'data' / batch 
+def get_R1_read_length(base_dir, batch, sample_sheet):
+    data_dir = Path(base_dir) / 'data' / batch 
 
     R1_fns = [(data_dir / d['R1']).with_suffix('.fastq.gz') for d in sample_sheet['quartets'].values()]
     R1_lengths = {fastq.get_read_length(R1_fn) for R1_fn in R1_fns}
@@ -37,7 +33,15 @@ def load_sample_sheet(base_dir, batch):
     else:
         R1_length = R1_lengths.pop()
 
-    sample_sheet['R1_read_length'] = R1_length
+    return R1_length
+
+def load_sample_sheet(base_dir, batch):
+    sample_sheet_fn = Path(base_dir) / 'data' / batch / 'gDNA_sample_sheet.yaml'
+    sample_sheet = yaml.safe_load(sample_sheet_fn.read_text())
+
+    pool_details = load_pool_details(base_dir, batch)
+    if pool_details is not None:
+        sample_sheet['pool_details'] = pool_details
 
     return sample_sheet
 
@@ -91,11 +95,8 @@ def make_pool_sample_sheets(base_dir, batch):
 
     return sample_sheet['pool_details']
 
-def chunk_number_to_string(chunk_number):
-    return f'{chunk_number:06d}'
-
 class FastqChunker:
-    def __init__(self, base_dir, batch, quartet_name, which, reads_per_chunk=None, queue=None, debug=False):
+    def __init__(self, base_dir, batch, quartet_name, which, reads_per_chunk=None, queue=None, debug=False, from_SRA=False):
         self.base_dir = Path(base_dir)
         self.batch = batch
         self.quartet_name = quartet_name
@@ -104,7 +105,11 @@ class FastqChunker:
         self.queue = queue
         self.debug = debug
         
-        sample_sheet = load_sample_sheet(self.base_dir, self.batch)
+        if from_SRA:
+            sample_sheet = repair_seq.demux.load_SRA_pool_sample_sheet(self.batch)
+        else:
+            sample_sheet = load_sample_sheet(self.base_dir, self.group)
+
         quartet = sample_sheet['quartets'][quartet_name]
         
         self.fn_name = quartet[self.which]
@@ -128,7 +133,7 @@ class FastqChunker:
             self.current_chunk_number += 1
             
     def get_chunk_fn(self, chunk_number):
-        chunk_string = chunk_number_to_string(chunk_number)
+        chunk_string = repair_seq.demux.chunk_number_to_string(chunk_number)
         next_fn = self.chunks_dir / f'{self.fn_name}_{chunk_string}.fastq.gz'
         return next_fn
             
@@ -142,7 +147,7 @@ class FastqChunker:
         line_groups = fastq.get_line_groups(self.input_fn)
 
         if self.debug:
-            line_groups = itertools.islice(line_groups, int(5e6))
+            line_groups = itertools.islice(line_groups, int(1e6))
         
         for read_number, line_group in enumerate(line_groups):
             if read_number % self.reads_per_chunk == 0:
@@ -156,13 +161,17 @@ class FastqChunker:
         self.queue.put(('chunk', self.quartet_name, self.which, 'DONE'))
 
 class Writers:
-    def __init__(self, base_dir, batch, quartet_name, chunk_number):
+    def __init__(self, base_dir, batch, quartet_name, chunk_number, from_SRA):
         self.base_dir = Path(base_dir)
         
-        sample_sheet = load_sample_sheet(base_dir, batch)
-        self.batch = sample_sheet['group_name']
+        self.from_SRA = from_SRA
+        if from_SRA:
+            self.batch = batch
+        else:
+            sample_sheet = load_sample_sheet(base_dir, batch)
+            self.batch = sample_sheet['group_name']
         
-        self.chunk_string = f'{quartet_name}_{chunk_number_to_string(chunk_number)}'
+        self.chunk_string = f'{quartet_name}_{repair_seq.demux.chunk_number_to_string(chunk_number)}'
 
         self.writers = defaultdict(list)
 
@@ -174,7 +183,11 @@ class Writers:
 
         for sample, fixed_guide, variable_guide in sorted(self.writers):
             if sample not in pools:
-                pool_name = f'{self.batch}_{sample}'
+                if self.from_SRA:
+                    pool_name = self.batch
+                else:
+                    pool_name = f'{self.batch}_{sample}'
+                
                 pool = repair_seq.pooled_screen.PooledScreenNoUMI(self.base_dir, pool_name)
                 pools[sample] = pool
 
@@ -196,35 +209,38 @@ class Writers:
             del self.writers[sample, fixed_guide, variable_guide]
             del sorted_reads
                 
-def split_into_chunks(base_dir, group, quartet_name, which, reads_per_chunk, queue, debug):
-    chunker = FastqChunker(base_dir, group, quartet_name, which, reads_per_chunk, queue, debug)
+def split_into_chunks(base_dir, group, quartet_name, which, reads_per_chunk, queue, debug, from_SRA):
+    chunker = FastqChunker(base_dir, group, quartet_name, which, reads_per_chunk, queue, debug, from_SRA)
     return chunker.split_into_chunks()
 
-def get_resolvers(base_dir, group):
-    sample_sheet = load_sample_sheet(base_dir, group)
-
+def get_resolvers(base_dir, group, from_SRA):
     expected_seqs = {}
     resolvers = {}
 
-    I7_indices = {name: details['I7_index'] for name, details in sample_sheet['pool_details'].items()}
-    I5_indices = {name: details['I5_index'] for name, details in sample_sheet['pool_details'].items()}
+    if from_SRA:
+        sample_sheet = repair_seq.demux.load_SRA_pool_sample_sheet(group)
+    else:
+        sample_sheet = load_sample_sheet(base_dir, group)
 
-    expected_I7_indices = set()
-    for seqs in I7_indices.values():
-        if not isinstance(seqs, list):
-            seqs = [seqs]
-        expected_I7_indices.update(seqs)
+        I7_indices = {name: details['I7_index'] for name, details in sample_sheet['pool_details'].items()}
+        I5_indices = {name: details['I5_index'] for name, details in sample_sheet['pool_details'].items()}
 
-    expected_I5_indices = set()
-    for seqs in I5_indices.values():
-        if not isinstance(seqs, list):
-            seqs = [seqs]
-        expected_I5_indices.update(seqs)
+        expected_I7_indices = set()
+        for seqs in I7_indices.values():
+            if not isinstance(seqs, list):
+                seqs = [seqs]
+            expected_I7_indices.update(seqs)
 
-    expected_seqs['I7'] = expected_I7_indices
-    expected_seqs['I5'] = expected_I5_indices
-    resolvers['I7'] = utilities.get_one_mismatch_resolver(I7_indices).get
-    resolvers['I5'] = utilities.get_one_mismatch_resolver(I5_indices).get
+        expected_I5_indices = set()
+        for seqs in I5_indices.values():
+            if not isinstance(seqs, list):
+                seqs = [seqs]
+            expected_I5_indices.update(seqs)
+
+        expected_seqs['I7'] = expected_I7_indices
+        expected_seqs['I5'] = expected_I5_indices
+        resolvers['I7'] = utilities.get_one_mismatch_resolver(I7_indices).get
+        resolvers['I5'] = utilities.get_one_mismatch_resolver(I5_indices).get
 
     variable_guide_library = repair_seq.guide_library.GuideLibrary(base_dir, sample_sheet['variable_guide_library'])
 
@@ -232,6 +248,8 @@ def get_resolvers(base_dir, group):
 
     guide_seqs = {}
     guide_seqs['variable_guide'] = defaultdict(set)
+
+    R1_read_length = get_R1_read_length(base_dir, group, sample_sheet)
 
     if 'fixed_guide_library' in sample_sheet:
         has_fixed_barcode = True
@@ -255,7 +273,7 @@ def get_resolvers(base_dir, group):
         
         target_seq = ti.reference_sequences[ti.target]
         
-        expected_R1 = target_seq[R1_primer.start:R1_primer.start + sample_sheet['R1_read_length']]
+        expected_R1 = target_seq[R1_primer.start:R1_primer.start + R1_read_length]
         guide_seqs['variable_guide'][vg].add(expected_R1)
         
         if fg != 'none':
@@ -309,16 +327,74 @@ def get_resolvers(base_dir, group):
 
     return resolvers, expected_seqs, guide_barcode_slice, after_guide_barcode_slice
 
+def demux_chunk_from_SRA(base_dir, screen_name, quartet_name, chunk_number, queue):
+    resolvers, expected_seqs, guide_barcode_slice, after_guide_barcode_slice = get_resolvers(base_dir, screen_name, from_SRA=True)
+
+    Annotation = Annotations['R2_with_guide']
+    
+    fastq_fns = [FastqChunker(base_dir, screen_name, quartet_name, which, from_SRA=True).get_chunk_fn(chunk_number) for which in ['R1', 'R2']]
+
+    writers = Writers(base_dir, screen_name, quartet_name, chunk_number, from_SRA=True)
+
+    counts = defaultdict(Counter)
+
+    for R1, R2 in fastq.read_pairs(*fastq_fns, up_to_space=True):
+        if R1.name != R2.name:
+            raise ValueError('read pair out of sync')
+
+        sample = screen_name
+
+        variable_guides = resolvers['variable_guide'](R1.seq, 'unknown')
+        if len(variable_guides) == 1:
+            variable_guide = next(iter(variable_guides))
+        else:
+            variable_guide = 'unknown'
+
+        fixed_guide = 'none'
+
+        counts['fixed_guide_barcode'][''] += 1
+
+        counts['id'][sample, fixed_guide, variable_guide] += 1
+
+        if 'unknown' in {sample, variable_guide}:
+            continue
+
+        query_name = R1.name
+        guide_seq = R1.seq
+        guide_qual = fastq.sanitize_qual(R1.qual)
+
+        annotation = Annotation(query_name=query_name,
+                                guide=guide_seq,
+                                guide_qual=guide_qual,
+                               )
+        R2.name = str(annotation)
+
+        writers[sample, fixed_guide, variable_guide].append(R2[after_guide_barcode_slice])
+
+    writers.write()
+
+    chunk_dir = base_dir / 'data' / screen_name / 'gDNA_chunks'
+    for k, cs in counts.items():
+        cs = pd.Series(cs).sort_values(ascending=False)
+        fn = chunk_dir / f'{k}_{quartet_name}_{repair_seq.demux.chunk_number_to_string(chunk_number)}.txt'
+        cs.to_csv(fn, sep='\t', header=False)
+
+    # Delete the chunk.
+    for fastq_fn in fastq_fns:
+        fastq_fn.unlink()
+
+    queue.put(('demux', quartet_name, chunk_number))
+
 def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
     resolvers, expected_seqs, guide_barcode_slice, after_guide_barcode_slice = get_resolvers(base_dir, group)
     
     fastq_fns = [FastqChunker(base_dir, group, quartet_name, which).get_chunk_fn(chunk_number) for which in fastq.quartet_order]
 
-    writers = Writers(base_dir, group, quartet_name, chunk_number)
+    writers = Writers(base_dir, group, quartet_name, chunk_number, from_SRA=False)
 
     counts = defaultdict(Counter)
 
-    Annotation = repair_seq.collapse.Annotations['R2_with_guide']
+    Annotation = Annotations['R2_with_guide']
 
     for quartet in fastq.read_quartets(fastq_fns, standardize_names=True):
         if len({r.name for r in quartet}) != 1:
@@ -359,7 +435,6 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
 
         counts['id'][sample, fixed_guide, variable_guide] += 1
 
-        # Retain quartets with an unknown fixed guide to allow detection of weird ligations.
         if 'unknown' in {sample, variable_guide}:
             continue
 
@@ -380,7 +455,7 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
     chunk_dir = base_dir / 'data' / group / 'gDNA_chunks'
     for k, cs in counts.items():
         cs = pd.Series(cs).sort_values(ascending=False)
-        fn = chunk_dir / f'{k}_{quartet_name}_{chunk_number_to_string(chunk_number)}.txt'
+        fn = chunk_dir / f'{k}_{quartet_name}_{repair_seq.demux.chunk_number_to_string(chunk_number)}.txt'
         cs.to_csv(fn, sep='\t', header=False)
 
     # Delete the chunk.
@@ -389,7 +464,7 @@ def demux_chunk(base_dir, group, quartet_name, chunk_number, queue):
 
     queue.put(('demux', quartet_name, chunk_number))
 
-def merge_seq_counts(base_dir, group, k):
+def merge_seq_counts(base_dir, group, k, from_SRA):
     chunk_dir = Path(base_dir) / 'data' / group / 'gDNA_chunks'
     # Note: glob returns generator, need to make into list
     # so it can be re-used for cleanup.
@@ -403,7 +478,7 @@ def merge_seq_counts(base_dir, group, k):
 
     merged_fn = Path(base_dir) / 'data' / group / f'{k}_stats.txt'
 
-    resolvers, expected_seqs, *_ = get_resolvers(base_dir, group)
+    resolvers, expected_seqs, *_ = get_resolvers(base_dir, group, from_SRA)
     resolver = resolvers[k]
     expected_seqs = expected_seqs[k]
 
@@ -449,24 +524,32 @@ def merge_ids(base_dir, group):
 
     for fn in count_fns:
         fn.unlink()
-    
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    parser.add_argument('base_dir', type=Path, default=Path.home() / 'projects' / 'repair_seq')
-    parser.add_argument('batch')
-    parser.add_argument('--debug', action='store_true')
 
-    args = parser.parse_args()
-    base_dir = args.base_dir
-    batch = args.batch
-    debug = args.debug
-    
-    pool_details = make_pool_sample_sheets(base_dir, batch)
+def demux_group(base_dir,
+                batch,
+                debug=False,
+                reads_per_chunk=int(5e6),
+                from_SRA=False,
+                just_chunk=False,
+               ):
 
-    sample_sheet = load_sample_sheet(base_dir, batch)
-    
+    logging.info(f'Demultiplexing {batch} in {base_dir}')
+
+    if from_SRA:
+        repair_seq.demux.write_SRA_pool_sample_sheet(base_dir, batch)
+        sample_sheet = repair_seq.demux.load_SRA_pool_sample_sheet(batch)
+        relevant_read_types = ['R1', 'R2']
+        demux_chunk_function = demux_chunk_from_SRA
+    else:
+        make_pool_sample_sheets(base_dir, batch)
+        sample_sheet = load_sample_sheet(base_dir, batch)
+        relevant_read_types = fastq.quartet_order
+        demux_chunk_function = demux_chunk
+
     quartet_names = sorted(sample_sheet['quartets'])
-    reads_per_chunk = int(5e6)
+
+    if debug:
+        reads_per_chunk = int(5e5)
 
     chunks_per_quartet = [int(np.ceil(d['num_reads'] / reads_per_chunk)) for q, d in sample_sheet['quartets'].items()]
     total_chunks = sum(chunks_per_quartet)
@@ -489,8 +572,8 @@ if __name__ == '__main__':
         unfinished_chunkers = set()
         
         for quartet_name in quartet_names:
-            for which in fastq.quartet_order:
-                args = (base_dir, batch, quartet_name, which, reads_per_chunk, tasks_done_queue, debug)
+            for which in relevant_read_types:
+                args = (base_dir, batch, quartet_name, which, reads_per_chunk, tasks_done_queue, debug, from_SRA)
                 chunk_result = chunk_pool.apply_async(split_into_chunks, args)
                 if debug:
                     print(chunk_result.get())
@@ -512,25 +595,31 @@ if __name__ == '__main__':
                         break
                 else:
                     chunks_done[quartet_name, chunk_number].add(which)
-                    if chunks_done[quartet_name, chunk_number] == set(fastq.quartet_order):
+                    if chunks_done[quartet_name, chunk_number] == set(relevant_read_types):
                         chunk_progress.update()
                         
-                        args = (base_dir, batch, quartet_name, chunk_number, tasks_done_queue)
-                        demux_result = demux_pool.apply_async(demux_chunk, args)
-                        if debug:
-                            print(demux_result.get())
-                        demux_results.append(demux_result)
+                        if not just_chunk:
+                            args = (base_dir, batch, quartet_name, chunk_number, tasks_done_queue)
+                            demux_result = demux_pool.apply_async(demux_chunk_function, args)
+
+                            if debug:
+                                result = demux_result.get()
+                                if not demux_result.successful():
+                                    print(result)
+
+                            demux_results.append(demux_result)
 
             elif task_type == 'demux':
                 demux_progress.update()
 
-        while demux_progress.n < chunk_progress.n:
-            task_type, *task_info = tasks_done_queue.get()
-            if task_type == 'demux':
-                demux_progress.update()
-            else:
-                error, = task_info
-                raise error
+        if not just_chunk:
+            while demux_progress.n < chunk_progress.n:
+                task_type, *task_info = tasks_done_queue.get()
+                if task_type == 'demux':
+                    demux_progress.update()
+                else:
+                    error, = task_info
+                    raise error
         
         chunk_pool.join()
         for chunk_result in chunk_results:
@@ -545,27 +634,33 @@ if __name__ == '__main__':
                 print(demux_result.get())
 
     chunk_progress.close()
-    demux_progress.close()
 
-    print('Merging statistics...')
+    if not just_chunk:
+        demux_progress.close()
 
-    merge_pool = multiprocessing.Pool(processes=3)
-    merge_results = []
-    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'I5')))
-    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'I7')))
-    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'variable_guide')))
-    merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'fixed_guide_barcode')))
-    merge_results.append(merge_pool.apply_async(merge_ids, args=(base_dir, batch)))
+        logging.info('Merging statistics...')
 
-    merge_pool.close()
-    merge_pool.join()
+        merge_pool = multiprocessing.Pool(processes=3)
+        merge_results = []
 
-    for merge_result in merge_results:
-        if not merge_result.successful():
-            print(merge_result.get())
+        if not from_SRA:
+            merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'I5', from_SRA)))
+            merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'I7', from_SRA)))
+            merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'variable_guide', from_SRA)))
+            if 'fixed_guide_library' in sample_sheet:
+                merge_results.append(merge_pool.apply_async(merge_seq_counts, args=(base_dir, batch, 'fixed_guide_barcode', from_SRA)))
 
-    chunk_dir = base_dir / 'data' / batch / 'gDNA_chunks'
-    shutil.rmtree(str(chunk_dir))
+        merge_results.append(merge_pool.apply_async(merge_ids, args=(base_dir, batch)))
+
+        merge_pool.close()
+        merge_pool.join()
+
+        for merge_result in merge_results:
+            if not merge_result.successful():
+                print(merge_result.get())
+
+        chunk_dir = base_dir / 'data' / batch / 'gDNA_chunks'
+        shutil.rmtree(str(chunk_dir))
 
     merged_fn = Path(base_dir) / 'data' / batch / 'id_stats.txt'
     id_counts = pd.read_csv(merged_fn,
@@ -575,9 +670,31 @@ if __name__ == '__main__':
                             index_col=[0, 1, 2],
                            ).squeeze()
 
-    for pool_name in pool_details:
-        if pool_name in id_counts:
-            full_pool_name = f"{sample_sheet['group_name']}_{pool_name}"
-            pool = repair_seq.pooled_screen.PooledScreen(base_dir, full_pool_name)
-            counts = id_counts.loc[pool_name].sort_values(ascending=False)
-            counts.to_csv(pool.fns['read_counts'], sep='\t', header=True)
+    if not from_SRA:
+        pool_details = make_pool_sample_sheets(base_dir, batch)
+
+        for pool_name in pool_details:
+            if pool_name in id_counts:
+                full_pool_name = f"{sample_sheet['group_name']}_{pool_name}"
+                pool = repair_seq.pooled_screen.PooledScreen(base_dir, full_pool_name)
+                counts = id_counts.loc[pool_name].sort_values(ascending=False)
+                counts.to_csv(pool.fns['read_counts'], sep='\t', header=True)
+    
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('base_dir', type=Path, default=Path.home() / 'projects' / 'repair_seq')
+    parser.add_argument('batch')
+    parser.add_argument('--debug', action='store_true')
+    parser.add_argument('--from_SRA', action='store_true')
+    parser.add_argument('--just_chunk', action='store_true')
+    parser.add_argument('--reads_per_chunk', type=int, default=int(5e6))
+
+    args = parser.parse_args()
+    
+    demux_group(args.base_dir,
+                args.batch,
+                debug=args.debug,
+                from_SRA=args.from_SRA,
+                reads_per_chunk=args.reads_per_chunk,
+                just_chunk=args.just_chunk,
+               )
