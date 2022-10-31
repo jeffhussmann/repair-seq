@@ -1,8 +1,7 @@
 experiment_type: prime_editing
 target_info: PMID31634902_FANCF
 target_info_kwargs:
-  pegRNAs: FANCF_4h_1AtoC_6GtoT
-  sgRNA: FANCF_4d_+48
+  sgRNAs: FANCF_4h_1AtoC_6GtoT;FANCF_4d_+48
 expected_values:
   010288015:0000000009:
     category: wild type

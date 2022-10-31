@@ -1,7 +1,7 @@
 experiment_type: prime_editing_layout
 target_info: pPC1000
 target_info_kwargs:
-  pegRNAs: pPC1044
+  sgRNAs: pPC1044
   primer_names: gDNA_forward_primer;gDNA_reverse_primer
 expected_values:
   01:01101:001334:030577_:
@@ -52,10 +52,6 @@ expected_values:
     category: duplication
     subcategory: simple
     note: at one point, incorrectly called unintended rejoining
-  01:01145:015275:010942_:
-    category: edit + duplication
-    subcategory: simple
-    note: pegRNA alignment reaches the edge of the read before switching back to target
   01:01107:024469:001783_:
     category: edit + duplication
     subcategory: simple

@@ -211,10 +211,9 @@ def build_arrayed_group_read_set(set_name):
     # Experiments may specify specialized values for some target_info
     # parameters that need to be passed along.
     possible_target_info_kwargs_keys = [
-        'pegRNAs',
+        'sgRNAs',
         'sequencing_start_feature_name',
         'primer_names',
-        'sgRNA',
     ]
 
     target_info_kwargs = {

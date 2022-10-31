@@ -1,7 +1,7 @@
 experiment_type: twin_prime
 target_info: PMID34887556_AAVS1-1651+1652
 target_info_kwargs:
-  pegRNAs: AAVS1_A1246c;AAVS1_B1376a
+  sgRNAs: AAVS1_A1246c;AAVS1_B1376a
 expected_values:
   017172022:0000000002:
     category: intended edit
@@ -9,8 +9,8 @@ expected_values:
     note: n/a
   017172022:0000000009:
     category: intended edit
-    subcategory: partial replacement
-    note: single retained genomic nt in the middle
+    subcategory: replacement
+    note: single mismatch in overlap
   017172022:0000000010:
     category: wild type
     subcategory: clean

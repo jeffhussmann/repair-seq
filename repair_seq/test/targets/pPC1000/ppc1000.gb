@@ -1,178 +1,191 @@
-LOCUS       pPC1000                 9181 bp ds-DNA     circular     16-MAR-2022
+LOCUS       pPC1000                 9181 bp ds-DNA     circular     31-OCT-2022
 DEFINITION  .
-ACCESSION   urn.local...8z-b611tk4                                             
-VERSION     urn.local...8z-b611tk4                                             
+ACCESSION   urn.local...8z-b611tk4
+VERSION     urn.local...8z-b611tk4
+COMMENT     Imported using the Genbank importer. File name: ppc1000.gb
 FEATURES             Location/Qualifiers
-     promoter                            263..826
-                                         /label="5' CMV promoter"
-                                         /ApEinfo_revcolor=#c7b0e3
-                                         /ApEinfo_fwdcolor=#c7b0e3
-     primer_bind                         781..801
-                                         /label="BP0002 (CMV-For)"
-                                         /ApEinfo_revcolor=#b1ff67
-                                         /ApEinfo_fwdcolor=#b1ff67
-     LTR                                 844..1024
-                                         /label="HIV-1 LTR 5'"
-                                         /ApEinfo_revcolor=#b7e6d7
-                                         /ApEinfo_fwdcolor=#b7e6d7
-     misc_feature                        1126..1170
-                                         /label="HIV-1_psi_pack"
-                                         /ApEinfo_revcolor=#9eafd2
-                                         /ApEinfo_fwdcolor=#9eafd2
-     misc_feature                        1695..1928
-                                         /label="HIV-1 RRE"
-                                         /ApEinfo_revcolor=#ff9ccd
-                                         /ApEinfo_fwdcolor=#ff9ccd
-     misc_feature                        2450..2473
-                                         /label="HIV-1 cPPT"
-                                         /ApEinfo_revcolor=#faac61
-                                         /ApEinfo_fwdcolor=#faac61
-     promoter                            2631..2944
-                                         /label="mouse U6 promoter - modified"
-                                         /ApEinfo_revcolor=#b4abac
-                                         /ApEinfo_fwdcolor=#b4abac
-     misc_feature                        2856..2861
-                                         /label="mU6 TATA box"
-                                         /ApEinfo_revcolor=#f8d3a9
-                                         /ApEinfo_fwdcolor=#f8d3a9
-     misc_feature                        2921..2944
-                                         /label="gDNA_forward_primer"
-                                         /ApEinfo_revcolor=#faac61
-                                         /ApEinfo_fwdcolor=#faac61
-     misc_feature                        2945..2964
-                                         /label="protospacer"
-                                         /ApEinfo_revcolor=#ffef86
-                                         /ApEinfo_fwdcolor=#ffef86
-     misc_feature                        2965..3050
-                                         /label="sgRNA constant region E+F"
-                                         /ApEinfo_revcolor=#b1ff67
-                                         /ApEinfo_fwdcolor=#b1ff67
-     misc_feature                        3051..3056
-                                         /label="polyT-track"
-                                         /ApEinfo_revcolor=#d6b295
-                                         /ApEinfo_fwdcolor=#d6b295
-     misc_feature                        3057..3057
-                                         /label="anchor"
-                                         /ApEinfo_revcolor=#b7e6d7
-                                         /ApEinfo_fwdcolor=#b7e6d7
-     misc_feature                        3063..3068
-                                         /label="arrayed_sequencing_start"
-                                         /ApEinfo_revcolor=#b1ff67
-                                         /ApEinfo_fwdcolor=#b1ff67
-     misc_feature                        3063..3089
-                                         /label="forward_primer"
-                                         /ApEinfo_revcolor=#75c6a9
-                                         /ApEinfo_fwdcolor=#75c6a9
-     primer                              3063..3089
-                                         /label="PC1014"
-                                         /note="sequence: ACACTCTTTCCCTACACGACGCTCTTCCGATCTNNNNNGCCTTTAGTGATGGCCTGGCTCACCTG"
-                                         /ApEinfo_revcolor=#f58a5e
-                                         /ApEinfo_fwdcolor=#f58a5e
-     sgRNA_SaCas9H840A                   complement(3152..3173)
-                                         /label="SaCas9 target 2"
-                                         /ApEinfo_revcolor=#c7b0e3
-                                         /ApEinfo_fwdcolor=#c7b0e3
-     misc_feature                        3186..3207
-                                         /label="SaCas9 target 1"
-                                         /ApEinfo_revcolor=#75c6a9
-                                         /ApEinfo_fwdcolor=#75c6a9
-     misc_feature                        3205..3219
-                                         /label="HA_RT_G6_15"
-                                         /ApEinfo_revcolor=#f8d3a9
-                                         /ApEinfo_fwdcolor=#f8d3a9
-     misc_feature                        3205..3220
-                                         /label="HA_RT_G6C_16"
-                                         /ApEinfo_revcolor=#f8d3a9
-                                         /ApEinfo_fwdcolor=#f8d3a9
-     misc_feature                        3205..3223
-                                         /label="HA_RT_21bp_insertion"
-                                         /ApEinfo_revcolor=#f8d3a9
-                                         /ApEinfo_fwdcolor=#f8d3a9
-     donor_deletion_pegRNA_20bp_deletion 3205..3224
-                                         /label="20bp_deletion"
-                                         /ApEinfo_revcolor=#ff9ccd
-                                         /ApEinfo_fwdcolor=#ff9ccd
-     misc                                3208..3213
-                                         /label="PAM"
-                                         /ApEinfo_revcolor=#85dae9
-                                         /ApEinfo_fwdcolor=#85dae9
-     misc_feature                        3225..3243
-                                         /label="HA_RT_20bp_deletion"
-                                         /ApEinfo_revcolor=#f8d3a9
-                                         /ApEinfo_fwdcolor=#f8d3a9
-     sgRNA_SaCas9H840A                   complement(3252..3273)
-                                         /label="SaCas9 target 3"
-                                         /ApEinfo_revcolor=#85dae9
-                                         /ApEinfo_fwdcolor=#85dae9
-     misc_feature                        complement(3329..3348)
-                                         /label="reverse_primer"
-                                         /ApEinfo_revcolor=#d59687
-                                         /ApEinfo_fwdcolor=#d59687
-     primer                              complement(3329..3348)
-                                         /label="PC1015"
-                                         /note="sequence: TGGAGTTCAGACGTGTGCTCTTCCGATCTTAGGCGGCCGCTGCACGTAG"
-                                         /ApEinfo_revcolor=#f58a5e
-                                         /ApEinfo_fwdcolor=#f58a5e
-     misc_feature                        3338..3345
-                                         /label="NotI site"
-                                         /ApEinfo_revcolor=#ff9ccd
-                                         /ApEinfo_fwdcolor=#ff9ccd
-     misc_feature                        complement(3353..3373)
-                                         /label="gDNA_reverse_primer"
-                                         /ApEinfo_revcolor=#b7e6d7
-                                         /ApEinfo_fwdcolor=#b7e6d7
-     misc_feature                        complement(3353..3373)
-                                         /label="sequencing_start"
-                                         /ApEinfo_revcolor=#b1ff67
-                                         /ApEinfo_fwdcolor=#b1ff67
-     promoter                            3408..4579
-                                         /label="EF1a promoter"
-                                         /ApEinfo_revcolor=#ffef86
-                                         /ApEinfo_fwdcolor=#ffef86
-     primer_bind                         complement(3889..3917)
-                                         /label="PC0043"
-                                         /ApEinfo_revcolor=#b7e6d7
-                                         /ApEinfo_fwdcolor=#b7e6d7
-     gene                                4591..5187
-                                         /label="PURO resistance gene"
-                                         /ApEinfo_revcolor=#faac61
-                                         /ApEinfo_fwdcolor=#faac61
-     misc_feature                        5188..5250
-                                         /label="T2A"
-                                         /ApEinfo_revcolor=#ffef86
-                                         /ApEinfo_fwdcolor=#ffef86
-     gene                                5263..5958
-                                         /label="BFP"
-                                         /ApEinfo_revcolor=#d59687
-                                         /ApEinfo_fwdcolor=#d59687
-     misc_feature                        6063..6650
-                                         /label="wPRE"
-                                         /ApEinfo_revcolor=#b7e6d7
-                                         /ApEinfo_fwdcolor=#b7e6d7
-     misc_feature                        6841..6864
-                                         /label="HIV-1 cPPT"
-                                         /ApEinfo_revcolor=#d59687
-                                         /ApEinfo_fwdcolor=#d59687
-     LTR                                 7187..7367
-                                         /label="HIV-1 3' LTR"
-                                         /ApEinfo_revcolor=#ff9ccd
-                                         /ApEinfo_fwdcolor=#ff9ccd
-     misc_feature                        7260..7265
-                                         /label="poly A signal"
-                                         /ApEinfo_revcolor=#f8d3a9
-                                         /ApEinfo_fwdcolor=#f8d3a9
-     rep_origin                          complement(7411..8093)
-                                         /label="ColE1 origin"
-                                         /ApEinfo_revcolor=#d59687
-                                         /ApEinfo_fwdcolor=#d59687
-     CDS                                 complement(8191..8850)
-                                         /label="AmpR"
-                                         /ApEinfo_revcolor=#faac61
-                                         /ApEinfo_fwdcolor=#faac61
-     promoter                            complement(9090..9118)
-                                         /label="AmpR promoter"
-                                         /ApEinfo_revcolor=#b7e6d7
-                                         /ApEinfo_fwdcolor=#b7e6d7
+     promoter        263..826
+                     /label="5' CMV promoter"
+                     /ApEinfo_revcolor="#c7b0e3"
+                     /ApEinfo_fwdcolor="#c7b0e3"
+                     /ApEinfo_revcolor="#c7b0e3"
+     primer_bind     781..801
+                     /label="BP0002 (CMV-For)"
+                     /ApEinfo_revcolor="#b1ff67"
+                     /ApEinfo_fwdcolor="#b1ff67"
+                     /ApEinfo_revcolor="#b1ff67"
+     LTR             844..1024
+                     /label="HIV-1 LTR 5'"
+                     /ApEinfo_revcolor="#b7e6d7"
+                     /ApEinfo_fwdcolor="#b7e6d7"
+                     /ApEinfo_revcolor="#b7e6d7"
+     misc_feature    1126..1170
+                     /label="HIV-1_psi_pack"
+                     /ApEinfo_revcolor="#9eafd2"
+                     /ApEinfo_fwdcolor="#9eafd2"
+                     /ApEinfo_revcolor="#9eafd2"
+     misc_feature    1695..1928
+                     /label="HIV-1 RRE"
+                     /ApEinfo_revcolor="#ff9ccd"
+                     /ApEinfo_fwdcolor="#ff9ccd"
+                     /ApEinfo_revcolor="#ff9ccd"
+     misc_feature    2450..2473
+                     /label="HIV-1 cPPT"
+                     /ApEinfo_revcolor="#faac61"
+                     /ApEinfo_fwdcolor="#faac61"
+                     /ApEinfo_revcolor="#faac61"
+     promoter        2631..2944
+                     /label="mouse U6 promoter - modified"
+                     /ApEinfo_revcolor="#b4abac"
+                     /ApEinfo_fwdcolor="#b4abac"
+                     /ApEinfo_revcolor="#b4abac"
+     misc_feature    2856..2861
+                     /label="mU6 TATA box"
+                     /ApEinfo_revcolor="#f8d3a9"
+                     /ApEinfo_fwdcolor="#f8d3a9"
+                     /ApEinfo_revcolor="#f8d3a9"
+     misc_feature    2921..2944
+                     /label="gDNA_forward_primer"
+                     /ApEinfo_revcolor="#faac61"
+                     /ApEinfo_fwdcolor="#faac61"
+                     /ApEinfo_revcolor="#faac61"
+     misc_feature    2945..2964
+                     /label="protospacer"
+                     /ApEinfo_revcolor="#ffef86"
+                     /ApEinfo_fwdcolor="#ffef86"
+                     /ApEinfo_revcolor="#ffef86"
+     misc_feature    2965..3050
+                     /label="sgRNA constant region E+F"
+                     /ApEinfo_revcolor="#b1ff67"
+                     /ApEinfo_fwdcolor="#b1ff67"
+                     /ApEinfo_revcolor="#b1ff67"
+     misc_feature    3051..3056
+                     /label="polyT-track"
+                     /ApEinfo_revcolor="#d6b295"
+                     /ApEinfo_fwdcolor="#d6b295"
+                     /ApEinfo_revcolor="#d6b295"
+     misc_feature    3057..3057
+                     /label="anchor"
+                     /ApEinfo_revcolor="#b7e6d7"
+                     /ApEinfo_fwdcolor="#b7e6d7"
+                     /ApEinfo_revcolor="#b7e6d7"
+     misc_feature    3063..3068
+                     /label="arrayed_sequencing_start"
+                     /ApEinfo_revcolor="#b1ff67"
+                     /ApEinfo_fwdcolor="#b1ff67"
+                     /ApEinfo_revcolor="#b1ff67"
+     primer          3063..3089
+                     /label="PC1014"
+                     /ApEinfo_revcolor="#f58a5e"
+                     /ApEinfo_fwdcolor="#f58a5e"
+                     /note="sequence: ACACTCTTTCCCTACACGACGCTCTTCCGATCTNNNNNGCCTTTAGTGATGGCCTGGCTCACCTG"
+                     /ApEinfo_revcolor="#f58a5e"
+     misc_feature    3063..3089
+                     /label="forward_primer"
+                     /ApEinfo_revcolor="#75c6a9"
+                     /ApEinfo_fwdcolor="#75c6a9"
+                     /ApEinfo_revcolor="#75c6a9"
+     misc_feature    complement(3152..3173)
+                     /label=-50
+                     /ApEinfo_revcolor="#c7b0e3"
+                     /ApEinfo_fwdcolor="#c7b0e3"
+                     /ApEinfo_revcolor="#c7b0e3"
+     misc_feature    3186..3207
+                     /label="SaCas9 target 1"
+                     /ApEinfo_revcolor="#75c6a9"
+                     /ApEinfo_fwdcolor="#75c6a9"
+                     /ApEinfo_revcolor="#75c6a9"
+     misc_feature    complement(3252..3273)
+                     /label=+50
+                     /ApEinfo_revcolor="#85dae9"
+                     /ApEinfo_fwdcolor="#85dae9"
+                     /ApEinfo_revcolor="#85dae9"
+     primer          complement(3329..3348)
+                     /label="PC1015"
+                     /ApEinfo_revcolor="#f58a5e"
+                     /ApEinfo_fwdcolor="#f58a5e"
+                     /note="sequence: TGGAGTTCAGACGTGTGCTCTTCCGATCTTAGGCGGCCGCTGCACGTAG"
+                     /ApEinfo_revcolor="#f58a5e"
+     misc_feature    complement(3329..3348)
+                     /label="reverse_primer"
+                     /ApEinfo_revcolor="#d59687"
+                     /ApEinfo_fwdcolor="#d59687"
+                     /ApEinfo_revcolor="#d59687"
+     misc_feature    3338..3345
+                     /label="NotI site"
+                     /ApEinfo_revcolor="#ff9ccd"
+                     /ApEinfo_fwdcolor="#ff9ccd"
+                     /ApEinfo_revcolor="#ff9ccd"
+     misc_feature    complement(3353..3373)
+                     /label="sequencing_start"
+                     /ApEinfo_revcolor="#b1ff67"
+                     /ApEinfo_fwdcolor="#b1ff67"
+                     /ApEinfo_revcolor="#b1ff67"
+     misc_feature    complement(3353..3373)
+                     /label="gDNA_reverse_primer"
+                     /ApEinfo_revcolor="#b7e6d7"
+                     /ApEinfo_fwdcolor="#b7e6d7"
+                     /ApEinfo_revcolor="#b7e6d7"
+     promoter        3408..4579
+                     /label="EF1a promoter"
+                     /ApEinfo_revcolor="#ffef86"
+                     /ApEinfo_fwdcolor="#ffef86"
+                     /ApEinfo_revcolor="#ffef86"
+     primer_bind     complement(3889..3917)
+                     /label="PC0043"
+                     /ApEinfo_revcolor="#b7e6d7"
+                     /ApEinfo_fwdcolor="#b7e6d7"
+                     /ApEinfo_revcolor="#b7e6d7"
+     gene            4591..5187
+                     /label="PURO resistance gene"
+                     /ApEinfo_revcolor="#faac61"
+                     /ApEinfo_fwdcolor="#faac61"
+                     /ApEinfo_revcolor="#faac61"
+     misc_feature    5188..5250
+                     /label="T2A"
+                     /ApEinfo_revcolor="#ffef86"
+                     /ApEinfo_fwdcolor="#ffef86"
+                     /ApEinfo_revcolor="#ffef86"
+     gene            5263..5958
+                     /label="BFP"
+                     /ApEinfo_revcolor="#d59687"
+                     /ApEinfo_fwdcolor="#d59687"
+                     /ApEinfo_revcolor="#d59687"
+     misc_feature    6063..6650
+                     /label="wPRE"
+                     /ApEinfo_revcolor="#b7e6d7"
+                     /ApEinfo_fwdcolor="#b7e6d7"
+                     /ApEinfo_revcolor="#b7e6d7"
+     misc_feature    6841..6864
+                     /label="HIV-1 cPPT"
+                     /ApEinfo_revcolor="#d59687"
+                     /ApEinfo_fwdcolor="#d59687"
+                     /ApEinfo_revcolor="#d59687"
+     LTR             7187..7367
+                     /label="HIV-1 3' LTR"
+                     /ApEinfo_revcolor="#ff9ccd"
+                     /ApEinfo_fwdcolor="#ff9ccd"
+                     /ApEinfo_revcolor="#ff9ccd"
+     misc_feature    7260..7265
+                     /label="poly A signal"
+                     /ApEinfo_revcolor="#f8d3a9"
+                     /ApEinfo_fwdcolor="#f8d3a9"
+                     /ApEinfo_revcolor="#f8d3a9"
+     rep_origin      complement(7411..8093)
+                     /label="ColE1 origin"
+                     /ApEinfo_revcolor="#d59687"
+                     /ApEinfo_fwdcolor="#d59687"
+                     /ApEinfo_revcolor="#d59687"
+     CDS             complement(8191..8850)
+                     /label="AmpR"
+                     /ApEinfo_revcolor="#faac61"
+                     /ApEinfo_fwdcolor="#faac61"
+                     /ApEinfo_revcolor="#faac61"
+     promoter        complement(9090..9118)
+                     /label="AmpR promoter"
+                     /ApEinfo_revcolor="#b7e6d7"
+                     /ApEinfo_fwdcolor="#b7e6d7"
+                     /ApEinfo_revcolor="#b7e6d7"
 ORIGIN
         1 gcttaagcgg tcgacggatc gggagatctc ccgatcccct atggtgcact ctcagtacaa
        61 tctgctctga tgccgcatag ttaagccagt atctgctccc tgcttgtgtg ttggaggtcg

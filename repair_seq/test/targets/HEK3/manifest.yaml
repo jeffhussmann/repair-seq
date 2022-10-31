@@ -3,7 +3,7 @@ features_to_show:
   - forward_primer
 - - HEK3
   - reverse_primer
-genome_source: hg19
+genome_source: hg38
 sources:
 - HEK3
 target: HEK3

@@ -24,7 +24,7 @@ features_to_show:
 - - PAH_E4.4_43_EvoPreQ1
   - PBS
 genome_source: hg19
-pegRNAs:
+sgRNAs:
 - PAH_E4.2_45_EvoPreQ1
 - PAH_E4.4_43_EvoPreQ1
 sources:

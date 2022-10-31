@@ -4,11 +4,14 @@ import hits.visualize
 from hits import interval, sam
 from hits.utilities import memoized_property
 
-import knock_knock.visualize
+import knock_knock.layout
 import knock_knock.pegRNAs
+import knock_knock.visualize
 from knock_knock.outcome import *
 
 import repair_seq.prime_editing_layout
+
+other_side = repair_seq.prime_editing_layout.other_side
 
 class Layout(repair_seq.prime_editing_layout.Layout):
     category_order = [
@@ -199,7 +202,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                 if overlap_extended_pegRNA_al is not None:
                     als['second pegRNA'] = overlap_extended_pegRNA_al
                     
-                    overlap_extended_target_al = self.find_target_alignment_extending_pegRNA_alignment(overlap_extended_pegRNA_al)
+                    overlap_extended_target_al = self.find_target_alignment_extending_pegRNA_alignment(overlap_extended_pegRNA_al, 'PBS')
                     
                     if overlap_extended_target_al is not None:
                         als['second target'] = overlap_extended_target_al
@@ -302,6 +305,32 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                 chains['left']['description'] = 'not seen'
 
         return chains
+
+    @memoized_property
+    def extension_chain_junction_microhomology(self):
+        last_als = {}
+
+        for side in ['left', 'right']:
+            chain = self.extensions_chains_by_side[side]
+            if chain['description'] in ['not seen', 'no target']:
+                last_al = None
+            else:
+                if chain['description'] == 'RT\'ed + overlap-extended':
+                    if 'second target' in chain['alignments']:
+                        last_al = chain['alignments']['second target']
+                    else:
+                        last_al = chain['alignments']['second pegRNA']
+
+                else:
+                    if chain['description'] == 'not RT\'ed':
+                        last_al = chain['alignments']['first target']
+
+                    elif chain['description'] == 'RT\'ed':
+                        last_al = chain['alignments']['first pegRNA']
+
+            last_als[side] = last_al
+
+        return knock_knock.layout.junction_microhomology(self.target_info, last_als['left'], last_als['right'])
 
     def get_extension_chain_edge(self, side):
         ''' Get the position of the far edge of an extension chain
@@ -406,7 +435,9 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             if not self.has_intended_pegRNA_overlap:
                 status = False
             else:
-                if self.intended_SNVs_replaced == 'none':
+                if self.target_info.pegRNA_SNVs is None:
+                    status = 'replacement'
+                elif self.intended_SNVs_replaced == 'none':
                     status = False
                 else:
                     status = self.intended_SNVs_replaced
@@ -446,7 +477,9 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         left_edge = self.get_extension_chain_edge('left')
         right_edge = self.get_extension_chain_edge('right')
 
-        self.outcome = UnintendedRejoiningOutcome(left_edge, right_edge)
+        MH_nts = self.extension_chain_junction_microhomology
+
+        self.outcome = UnintendedRejoiningOutcome(left_edge, right_edge, MH_nts)
 
         self.relevant_alignments = list(chains['left']['alignments'].values()) + list(chains['right']['alignments'].values())
 
@@ -468,7 +501,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             'mismatches': set(),
         }
 
-        if al is None or al.is_unmapped:
+        if SNVs is None or al is None or al.is_unmapped:
             return positions_seen
 
         ref_seq = ti.reference_sequences[al.reference_name]
@@ -578,7 +611,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
                     else:
                         self.category = 'deletion'
-                        self.relevant_alignments = [target_alignment]
+                        self.relevant_alignments = self.target_edge_alignments_list
 
                     self.outcome = DeletionOutcome(indel)
                     self.details = str(self.outcome)
@@ -885,26 +918,23 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         return diagram
 
-other_side = {
-    'left': 'right',
-    'right': 'left',
-}
-
 class UnintendedRejoiningOutcome(Outcome):
-    def __init__(self, left_edge, right_edge):
+    def __init__(self, left_edge, right_edge, MH_nts):
         self.edges = {
             'left': left_edge,
             'right': right_edge,
         }
+
+        self.MH_nts = MH_nts
 
     @classmethod
     def from_string(cls, details_string):
         def convert(s):
             return int(s) if s != 'None' else None
 
-        left_edge, right_edge = map(convert, details_string.split(','))
+        left_edge, right_edge, MH_nts = map(convert, details_string.split(','))
 
-        return cls(left_edge, right_edge)
+        return cls(left_edge, right_edge, MH_nts)
 
     def __str__(self):
-        return f'{self.edges["left"]},{self.edges["right"]}'
+        return f'{self.edges["left"]},{self.edges["right"]},{self.MH_nts}'

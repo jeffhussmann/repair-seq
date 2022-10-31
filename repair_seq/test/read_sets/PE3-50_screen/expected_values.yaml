@@ -1,5 +1,7 @@
 experiment_type: prime_editing_layout
-target_info: pPC1000_G6C_15
+target_info: pPC1000
+target_info_kwargs:
+  sgRNAs: pegRNA_G6C_15;-50
 expected_values:
   01:01101:001325:033786_34:
     category: duplication

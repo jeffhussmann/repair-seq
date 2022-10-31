@@ -24,7 +24,7 @@ features_to_show:
 - - HEK3_attB_B_30
   - PBS
 genome_source: hg19
-pegRNAs:
+sgRNAs:
 - HEK3_attB_A_30
 - HEK3_attB_B_30
 sources:

@@ -1,7 +1,7 @@
 experiment_type: prime_editing
 target_info: HEK3
 target_info_kwargs:
-  pegRNAs: HEK3_4g_del1-80
+  sgRNAs: HEK3_4g_del1-80;HEK3_4a_+90
 expected_values:
   010288018:0000000028:
     category: wild type
@@ -18,8 +18,12 @@ expected_values:
   010288018:0000000045:
     category: unintended rejoining of RT'ed sequence
     subcategory: includes scaffold, no SNV
-    note: currently misclassified as edit + duplication
+    note: formerly misclassified as edit + duplication
   010288018:0000000126:
     category: unintended rejoining of RT'ed sequence
     subcategory: includes scaffold, no SNV
-    note: currently misclassified as edit + duplication
+    note: formerly misclassified as edit + duplication
+  010288018:0000000052:
+    category: deletion
+    subcategory: clean
+    note: slightly longer than intended deletion

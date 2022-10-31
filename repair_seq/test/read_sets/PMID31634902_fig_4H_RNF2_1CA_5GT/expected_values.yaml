@@ -1,8 +1,7 @@
 experiment_type: prime_editing
 target_info: PMID31634902_RNF2
 target_info_kwargs:
-  pegRNAs: RNF2_4h_1CtoA_5GtoT
-  sgRNA: RNF2_4c_+41
+  sgRNAs: RNF2_4h_1CtoA_5GtoT;RNF2_4c_+41
 expected_values:
   010287981:0000000003:
     category: wild type

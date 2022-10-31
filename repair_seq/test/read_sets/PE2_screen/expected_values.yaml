@@ -1,5 +1,7 @@
 experiment_type: prime_editing_layout
-target_info: pPC1000_G6C_15
+target_info: pPC1000
+target_info_kwargs:
+  sgRNAs: pegRNA_G6C_15
 expected_values:
   01:01101:001280:016266_:
     category: wild type

@@ -1,7 +1,7 @@
 experiment_type: twin_prime
 target_info: PMID34887556_PAH-E4fe+1687
 target_info_kwargs:
-  pegRNAs: PAH_E4.2_45_EvoPreQ1;PAH_E4.4_43_EvoPreQ1
+  sgRNAs: PAH_E4.2_45_EvoPreQ1;PAH_E4.4_43_EvoPreQ1
 expected_values:
   017171944:0000000005:
     category: intended edit

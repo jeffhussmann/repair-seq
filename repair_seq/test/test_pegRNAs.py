@@ -11,7 +11,7 @@ def test_intended_insertion_inferrence():
     ]:
         ti = knock_knock.target_info.TargetInfo(base_dir,
                                                 'pPC1000',
-                                                pegRNAs=pegRNA_name,
+                                                sgRNAs=pegRNA_name,
                                                )
         assert len(ti.pegRNA_programmed_insertions) == 1
         inferred_insertion = ti.pegRNA_programmed_insertions[0]
@@ -30,7 +30,7 @@ def test_intended_deletion_inferrence():
     ]:
         ti = knock_knock.target_info.TargetInfo(base_dir,
                                                 'HEK3',
-                                                pegRNAs=[pegRNA],
+                                                sgRNAs=[pegRNA],
                                                )
 
         expected = knock_knock.target_info.degenerate_indel_from_string(expected_as_string)
@@ -50,7 +50,7 @@ def test_twin_prime_intended_deletion_inferrence():
         for sequencing_start_feature_name in ['forward_primer', 'gDNA_reverse_primer']:
             ti = knock_knock.target_info.TargetInfo(base_dir,
                                                     'pPC1655',
-                                                    pegRNAs=pegRNA_pair,
+                                                    sgRNAs=pegRNA_pair,
                                                     sequencing_start_feature_name=sequencing_start_feature_name,
                                                    )
 
@@ -61,17 +61,17 @@ def test_twin_prime_intended_deletion_inferrence():
 def test_pegRNA_PBS_and_RTT_inferrence():
     ti = knock_knock.target_info.TargetInfo(base_dir, 'PAH_E4-2_45_EvoPreQ1-4_43_EvoPreQ1')
 
-    feature = ti.features['PAH_E4', 'HA_PBS_PAH_E4.2_45_EvoPreQ1']
+    feature = ti.features['PAH_E4', 'PAH_E4.2_45_EvoPreQ1_PBS']
     assert (feature.start, feature.end, feature.strand) == (612, 624, '-')
 
-    feature = ti.features['PAH_E4', 'HA_PBS_PAH_E4.4_43_EvoPreQ1'] 
+    feature = ti.features['PAH_E4', 'PAH_E4.4_43_EvoPreQ1_PBS'] 
     assert (feature.start, feature.end, feature.strand) == (536, 547, '+')
 
     # EMX1 has repetitive sequence at the nick that leads to a spurious
     # 7-mer match of nick sequence to the wrong part of the pegRNA and 
     # could cause incorrect PBS inferrence.
 
-    ti = knock_knock.target_info.TargetInfo(base_dir, 'EMX1', pegRNAs='EMX1_3b')
+    ti = knock_knock.target_info.TargetInfo(base_dir, 'EMX1', sgRNAs='EMX1_3b')
 
     target_PBS = ti.features['EMX1', 'EMX1_3b_PBS']
     assert (target_PBS.start, target_PBS.end, target_PBS.strand) == (653, 667, '+')

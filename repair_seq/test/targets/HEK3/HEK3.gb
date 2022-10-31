@@ -18,37 +18,25 @@ FEATURES             Location/Qualifiers
      misc_feature    501..505
                      /label="anchor"
      sgRNA_SpCas9H840complement(701..720)
-                     /label="sgRNA_HEK3_3b_+26"
+                     /label="HEK3_3b_+26"
                      /ApEinfo_fwdcolor="#c6c9d1"
      sgRNA_SpCas9H840complement(712..729)
-                     /label="sgRNA_HEK3_3b_+37"
+                     /label="HEK3_3b_+37"
                      /ApEinfo_fwdcolor="#c6c9d1"
      sgRNA_SpCas9H840complement(738..756)
-                     /label="sgRNA_HEK3_3b_+63"
+                     /label="HEK3_3b_+63"
                      /ApEinfo_fwdcolor="#c6c9d1"
      sgRNA_SpCas9H840complement(765..783)
-                     /label="sgRNA_HEK3_3b_+90"
+                     /label="HEK3_3b_+90"
                      /ApEinfo_fwdcolor="#c6c9d1"
      sgRNA_SpCas9H840complement(567..585)
-                     /label="sgRNA_HEK3_3b_-108"
+                     /label="HEK3_3b_-108"
                      /ApEinfo_fwdcolor="#c6c9d1"
      sgRNA_SpCas9H840complement(637..655)
-                     /label="sgRNA_HEK3_3b_-38"
+                     /label="HEK3_3b_-38"
                      /ApEinfo_fwdcolor="#c6c9d1"
      sgRNA_SpCas9H840complement(765..783)
-                     /label="sgRNA_HEK3_4a_+90"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840complement(765..783)
-                     /label="sgRNA_HEK3_4b_+90"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840complement(765..783)
-                     /label="sgRNA_HEK3_5eg"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840complement(765..783)
-                     /label="sgRNA_HEK3_ED6a-f_+90"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840complement(765..783)
-                     /label="sgRNA_HEK3_ED6g-h_+90"
+                     /label="HEK3_4a_+90"
                      /ApEinfo_fwdcolor="#c6c9d1"
 ORIGIN
         1 agagtctgtg ggaggaacag ccagtgtttc aggatggcta aagcagaggt tgtgaagggc

@@ -1,5 +1,0 @@
-##gff-version 3
-PAH-E4fe+1687	.	misc_feature	501	520	.	+	.	ID=reverse_primer;color=%239eafd2
-PAH-E4fe+1687	.	misc_feature	681	700	.	-	.	ID=forward_primer;color=%2375C6A9
-PAH-E4fe+1687	.	misc_feature	696	700	.	-	.	ID=sequencing_start
-PAH-E4fe+1687	.	misc_feature	696	700	.	-	.	ID=anchor

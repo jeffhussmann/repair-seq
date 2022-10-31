@@ -1,5 +1,0 @@
-##gff-version 3
-HEK3	.	misc_feature	501	505	.	+	.	ID=sequencing_start
-HEK3	.	misc_feature	501	505	.	+	.	ID=anchor
-HEK3	.	misc_feature	501	520	.	+	.	ID=forward_primer;color=%2375C6A9
-HEK3	.	misc_feature	778	797	.	-	.	ID=reverse_primer;color=%239eafd2
