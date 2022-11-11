@@ -56,6 +56,7 @@ class SingleGuideExperiment(experiment.Experiment):
                 raise NotImplementedError
             self.pool = get_pool(base_dir, pool_name, progress=kwargs.get('progress'))
 
+        self.pool_name = pool_name
         self.fixed_guide = fixed_guide
         self.variable_guide = variable_guide
         
@@ -88,6 +89,10 @@ class SingleGuideExperiment(experiment.Experiment):
 
             'filtered_cell_bam': self.results_dir / 'filtered_cell_aligments.bam',
             'reads_per_UMI': self.results_dir / 'reads_per_UMI.pkl',
+
+            'common_sequences_dir': self.results_dir / 'common_sequences',
+            'common_sequence_outcomes': self.results_dir / 'common_sequences' / 'common_sequence_outcomes.txt',
+            'common_sequence_special_alignments': self.results_dir / 'common_sequences' / 'all_special_alignments.bam',
         })
 
         self.max_insertion_length = None
@@ -136,23 +141,26 @@ class SingleGuideExperiment(experiment.Experiment):
 
     @memoized_property
     def target_name(self):
-        prefix = self.description['target_info_prefix']
+        return self.pool.target_name
 
-        if self.pool.use_guide_specific_target_info:
-            if self.fixed_guide == 'none':
-                if self.sample_name == 'unknown':
-                    target_name = prefix
-                else:
-                    target_name = f'{prefix}_{self.pool.variable_guide_library.name}_{self.variable_guide}'
-            else:
-                if self.fixed_guide == 'unknown':
-                    target_name = prefix
-                else:
-                    target_name = f'{prefix}-{self.fixed_guide}-{self.variable_guide}'
-        else:
-            target_name = prefix
+    @memoized_property
+    def target_info(self):
+        protospacer_sequence = self.pool.variable_guide_library.guides_df.loc[self.variable_guide, 'protospacer']
 
-        return target_name
+        ti = target_info.TargetInfo(self.base_dir,
+                                    self.target_name,
+                                    feature_to_replace=(self.pool.target_info.target, 'library_protospacer', protospacer_sequence),
+                                    primer_names=self.primer_names,
+                                    sgRNAs=self.sgRNAs,
+                                    donor=self.donor,
+                                    nonhomologous_donor=self.nonhomologous_donor,
+                                    sequencing_start_feature_name=self.sequencing_start_feature_name,
+                                    supplemental_indices=self.supplemental_indices,
+                                    infer_homology_arms=self.infer_homology_arms,
+                                    min_relevant_length=self.min_relevant_length,
+                                   )
+
+        return ti
 
     @property
     def reads(self):
@@ -177,7 +185,7 @@ class SingleGuideExperiment(experiment.Experiment):
             common_name = self.qname_to_common_name.get(read_id)
 
             if common_name is not None:
-                als = self.pool.get_read_alignments(common_name)
+                als = self.common_sequence_experiment.get_read_alignments(common_name)
                 looked_up_common = True
         else:
             read_type = 'collapsed_R2'
@@ -192,11 +200,9 @@ class SingleGuideExperiment(experiment.Experiment):
         return len(next(iter(self.collapsed_reads(no_progress=True))))
 
     def preprocess(self):
-        if self.has_UMIs:
-            self.collapse_UMI_reads()
-        else:
-            self.merge_read_chunks()
-    
+        self.collapse_UMI_reads()
+        self.extract_and_process_common_sequences()
+
     def collapse_UMI_reads(self):
         ''' Takes R2_fn sorted by UMI and collapses reads with the same UMI and
         sufficiently similar sequence.
@@ -283,7 +289,98 @@ class SingleGuideExperiment(experiment.Experiment):
         else:
             return self.progress(reads, desc='Iterating over collapsed reads')
 
-    def make_uncommon_sequence_fastq(self):
+    @memoized_property
+    def common_sequence_experiment(self):
+        # This is a silly hack of the pool_name/batch_name setup.
+        return CommonSequenceExperiment(self.base_dir, self.pool_name, self.fixed_guide, self.variable_guide, pool=self.pool)
+
+    def extract_and_process_common_sequences(self):
+        seq_counts = Counter(read.seq for read in self.collapsed_reads())
+
+        # Include one value outside of the solexa range to allow automatic detection.
+        qual = fastq.encode_sanger([25] + [40] * 1000)
+   
+        Annotation = annotations.Annotations['common_sequence']
+
+        cs_exp = self.common_sequence_experiment
+        cs_exp.results_dir.mkdir(exist_ok=True)
+        fn = cs_exp.fns_by_read_type['fastq']['collapsed_R2']
+
+        with gzip.open(fn, 'wt', compresslevel=1) as fh:
+            for rank, (seq, count) in enumerate(seq_counts.most_common()):
+                if count > 1:
+                    name = str(Annotation(rank=rank, count=count))
+                    read = fastq.Read(name, seq, qual[:len(seq)])
+                    fh.write(str(read))
+
+        cs_exp.process()
+
+    @memoized_property
+    def common_sequence_outcomes(self):
+        outcomes = []
+        for outcome in self.common_sequence_experiment.outcome_iter():
+            outcomes.append(outcome)
+
+        return outcomes
+
+    @memoized_property
+    def common_names(self):
+        ''' List of all names assigned to common sequence artificial reads. '''
+        return [outcome.query_name for outcome in self.common_sequence_outcomes]
+
+    @memoized_property
+    def common_name_to_common_sequence(self):
+        name_to_seq = {}
+        for outcome in self.common_sequence_outcomes:
+            name_to_seq[outcome.query_name] = outcome.seq
+
+        return name_to_seq
+    
+    @memoized_property
+    def common_sequence_to_outcome(self):
+        common_sequence_to_outcome = {}
+        for outcome in self.common_sequence_outcomes:
+            common_sequence_to_outcome[outcome.seq] = outcome
+
+        return common_sequence_to_outcome
+
+    @memoized_property
+    def common_name_to_outcome(self):
+        common_name_to_outcome = {}
+        for outcome in self.common_sequence_outcomes:
+            common_name_to_outcome[outcome.query_name] = outcome
+
+        return common_name_to_outcome
+
+    def common_names_for_category(self, category):
+        for outcome in self.common_sequence_outcomes:
+            if outcome.category == category:
+                yield outcome.query_name
+
+    @memoized_property
+    def common_sequence_to_common_name(self):
+        return utilities.reverse_dictionary(self.common_name_to_common_sequence)
+
+    @memoized_property
+    def common_name_to_special_alignment(self):
+        name_to_al = {}
+
+        if self.fns['common_sequence_special_alignments'].exists():
+            for al in pysam.AlignmentFile(self.fns['common_sequence_special_alignments']):
+                name_to_al[al.query_name] = al
+
+        return name_to_al
+
+    @memoized_property
+    def common_name_to_alignments(self):
+        common_name_to_alignments = {}
+
+        for common_name, als in self.common_sequence_experiment.alignment_groups():
+            common_name_to_alignments[common_name] = als
+
+        return common_name_to_alignments
+
+    def extract_uncommon_sequences(self):
         ''' 
         Populate self.fns_by_read_type['fastq']['collapsed_uncommon_R2'] with fastq
         reads that don't have common sequences, and populate self.fns['qname_to_common_name']
@@ -295,8 +392,8 @@ class SingleGuideExperiment(experiment.Experiment):
         fn = self.fns_by_read_type['fastq']['collapsed_uncommon_R2']
         with gzip.open(fn, 'wt', compresslevel=1) as fh:
             for read in self.collapsed_reads():
-                if read.seq in self.pool.common_sequence_to_outcome:
-                    outcome = self.pool.common_sequence_to_outcome[read.seq]
+                if read.seq in self.common_sequence_to_outcome:
+                    outcome = self.common_sequence_to_outcome[read.seq]
                     qname_to_common_name[read.name] = outcome.query_name
                 else:
                     fh.write(str(read))
@@ -356,8 +453,8 @@ class SingleGuideExperiment(experiment.Experiment):
             for read in self.progress(reads, desc='Categorizing reads'):
                 if self.use_memoized_outcomes and read.name in self.qname_to_common_name:
                     common_sequence_name = self.qname_to_common_name[read.name]
-                    layout = self.pool.common_name_to_outcome[common_sequence_name]
-                    special_alignment = self.pool.common_name_to_special_alignment.get(common_sequence_name)
+                    layout = self.common_name_to_outcome[common_sequence_name]
+                    special_alignment = self.common_name_to_special_alignment.get(common_sequence_name)
 
                 else:
                     common_sequence_name = ''
@@ -635,7 +732,7 @@ class SingleGuideExperiment(experiment.Experiment):
                     continue
 
             if outcome.common_sequence_name != '':
-                als = self.pool.common_name_to_alignments[outcome.common_sequence_name]
+                als = self.common_name_to_alignments[outcome.common_sequence_name]
 
             else:
                 name, als = next(alignment_groups)
@@ -867,7 +964,7 @@ class SingleGuideExperiment(experiment.Experiment):
 
     def align(self):
         if self.use_memoized_outcomes:
-            self.make_uncommon_sequence_fastq()
+            self.extract_uncommon_sequences()
             read_type = 'collapsed_uncommon_R2'
         else:
             read_type = 'collapsed_R2'
@@ -902,6 +999,10 @@ class SingleGuideNoUMIExperiment(SingleGuideExperiment):
     @property
     def final_Outcome(self):
         return coherence.gDNA_Outcome
+
+    def preprocess(self):
+        self.merge_read_chunks()
+        self.extract_and_process_common_sequences()
 
     def merge_read_chunks(self):
         # Since chunks are deleted after being merged, if they aren't there, assume merging has
@@ -982,22 +1083,18 @@ class SingleGuideNoUMIExperiment(SingleGuideExperiment):
             return self.outcome_counts.xs(True).groupby(level=['category', 'subcategory'], sort=False).sum()
 
 class CommonSequenceExperiment(SingleGuideExperiment):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, base_dir, pool_name, fixed_guide, variable_guide, *args, **kwargs):
+        # Note: pool_name is an anachronism
+        full_pool_name = pool_name + (f'{fixed_guide}-{variable_guide}',)
+
+        super().__init__(base_dir, full_pool_name, 'common', 'sequences', *args, **kwargs)
+
+        self.fixed_guide = fixed_guide
+        self.variable_guide = variable_guide
 
         self.use_memoized_outcomes = False
 
         self.outcome_fn_keys = ['outcome_list']
-
-    @property
-    def results_dir(self):
-        return self.pool.fns['common_sequences_dir'] / self.sample_name
-    
-    @memoized_property
-    def target_name(self):
-        prefix = self.description['target_info_prefix']
-        target_name = prefix
-        return target_name
 
     def process(self):
         try:
@@ -1096,9 +1193,8 @@ class PooledScreen:
 
         self.short_name = self.sample_sheet.get('short_name', self.name)
 
-        self.sgRNA = self.sample_sheet.get('sgRNA')
+        self.sgRNAs = self.sample_sheet.get('sgRNAs')
         self.donor = self.sample_sheet.get('donor')
-        self.pegRNAs = self.sample_sheet.get('pegRNAs')
 
         self.outcome_primer = self.sample_sheet['outcome_primer']
         self.guide_primer = self.sample_sheet['guide_primer']
@@ -1106,7 +1202,7 @@ class PooledScreen:
         self.primer_names = [self.outcome_primer, self.guide_primer]
 
         self.sequencing_start_feature_name = self.sample_sheet.get('outcome_primer')
-        self.target_name = self.sample_sheet['target_info_prefix']
+        self.target_name = self.sample_sheet['target_info']
 
         self.layout_mode = self.sample_sheet.get('layout_mode', 'cutting')
 
@@ -1123,8 +1219,6 @@ class PooledScreen:
         self.supplemental_index_names = index_names
 
         self.min_reads_per_UMI = self.sample_sheet.get('min_reads_per_UMI', 4)
-
-        self.use_guide_specific_target_info = self.sample_sheet.get('use_guide_specific_target_info', True)
 
         self.fns = {
             'read_counts': self.dir / 'read_counts.txt',
@@ -1144,12 +1238,8 @@ class PooledScreen:
 
             'quantiles': self.dir / 'quantiles.hdf5',
 
-            'common_sequences_dir': self.dir / 'common_sequences',
-            'common_sequence_outcomes': self.dir / 'common_sequences' / 'common_sequence_outcomes.txt',
-
             'deletion_boundaries': self.dir / 'deletion_boundaries.hdf5',
 
-            'common_sequence_special_alignments': self.dir / 'common_sequences' / 'all_special_alignments.bam',
             'special_alignments_dir': self.dir / 'special_alignments',
 
             'filtered_templated_insertion_details': self.dir / 'filtered_templated_insertion_details.hdf5',
@@ -1199,10 +1289,9 @@ class PooledScreen:
     def target_info(self):
         ti = target_info.TargetInfo(self.base_dir,
                                     self.target_name,
-                                    donor=self.donor,
-                                    sgRNA=self.sgRNA,
-                                    pegRNAs=self.pegRNAs,
                                     primer_names=self.primer_names,
+                                    sgRNAs=self.sgRNAs,
+                                    donor=self.donor,
                                     sequencing_start_feature_name=self.sequencing_start_feature_name,
                                     supplemental_indices=self.supplemental_indices,
                                     infer_homology_arms=self.sample_sheet.get('infer_homology_arms', False),
@@ -2491,164 +2580,6 @@ class PooledScreen:
         explorer = PooledScreenExplorer(self, **kwargs)
         return explorer.layout
 
-    def make_common_sequences(self):
-        splitter = CommonSequenceSplitter(self)
-
-        Annotation = annotations.Annotations['collapsed_UMI_mismatch']
-        def Read_to_num_reads(r):
-            return Annotation.from_identifier(r.name)['num_reads']
-
-        description = 'Collecting common sequences'
-        exps = self.single_guide_experiments(no_progress=True)
-        for exp in self.progress(exps, desc=description, total=len(self.guide_combinations)):
-            reads = exp.reads_by_type('collapsed_R2')
-            enough_reads_per_UMI = (r.seq for r in reads if Read_to_num_reads(r) >= 5)
-            splitter.update_counts(enough_reads_per_UMI)
-
-        splitter.write_files()
-
-    @memoized_property
-    def common_sequence_chunk_exp_names(self):
-        def d_to_chunk_name(d):
-            return d.name[len('common_sequences-'):]
-
-        return sorted([d_to_chunk_name(d) for d in self.fns['common_sequences_dir'].iterdir() if d.is_dir()])
-
-    def common_sequence_chunk_exps(self):
-        for chunk_name in self.common_sequence_chunk_exp_names:
-            yield self.common_sequence_chunk_exp_from_name(chunk_name)
-
-    @memoized_property
-    def common_names(self):
-        ''' List of all names assigned to common sequence artificial reads. '''
-        return [outcome.query_name for outcome in self.common_sequence_outcomes]
-
-    @memoized_property
-    def common_name_to_common_sequence(self):
-        name_to_seq = {}
-        for outcome in self.common_sequence_outcomes:
-            name_to_seq[outcome.query_name] = outcome.seq
-
-        return name_to_seq
-    
-    @memoized_property
-    def common_sequence_to_outcome(self):
-        common_sequence_to_outcome = {}
-        for outcome in self.common_sequence_outcomes:
-            common_sequence_to_outcome[outcome.seq] = outcome
-
-        return common_sequence_to_outcome
-
-    @memoized_property
-    def common_name_to_outcome(self):
-        common_name_to_outcome = {}
-        for outcome in self.common_sequence_outcomes:
-            common_name_to_outcome[outcome.query_name] = outcome
-
-        return common_name_to_outcome
-
-    def common_names_for_category(self, category):
-        for outcome in self.common_sequence_outcomes:
-            if outcome.category == category:
-                yield outcome.query_name
-
-    @memoized_property
-    def common_sequence_to_common_name(self):
-        return utilities.reverse_dictionary(self.common_name_to_common_sequence)
-
-    @memoized_property
-    def common_name_to_special_alignment(self):
-        name_to_al = {}
-
-        if self.fns['common_sequence_special_alignments'].exists():
-            for al in pysam.AlignmentFile(self.fns['common_sequence_special_alignments']):
-                name_to_al[al.query_name] = al
-
-        return name_to_al
-
-    @memoized_property
-    def common_name_to_alignments(self):
-        common_name_to_alignments = {}
-
-        chunk_exps = self.progress(self.common_sequence_chunk_exps(),
-                                   total=len(self.common_sequence_chunk_exp_names),
-                                   desc='Iterating over common_sequence_chunk_exps',
-                                  )
-
-        for chunk_exp in chunk_exps:
-            for common_name, als in chunk_exp.alignment_groups():
-                common_name_to_alignments[common_name] = als
-
-        return common_name_to_alignments
-
-    def common_sequence_chunk_exp_from_name(self, chunk_name):
-        return CommonSequenceExperiment(self.base_dir, self.name, 'common_sequences', chunk_name, pool=self, progress=self.progress)
-
-    @memoized_property
-    def name_to_chunk(self):
-        names = self.common_sequence_chunk_exp_names
-        starts = [int(n.split('-')[0]) for n in names]
-        chunks = [self.common_sequence_chunk_exp_from_name(n) for n in names]
-        Annotation = annotations.Annotations['collapsed_UMI_mismatch']
-
-        def name_to_chunk(name):
-            number = int(Annotation.from_identifier(name)['UMI'])
-            start_index = bisect.bisect(starts, number) - 1 
-            chunk = chunks[start_index]
-            return chunk
-
-        return name_to_chunk
-
-    def get_read_alignments(self, name):
-        if isinstance(name, int):
-            name = self.common_names[name]
-
-        chunk = self.name_to_chunk(name)
-
-        als = chunk.get_read_alignments(name)
-
-        return als
-
-    def get_read_layout(self, name, **kwargs):
-        als = self.get_read_alignments(name)
-        l = self.categorizer(als, self.target_info,
-                             mode=self.layout_mode,
-                             error_corrected=self.has_UMIs,
-                             **kwargs,
-                            )
-        return l
-
-    def get_read_diagram(self, read_id, relevant=True, **diagram_kwargs):
-        layout = self.get_read_layout(read_id)
-
-        if relevant:
-            layout.categorize()
-            to_plot = layout.relevant_alignments
-            diagram_kwargs['inferred_amplicon_length'] = layout.inferred_amplicon_length
-        else:
-            to_plot = layout.alignments
-            
-        if relevant:
-            diagram = layout.plot(**diagram_kwargs)
-        else:
-            diagram = visualize.ReadDiagram(to_plot, self.target_info, **diagram_kwargs)
-
-        return diagram
-
-    @memoized_property
-    def common_sequence_outcomes(self):
-        outcomes = []
-        for exp in self.common_sequence_chunk_exps():
-            for outcome in exp.outcome_iter():
-                outcomes.append(outcome)
-
-        return outcomes
-
-    def merge_common_sequence_outcomes(self):
-        with self.fns['common_sequence_outcomes'].open('w') as fh:
-            for outcome in self.common_sequence_outcomes:
-                fh.write(f'{outcome}\n')
-
     def compute_highest_guide_correlations(self):
         # This is a completely arbitrary outcome threshold.
         outcomes = [(c, s, d) for c, s, d in self.most_frequent_outcomes('none') if c not in ['uncategorized']][:40]
@@ -2714,22 +2645,7 @@ class PooledScreen:
             with parallel.PoolWithLoggerThread(num_processes, logger) as process_pool:
                 process_pool.starmap(process_single_guide_experiment_stage, arg_tuples)
 
-        def process_common_sequences():
-            self.make_common_sequences()
-
-            arg_tuples = []
-            for chunk_i, chunk_name in enumerate(self.common_sequence_chunk_exp_names):
-                arg_tuple = (self.base_dir, self.name, chunk_name, None, chunk_i, len(self.common_sequence_chunk_exp_names))
-                arg_tuples.append(arg_tuple)
-
-            with parallel.PoolWithLoggerThread(num_processes, logger) as process_pool:
-                process_pool.starmap(process_common_sequences_chunk, arg_tuples)
-
-            self.merge_common_sequence_outcomes()
-            self.merge_common_sequence_special_alignments()
-
         process_stage('preprocess')
-        process_common_sequences()
         process_stage('align')
         process_stage('categorize')
 
@@ -2752,89 +2668,7 @@ class PooledScreenNoUMI(PooledScreen):
 
         self.Experiment = SingleGuideNoUMIExperiment
 
-    def make_common_sequences(self):
-        splitter = CommonSequenceSplitter(self)
-
-        description = 'Collecting common sequences'
-        exps = self.single_guide_experiments(no_progress=True)
-        for exp in self.progress(exps, desc=description, total=len(self.guide_combinations)):
-            reads = exp.reads_by_type('collapsed_R2')
-            seqs = (r.seq for r in reads)
-            splitter.update_counts(seqs)
-
-        splitter.write_files()
-
     read_counts = PooledScreen.UMI_counts
-
-class CommonSequenceSplitter:
-    def __init__(self, pool, reads_per_chunk=1000):
-        self.pool = pool
-        self.reads_per_chunk = reads_per_chunk
-        self.current_chunk_fh = None
-        self.seq_counts = Counter()
-        self.distinct_guides_per_seq = Counter()
-        
-        common_sequences_dir = self.pool.fns['common_sequences_dir']
-
-        if common_sequences_dir.is_dir():
-            print(f'Deleting existing {common_sequences_dir}')
-            shutil.rmtree(common_sequences_dir)
-            
-        common_sequences_dir.mkdir()
-
-    def update_counts(self, seqs):
-        counts = Counter(seqs)
-        self.seq_counts.update(counts)
-        for seq in counts:
-            self.distinct_guides_per_seq[seq] += 1
-            
-    def close(self):
-        if self.current_chunk_fh is not None:
-            self.current_chunk_fh.close()
-            
-    def possibly_make_new_chunk(self, i):
-        if i % self.reads_per_chunk == 0:
-            self.close()
-            chunk_name = f'{i:010d}-{i + self.reads_per_chunk - 1:010d}'
-            chunk_exp = self.pool.common_sequence_chunk_exp_from_name(chunk_name)
-            chunk_exp.results_dir.mkdir()
-
-            fn = chunk_exp.fns_by_read_type['fastq']['collapsed_R2']
-            self.current_chunk_fh = gzip.open(fn, 'wt', compresslevel=1)
-            
-    def write_read(self, i, read):
-        self.possibly_make_new_chunk(i)
-        self.current_chunk_fh.write(str(read))
-        
-    def write_files(self):
-        seq_lengths = {len(s) for s in self.seq_counts}
-
-        if len(seq_lengths) > 1:
-            print(f'Warning: more than one sequence length: {seq_lengths}')
-        max_seq_length = max(seq_lengths)
-
-        # Include one value outside of the solexa range to allow automatic detection.
-        qual = fastq.encode_sanger([25] + [40] * (max_seq_length - 1))
-   
-        tuples = []
-
-        Annotation = annotations.Annotations['common_sequence']
-
-        i = 0 
-        for seq, count in self.seq_counts.most_common():
-            distinct_guides = self.distinct_guides_per_seq[seq]
-
-            if count > 1 and distinct_guides > 1:
-                name = str(Annotation(rank=i, count=count))
-                read = fastq.Read(name, seq, qual[:len(seq)])
-                self.write_read(i, read)
-                i += 1
-            else:
-                name = None
-
-            tuples.append((name, seq, count))
-
-        self.close()
 
 class MergedPools(PooledScreen):
     def __init__(self, base_dir, merged_name, pool_names, category_groupings=None, progress=None):
@@ -2946,23 +2780,6 @@ def process_single_guide_experiment_stage(base_dir,
     exp.process(stage)
 
     logging.info(f'{progress_string} Finished {stage_string}')
-
-def process_common_sequences_chunk(base_dir,
-                                   pool_name,
-                                   chunk_name,
-                                   progress=None,
-                                   chunk_index=None,
-                                   total_chunks=None,
-                                  ):
-    pool = get_pool(base_dir, pool_name, progress=progress)
-    exp = pool.common_sequence_chunk_exp_from_name(chunk_name)
-
-    progress_string = f'({chunk_index + 1: >7,} / {total_chunks: >7,})'
-    logging.info(f'{progress_string} Started {chunk_name}')
-
-    exp.process()
-
-    logging.info(f'{progress_string} Finished {chunk_name}')
 
 class PooledScreenExplorer(explore.Explorer):
     def __init__(self,
