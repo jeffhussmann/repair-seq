@@ -43,7 +43,7 @@ class ExperimentGroup:
             'genomic_insertion_length_distributions': self.results_dir / 'genomic_insertion_length_distribution.txt',
         }
 
-    def process(self, num_processes=18, verbose=True):
+    def process(self, generate_figures=False, num_processes=18, verbose=True):
         self.results_dir.mkdir(exist_ok=True, parents=True)
         log_fn = self.results_dir / f'log_{datetime.datetime.now():%y%m%d-%H%M%S}.out'
 
@@ -63,8 +63,8 @@ class ExperimentGroup:
 
         with knock_knock.parallel.PoolWithLoggerThread(num_processes, logger) as pool:
             logger.info('Preprocessing')
-            args = [(type(self), self.group_args, sample_name, 'preprocess') for sample_name in self.sample_names]
 
+            args = [(type(self), self.group_args, sample_name, 'preprocess') for sample_name in self.sample_names]
             pool.starmap(run_stage, args)
 
             self.make_common_sequences()
@@ -80,12 +80,15 @@ class ExperimentGroup:
 
             self.merge_common_sequence_outcomes()
 
-            for stage in [
+            stages = [
                 'align',
                 'categorize',
-                #'generate_figures',
-            ]:
+            ]
 
+            if generate_figures:
+                stages.append('generate_figures')
+
+            for stage in stages:
                 logger.info(f'Processing unique sequences, stage {stage}')
                 args = [(type(self), self.group_args, sample_name, stage) for sample_name in self.sample_names]
                 pool.starmap(run_stage, args)

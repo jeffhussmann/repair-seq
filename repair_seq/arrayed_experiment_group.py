@@ -11,12 +11,14 @@ import pandas as pd
 import pysam
 from ipywidgets import Layout, Select
 
-import knock_knock.illumina_experiment
+import knock_knock.build_targets
 import knock_knock.explore
+import knock_knock.illumina_experiment
 import knock_knock.outcome
+import knock_knock.target_info
 from hits import utilities, sam
 
-from . import prime_editing_experiment, single_end_experiment
+from . import prime_editing_experiment
 import repair_seq.experiment_group
 
 memoized_property = utilities.memoized_property
@@ -47,6 +49,7 @@ class Batch:
 
         self.sample_sheet_fn = self.data_dir / 'sample_sheet.csv'
         self.sample_sheet = pd.read_csv(self.sample_sheet_fn, index_col='sample_name')
+        self.sample_sheet.index = self.sample_sheet.index.astype(str)
 
         self.group_descriptions_fn = self.data_dir / 'group_descriptions.csv'
         self.group_descriptions = pd.read_csv(self.group_descriptions_fn, index_col='group').replace({np.nan: None})
@@ -223,7 +226,14 @@ def get_all_experiments(base_dir=Path.home() / 'projects' / 'repair_seq', progre
             continue
 
         for sample_name, row in batch.sample_sheet.iterrows():
+            if 'group' in conditions and row['group'] not in conditions['group']:
+                continue
+
             group = batch.groups[row['group']]
+
+            if 'experiment_type' in conditions and group.experiment_type not in conditions['experiment_type']:
+                continue
+
             exps[batch_name, group.group, sample_name] = group.sample_name_to_experiment(sample_name)
 
     return exps
@@ -273,7 +283,7 @@ class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
         if baseline_condition is not None:
             self.baseline_condition = baseline_condition
         elif self.description.get('baseline_condition') is not None:
-            self.baseline_condition = tuple(self.description['baseline_condition'].split(';'))
+            self.baseline_condition = tuple(str(self.description['baseline_condition']).split(';'))
         elif len(self.condition_keys) == 0:
             # If there are no (non-replicate) conditions, let self.baseline_condition
             # be a slice that will include everything.
@@ -289,13 +299,13 @@ class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
         self.outcome_column_levels = self.full_condition_keys
 
         def condition_from_row(row):
-            condition = tuple(row[key] for key in self.condition_keys)
+            condition = tuple(str(row[key]) for key in self.condition_keys)
             if len(condition) == 1:
                 condition = condition[0]
             return condition
 
         def full_condition_from_row(row):
-            return tuple(row[key] for key in self.full_condition_keys)
+            return tuple(str(row[key]) for key in self.full_condition_keys)
 
         self.full_conditions = [full_condition_from_row(row) for _, row in self.sample_sheet.iterrows()]
 
@@ -704,7 +714,6 @@ class ArrayedExperimentGroup(repair_seq.experiment_group.ExperimentGroup):
         explorer = ArrayedGroupExplorer(self, **kwargs)
         return explorer.layout
 
-
 class ArrayedExperiment:
     def __init__(self, base_dir, batch, group, sample_name, experiment_group=None):
         if experiment_group is None:
@@ -893,7 +902,6 @@ class ArrayedExperiment:
 
 def arrayed_specialized_experiment_factory(experiment_kind):
     experiment_kind_to_class = {
-        'single_end': single_end_experiment.SingleEndExperiment,
         'illumina': knock_knock.illumina_experiment.IlluminaExperiment,
         'prime_editing': prime_editing_experiment.PrimeEditingExperiment,
         'twin_prime': prime_editing_experiment.TwinPrimeExperiment,
@@ -989,3 +997,102 @@ class ArrayedGroupExplorer(knock_knock.explore.Explorer):
         self.populate_read_ids({'name': 'initial'})
 
         return selection_widget_keys
+
+def make_targets(base_dir, df):
+    targets = {}
+
+    for amplicon_primers, rows in df.groupby('amplicon_primers'):
+        all_sgRNAs = set()
+        for sgRNAs in rows['sgRNAs']:
+            if sgRNAs != '':
+                all_sgRNAs.update(sgRNAs.split(';'))
+
+        targets[amplicon_primers] = {
+            'genome': 'hg38',
+            'amplicon_primers': amplicon_primers,
+            'sgRNAs': ';'.join(all_sgRNAs),
+        }
+
+    targets_df = pd.DataFrame.from_dict(targets, orient='index')
+    targets_df.index.name = 'name'
+
+    targets_dir = Path(base_dir) / 'targets'
+    targets_dir.mkdir(parents=True, exist_ok=True)
+
+    targets_csv_fn = targets_dir / 'targets.csv'
+    targets_df.to_csv(targets_csv_fn)
+
+    knock_knock.build_targets.build_target_infos_from_csv(base_dir)
+
+def make_group_descriptions_and_sample_sheet(base_dir, batch_name, df):
+    groups = {}
+    samples = {}
+
+    condition_columns = [column for column in df.columns if column.startswith('condition:')]
+    shortened_condition_columns = [column[len('condition:'):] for column in condition_columns]
+
+    for group_i, ((amplicon_primers, sgRNAs), group_rows) in enumerate(df.groupby(['amplicon_primers', 'sgRNAs']), 1):
+        group_name = f'{amplicon_primers}_{sgRNAs}'
+        group_name = group_name.replace(';', '+')
+
+        target_info_name = amplicon_primers
+
+        ti = knock_knock.target_info.TargetInfo(base_dir, target_info_name, sgRNAs=sgRNAs)
+        
+        if ti.pegRNA_names is None or len(ti.pegRNA_names) <= 1:
+            experiment_type = 'prime_editing'
+        elif len(ti.pegRNA_names) == 2:
+            experiment_type = 'twin_prime'
+        else:
+            raise ValueError
+
+        baseline_condition = ';'.join(map(str, tuple(group_rows[condition_columns].iloc[0])))
+
+        groups[group_name] = {
+            'supplemental_indices': 'hg38',
+            'experiment_type': experiment_type,
+            'target_info': target_info_name,
+            'sgRNAs': sgRNAs,
+            'min_relevant_length': 100,
+            'condition_keys': ';'.join(shortened_condition_columns),
+            'baseline_condition': baseline_condition,
+        }
+
+        if len(condition_columns) > 0:
+            for condition_i, (condition, condition_rows) in enumerate(group_rows.groupby(condition_columns), 1):
+                for rep_i, (_, row) in enumerate(condition_rows.iterrows(), 1):
+                    samples[row['sample_name']] = {
+                        'R1': Path(row['R1']).name,
+                        'group': group_name,
+                        'replicate': rep_i,
+                        'color': condition_i, 
+                    }
+
+                    for full, short in zip(condition_columns, shortened_condition_columns):
+                        samples[row['sample_name']][short] = row[full]
+
+        else:
+            for rep_i, (_, row) in enumerate(group_rows.iterrows(), 1):
+                samples[row['sample_name']] = {
+                    'R1': Path(row['R1']).name,
+                    'group': group_name,
+                    'replicate': rep_i,
+                    'color': group_i,
+                }
+
+    batch_dir = Path(base_dir) / 'data' / batch_name
+    batch_dir.mkdir(parents=True, exist_ok=True)
+
+    groups_df = pd.DataFrame.from_dict(groups, orient='index')
+    groups_df.index.name = 'group'
+
+    groups_csv_fn = batch_dir / 'group_descriptions.csv'
+    groups_df.to_csv(groups_csv_fn)
+
+    samples_df = pd.DataFrame.from_dict(samples, orient='index')
+    samples_df.index.name = 'sample_name'
+
+    samples_csv_fn = batch_dir / 'sample_sheet.csv'
+    samples_df.to_csv(samples_csv_fn)
+
+    return samples_df, groups_df
