@@ -200,7 +200,7 @@ class Layout(layout.Categorizer):
     @memoized_property
     def all_pegRNA_alignments(self):
         if self.target_info.pegRNA_names is None:
-            als = None
+            als = []
         else:
             als = [
                 al for al in self.alignments
@@ -335,10 +335,14 @@ class Layout(layout.Categorizer):
     def pegRNA_side(self):
         pegRNA_sides = set(self.target_info.pegRNA_names_by_side_of_read)
 
-        if len(pegRNA_sides) != 1:
+        if len(pegRNA_sides) > 1:
             raise ValueError
-            
-        pegRNA_side = list(pegRNA_sides)[0]
+        elif len(pegRNA_sides) == 1:
+            pegRNA_side = list(pegRNA_sides)[0]
+        else:
+            # Arbitrary if there is no pegRNA.
+            pegRNA_side = 'left'
+
         return pegRNA_side
 
     @memoized_property
@@ -402,9 +406,11 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def is_intended_edit(self):
-        # Outcomes that are very close to but not exactly an intended deletion
-        # can produce full extension chains. 
-        if self.target_info.intended_prime_edit_type == 'deletion':
+        if self.target_info.intended_prime_edit_type is None:
+            return False
+        elif self.target_info.intended_prime_edit_type == 'deletion':
+            # Outcomes that are very close to but not exactly an intended deletion
+            # can produce full extension chains. 
             return self.is_intended_deletion
         else:
             full_chain = set(self.extension_chain['alignments']) == {'first target', 'pegRNA', 'second target'}
@@ -559,7 +565,10 @@ class Layout(layout.Categorizer):
     @memoized_property
     def extra_alignments(self):
         ti = self.target_info
-        extra_ref_names = {n for n in ti.reference_sequences if n not in [ti.target, *ti.pegRNA_names]}
+        non_extra_ref_names = {ti.target}
+        if ti.pegRNA_names is not None:
+            non_extra_ref_names.update(ti.pegRNA_names)
+        extra_ref_names = {n for n in ti.reference_sequences if n not in non_extra_ref_names}
         als = [al for al in self.alignments if al.reference_name in extra_ref_names]
         return als
     
@@ -745,8 +754,14 @@ class Layout(layout.Categorizer):
     def split_pegRNA_alignments(self):
         if self.target_info.pegRNA_names is not None:
             valid_names = self.target_info.pegRNA_names
+        else:
+            valid_names = []
 
         return [al for al in self.split_target_and_pegRNA_alignments if al.reference_name in valid_names]
+
+    @memoized_property
+    def non_protospacer_pegRNA_alignments(self):
+        return [al for al in self.split_pegRNA_alignments if not self.is_pegRNA_protospacer_alignment(al)]
     
     @memoized_property
     def split_target_alignments(self):
@@ -931,7 +946,15 @@ class Layout(layout.Categorizer):
 
         non_pegRNA_SNVs = []
 
-        for al in self.parsimonious_target_alignments:
+        # Don't want to consider probably spurious alignments to parts of the query that
+        # should have been trimmed. 
+
+        target_als = [
+            al for al in self.parsimonious_target_alignments
+            if (interval.get_covered(al) & self.not_covered_by_primers).total_length >= 10
+        ]
+
+        for al in target_als:
             for true_read_i, read_b, ref_i, ref_b, qual in sam.aligned_tuples(al, self.target_info.target_sequence):
                 if ref_i in target_position_to_name:
                     name = target_position_to_name[ref_i]
@@ -1241,18 +1264,6 @@ class Layout(layout.Categorizer):
         return extender(self.seq_bytes, query_start, query_end, self.query_name)
     
     @memoized_property
-    def valid_intervals_for_edge_alignments(self):
-        ti = self.target_info
-        forward_primer = ti.primers_by_side_of_target[5]
-        reverse_primer = ti.primers_by_side_of_target[3]
-        valids = {
-            'left': interval.Interval(ti.cut_after + 1, reverse_primer.end),
-            #'right': interval.Interval(forward_primer.start, ti.cut_after + 1),
-            'right': ti.around_or_between_cuts(5),
-        }
-        return valids
-
-    @memoized_property
     def perfect_right_edge_alignment(self):
         min_length = 5
         
@@ -1414,6 +1425,7 @@ class Layout(layout.Categorizer):
 
             if len(self.non_pegRNA_SNVs) == 0 and len(uninteresting_indels) == 0:
                 self.subcategory = 'SNV'
+
             elif len(uninteresting_indels) > 0:
                 if len(uninteresting_indels) == 1:
                     indel = uninteresting_indels[0]
@@ -1422,12 +1434,15 @@ class Layout(layout.Categorizer):
                         self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
 
                 self.subcategory = 'SNV + short indel far from cut'
+
             else:
                 self.subcategory = 'SNV + mismatches'
 
     def register_simple_indels(self):
-        if len(self.indels_in_original_target_covering_alignment) == 1:
-            indel = self.indels_in_original_target_covering_alignment[0]
+        relevant_indels, other_indels = self.indels_in_original_target_covering_alignment
+
+        if len(relevant_indels) == 1:
+            indel = relevant_indels[0]
 
             if indel.kind == 'D':
                 self.category = 'deletion'
@@ -1436,7 +1451,7 @@ class Layout(layout.Categorizer):
             elif indel.kind == 'I':
                 self.category = 'insertion'
                 self.outcome = InsertionOutcome(indel)
-                self.relevant_alignments = self.target_edge_alignments_list
+                self.relevant_alignments = self.target_edge_alignments_list + self.non_protospacer_pegRNA_alignments
 
             if len(self.non_pegRNA_SNVs) > 0:
                 self.subcategory = 'mismatches'
@@ -2045,7 +2060,7 @@ class Layout(layout.Categorizer):
                             HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [])
                             deletion_outcome = DeletionOutcome(indel)
                             self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
-                            self.relevant_alignments = [target_alignment] + self.possible_pegRNA_extension_als_list
+                            self.relevant_alignments = [target_alignment] + self.non_protospacer_pegRNA_alignments
 
                     else:
                         self.category = 'uncategorized'
@@ -2134,7 +2149,7 @@ class Layout(layout.Categorizer):
 
             self.relevant_alignments = self.uncategorized_relevant_alignments
 
-        elif self.original_target_covering_alignment is not None and len(self.indels_in_original_target_covering_alignment) == 0:
+        elif self.original_target_alignment_has_no_indels:
             self.category = 'wild type'
             # Assume clean would have been caught before.
             self.subcategory = 'mismatches'
@@ -2190,8 +2205,8 @@ class Layout(layout.Categorizer):
             self.details = 'n/a'
             self.relevant_alignments = self.deletion_plus_edit
 
-        elif self.original_target_covering_alignment is not None and len(self.indels_in_original_target_covering_alignment) > 0:
-                self.register_simple_indels()
+        elif (not self.has_pegRNA_SNV) and self.original_target_alignment_has_only_relevant_indels:
+            self.register_simple_indels()
 
         elif self.genomic_insertion is not None:
             self.register_genomic_insertion()
@@ -2357,7 +2372,7 @@ class Layout(layout.Categorizer):
             covered_by_extra = covered & need_to_cover
             not_covered_by_extra = need_to_cover - covered_by_extra
 
-            if covered_by_extra.total_length >= 5 and not_covered_by_extra.total_length <= 10:
+            if covered_by_extra.total_length >= 10:
                 relevant_extra_als = interval.make_parsimonious(potentially_relevant_als)
 
         return relevant_extra_als
@@ -2426,19 +2441,20 @@ class Layout(layout.Categorizer):
     def duplication_plus_edit(self):
         alignments = None
 
-        duplication_als = self.duplications_from_each_read_edge[self.non_pegRNA_side]
-        if len(duplication_als) > 1:
-            covered_by_duplication = interval.get_disjoint_covered(duplication_als)
+        if self.target_info.pegRNA_names is not None and len(self.target_info.pegRNA_names) > 0:
+            duplication_als = self.duplications_from_each_read_edge[self.non_pegRNA_side]
+            if len(duplication_als) > 1:
+                covered_by_duplication = interval.get_disjoint_covered(duplication_als)
 
-            chain_als = self.extension_chain['alignments']
+                chain_als = self.extension_chain['alignments']
 
-            if 'pegRNA' in chain_als and 'second target' in chain_als:
-                combined_covered = self.extension_chain['query_covered'] | covered_by_duplication
+                if 'pegRNA' in chain_als and 'second target' in chain_als:
+                    combined_covered = self.extension_chain['query_covered'] | covered_by_duplication
 
-                uncovered = self.whole_read_minus_edges(2) - combined_covered
-            
-                if uncovered.total_length == 0:
-                    alignments = list(chain_als.values()) + duplication_als
+                    uncovered = self.whole_read_minus_edges(2) - combined_covered
+                
+                    if uncovered.total_length == 0:
+                        alignments = list(chain_als.values()) + duplication_als
 
         return alignments
 
@@ -2446,19 +2462,20 @@ class Layout(layout.Categorizer):
     def deletion_plus_edit(self):
         alignments = None
 
-        target_als = self.duplications_from_each_read_edge[self.non_pegRNA_side]
-        if len(target_als) == 1:
-            covered_after_deletion = interval.get_disjoint_covered(target_als)
+        if self.target_info.pegRNA_names is not None and len(self.target_info.pegRNA_names) > 0:
+            target_als = self.duplications_from_each_read_edge[self.non_pegRNA_side]
+            if len(target_als) == 1:
+                covered_after_deletion = interval.get_disjoint_covered(target_als)
 
-            chain_als = self.extension_chain['alignments']
+                chain_als = self.extension_chain['alignments']
 
-            if 'pegRNA' in chain_als and 'second target' in chain_als:
-                combined_covered = self.extension_chain['query_covered'] | covered_after_deletion
+                if 'pegRNA' in chain_als and 'second target' in chain_als:
+                    combined_covered = self.extension_chain['query_covered'] | covered_after_deletion
 
-                uncovered = self.whole_read_minus_edges(2) - combined_covered
-            
-                if uncovered.total_length == 0:
-                    alignments = list(chain_als.values()) + target_als
+                    uncovered = self.whole_read_minus_edges(2) - combined_covered
+                
+                    if uncovered.total_length == 0:
+                        alignments = list(chain_als.values()) + target_als
 
         return alignments
 
@@ -2564,10 +2581,37 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def indels_in_original_target_covering_alignment(self):
-        indels = None
+        max_insertion_length = 3
+
+        relevant_indels = []
+        other_indels = []
+
         if self.original_target_covering_alignment is not None:
-            indels = [indel for indel, near_cut in self.extract_indels_from_alignments([self.original_target_covering_alignment])]
-        return indels
+            for indel, near_cut in self.extract_indels_from_alignments([self.original_target_covering_alignment]):
+                if indel.kind == 'D' or (indel.kind == 'I' and indel.length <= max_insertion_length):
+                    relevant_indels.append(indel)
+                else:
+                    other_indels.append(indel)
+
+        return relevant_indels, other_indels
+
+    @memoized_property
+    def original_target_alignment_has_no_indels(self):
+        if self.original_target_covering_alignment is None:
+            return False
+
+        relevant_indels, other_indels = self.indels_in_original_target_covering_alignment
+
+        return len(relevant_indels) == 0 and len(other_indels) == 0
+
+    @memoized_property
+    def original_target_alignment_has_only_relevant_indels(self):
+        if self.original_target_covering_alignment is None:
+            return False
+
+        relevant_indels, other_indels = self.indels_in_original_target_covering_alignment
+
+        return len(relevant_indels) > 0 and len(other_indels) == 0
 
     def generate_extended_target_PBS_alignment(self, pegRNA_al):
         pegRNA_name = pegRNA_al.reference_name
@@ -2729,26 +2773,29 @@ class Layout(layout.Categorizer):
         return manual_anchors
 
     def plot(self, relevant=True, manual_alignments=None, **manual_diagram_kwargs):
+        label_overrides = {}
+        label_offsets = {}
+        feature_heights = {}
+
         if relevant and not self.categorized:
             self.categorize()
 
         ti = self.target_info
 
-        pegRNA_name = ti.pegRNA_names[0]
-
-        PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
-        PBS_strand = ti.features[ti.target, PBS_name].strand
-
         flip_target = ti.sequencing_direction == '-'
+        flip_pegRNA = False
 
-        if (flip_target and PBS_strand == '-') or (not flip_target and PBS_strand == '+'):
-            flip_pegRNA = True
-        else:
-            flip_pegRNA = False
+        if ti.pegRNA_names is not None:
+            pegRNA_name = ti.pegRNA_names[0]
 
-        label_overrides = {}
-        label_offsets = {}
-        feature_heights = {}
+            PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
+            PBS_strand = ti.features[ti.target, PBS_name].strand
+
+            if (flip_target and PBS_strand == '-') or (not flip_target and PBS_strand == '+'):
+                flip_pegRNA = True
+
+            for pegRNA in self.target_info.pegRNA_names:
+                label_offsets[f'insertion_{pegRNA}'] = 1
 
         for feature_name in self.target_info.PAM_features:
             label_offsets[feature_name] = 1
@@ -2758,17 +2805,23 @@ class Layout(layout.Categorizer):
             label_overrides[deletion.ID] = 'intended deletion'
             feature_heights[deletion.ID] = 0.5
 
-        for name in ti.sgRNAs:
-            label_overrides[name] = 'protospacer'
+        for name in ti.protospacer_names:
+            if name == ti.primary_protospacer:
+                new_name = 'pegRNA\nprotospacer'
+            else:
+                new_name = 'ngRNA\nprotospacer'
+
+            label_overrides[name] = new_name
 
         label_overrides.update({feature_name: None for feature_name in ti.PAM_features})
-
-        for pegRNA in self.target_info.pegRNA_names:
-            label_offsets[f'insertion_{pegRNA}'] = 1
 
         features_to_show = {*ti.features_to_show}
         features_to_show.update({(ti.target, name) for name in ti.protospacer_names})
         features_to_show.update({(ti.target, name) for name in ti.PAM_features})
+
+        refs_to_draw = {ti.target}
+        if ti.pegRNA_names is not None:
+            refs_to_draw.update(ti.pegRNA_names)
 
         diagram_kwargs = dict(
             draw_sequence=True,
@@ -2776,7 +2829,7 @@ class Layout(layout.Categorizer):
             split_at_indels=True,
             features_to_show=features_to_show,
             manual_anchors=self.manual_anchors,
-            refs_to_draw={ti.target, *ti.pegRNA_names},
+            refs_to_draw=refs_to_draw,
             label_offsets=label_offsets,
             label_overrides=label_overrides,
             inferred_amplicon_length=self.inferred_amplicon_length,
@@ -2804,7 +2857,7 @@ class Layout(layout.Categorizer):
         # due to application of parsimony.
 
         # Draw the pegRNA.
-        if any(al.reference_name in ti.pegRNA_names for al in diagram.alignments):
+        if ti.pegRNA_names is not None and any(al.reference_name in ti.pegRNA_names for al in diagram.alignments):
             ref_y = diagram.max_y + diagram.target_and_donor_y_gap
 
             # To ensure that features on pegRNAs that extend far to the right of

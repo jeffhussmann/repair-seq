@@ -778,11 +778,12 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                 color_overrides[PAM_name] = color
 
         features_to_show = {*ti.features_to_show}
-        features_to_show.update(sorted(ti.PAM_features))
+        features_to_show.update({(ti.target, name) for name in ti.protospacer_names})
+        features_to_show.update({(ti.target, name) for name in ti.PAM_features})
 
-        label_offsets = {feature_name: 1 for _, feature_name in ti.PAM_features}
+        label_offsets = {feature_name: 1 for feature_name in ti.PAM_features}
 
-        label_overrides = {name: 'protospacer' for name in ti.sgRNAs}
+        label_overrides = {name: 'protospacer' for name in ti.protospacer_names}
 
         feature_heights = {}
 
@@ -811,7 +812,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         refs_to_draw= {ti.target, *pegRNA_names}
         if 'refs_to_draw' in manual_diagram_kwargs:
             refs_to_draw.update(manual_diagram_kwargs.pop('refs_to_draw'))
-
 
         if manual_alignments is not None:
             als_to_plot = manual_alignments

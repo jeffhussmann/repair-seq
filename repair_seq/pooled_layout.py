@@ -98,6 +98,7 @@ class Layout(layout.Categorizer):
         ),
         ('genomic insertion',
             ('hg19',
+             'hg38',
              'bosTau7',
              'e_coli',
             ),
@@ -109,6 +110,7 @@ class Layout(layout.Categorizer):
         ),
         ('nonspecific amplification',
             ('hg19',
+             'hg38',
              'bosTau7',
              'e_coli',
              'primer dimer',
@@ -988,7 +990,7 @@ class Layout(layout.Categorizer):
         # Insist that the alignments be to the correct side and strand, even if longer ones
         # to the wrong side or strand exist.
         for side in ['left', 'right']:
-            for length in range(20, 3, -1):
+            for length in range(min(20, len(self.seq)), 3, -1):
                 if side == 'left':
                     start = 0
                     end = length
@@ -2626,7 +2628,7 @@ class Layout(layout.Categorizer):
         return inferred_length
 
     def plot(self, relevant=True, **manual_diagram_kwargs):
-        if not self.categorized:
+        if relevant and not self.categorized:
             self.categorize()
 
         ti = self.target_info
