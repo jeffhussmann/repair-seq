@@ -998,7 +998,10 @@ class ArrayedGroupExplorer(knock_knock.explore.Explorer):
 
         return selection_widget_keys
 
-def make_targets(base_dir, df):
+def make_targets(base_dir, df, extra_genbanks=None):
+    if extra_genbanks is None:
+        extra_genbanks = []
+
     targets = {}
 
     for amplicon_primers, rows in df.groupby('amplicon_primers'):
@@ -1011,6 +1014,7 @@ def make_targets(base_dir, df):
             'genome': 'hg38',
             'amplicon_primers': amplicon_primers,
             'sgRNAs': ';'.join(all_sgRNAs),
+            'extra_genbanks': ';'.join(extra_genbanks),
         }
 
     targets_df = pd.DataFrame.from_dict(targets, orient='index')
@@ -1025,14 +1029,19 @@ def make_targets(base_dir, df):
     knock_knock.build_targets.build_target_infos_from_csv(base_dir)
 
 def make_group_descriptions_and_sample_sheet(base_dir, batch_name, df):
+    df = df.copy()
+
+    if 'donor' not in df.columns:
+        df['donor'] = ''
+
     groups = {}
     samples = {}
 
     condition_columns = [column for column in df.columns if column.startswith('condition:')]
     shortened_condition_columns = [column[len('condition:'):] for column in condition_columns]
 
-    for group_i, ((amplicon_primers, sgRNAs), group_rows) in enumerate(df.groupby(['amplicon_primers', 'sgRNAs']), 1):
-        group_name = f'{amplicon_primers}_{sgRNAs}'
+    for group_i, ((amplicon_primers, sgRNAs, donor), group_rows) in enumerate(df.groupby(['amplicon_primers', 'sgRNAs', 'donor']), 1):
+        group_name = f'{amplicon_primers}_{sgRNAs}_{donor}'
         group_name = group_name.replace(';', '+')
 
         target_info_name = amplicon_primers
@@ -1042,7 +1051,10 @@ def make_group_descriptions_and_sample_sheet(base_dir, batch_name, df):
         if ti.pegRNA_names is None or len(ti.pegRNA_names) <= 1:
             experiment_type = 'prime_editing'
         elif len(ti.pegRNA_names) == 2:
-            experiment_type = 'twin_prime'
+            if donor == '':
+                experiment_type = 'twin_prime'
+            else:
+                experiment_type = 'Bxb1_twin_prime'
         else:
             raise ValueError
 
@@ -1053,6 +1065,7 @@ def make_group_descriptions_and_sample_sheet(base_dir, batch_name, df):
             'experiment_type': experiment_type,
             'target_info': target_info_name,
             'sgRNAs': sgRNAs,
+            'donor': donor,
             'min_relevant_length': 100,
             'condition_keys': ';'.join(shortened_condition_columns),
             'baseline_condition': baseline_condition,
