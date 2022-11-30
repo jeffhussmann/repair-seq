@@ -3,6 +3,7 @@ import hits.utilities
 from hits import sam, interval
 
 from knock_knock.outcome import *
+import knock_knock.layout
 
 memoized_property = hits.utilities.memoized_property
 
@@ -114,8 +115,12 @@ class Layout(repair_seq.twin_prime_layout.Layout):
             al for al in self.alignments
             if al.reference_name in valid_names
         ]
+
+        split_d_als = []
+        for al in d_als:
+            split_d_als.extend(knock_knock.layout.split_at_edit_clusters(al, self.target_info.reference_sequences))
         
-        return d_als
+        return split_d_als
 
     @memoized_property
     def pegRNA_integrase_sites(self):
@@ -156,11 +161,11 @@ class Layout(repair_seq.twin_prime_layout.Layout):
             side = self.target_info.pegRNA_name_to_side_of_read[pegRNA_al.reference_name]
 
             for donor_al in self.donor_alignments:
-                shares_CD = self.share_feature(pegRNA_al,
-                                               self.pegRNA_integrase_sites_by_side[side]['CD'].ID,
-                                               donor_al,
-                                               self.donor_integrase_sites['CD'].ID,
-                                              )
+                shares_CD = self.are_mutually_extending_from_shared_feature(pegRNA_al,
+                                                                            self.pegRNA_integrase_sites_by_side[side]['CD'].ID,
+                                                                            donor_al,
+                                                                            self.donor_integrase_sites['CD'].ID,
+                                                                           )
 
                 
                 if shares_CD:
@@ -204,9 +209,25 @@ class Layout(repair_seq.twin_prime_layout.Layout):
                 self.category = 'integration at unintended prime edit'
 
         if self.category == 'intended integration':
-            self.relevant_alignments = self.target_edge_alignments_list + self.pegRNA_extension_als_list + [self.intended_integrations[0]['donor_al']]
+            self.relevant_alignments = (
+                self.target_edge_alignments_list + \
+                self.pegRNA_extension_als_list + \
+                [self.intended_integrations[0]['donor_al']]
+            )
         else:
-            self.relevant_alignments = self.uncategorized_relevant_alignments
+            #self.relevant_alignments = self.uncategorized_relevant_alignments
+            self.relevant_alignments = (
+                self.target_edge_alignments_list + \
+                [self.intended_integrations[0]['donor_al']]
+            )
+            pegRNA_als = []
+            for pegRNA_name, als in self.pegRNA_alignments.items():
+                for al in als:
+                    if not self.is_pegRNA_protospacer_alignment(al):
+                        pegRNA_als.append(al)
+
+            pegRNA_als = sam.make_noncontained(pegRNA_als)
+            self.relevant_alignments.extend(pegRNA_als)
 
         self.subcategory = 'n/a'
         self.outcome = Outcome('n/a')
