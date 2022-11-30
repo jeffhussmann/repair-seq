@@ -330,7 +330,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
             last_als[side] = last_al
 
-        return knock_knock.layout.junction_microhomology(self.target_info, last_als['left'], last_als['right'])
+        return knock_knock.layout.junction_microhomology(self.target_info.reference_sequences, last_als['left'], last_als['right'])
 
     def get_extension_chain_edge(self, side):
         ''' Get the position of the far edge of an extension chain

@@ -87,7 +87,7 @@ def plot(outcome_order,
     windows = {}
 
     for source_name, ti in target_infos.items():
-        guide = ti.features[ti.target, ti.primary_sgRNA]
+        guide = ti.features[ti.target, ti.primary_protospacer]
 
         # TODO: flip behavior for multiple sources
         if force_flip or (flip_if_reverse and guide.strand == '-'):
@@ -326,13 +326,11 @@ def plot(outcome_order,
         offset = offsets[source_name]
         window_left, window_right = windows[source_name]
 
-        guide = ti.features[ti.target, ti.primary_sgRNA]
-
         if on_top or not draw_wild_type_on_top:
             draw_sequence(y, source_name, alpha=1)
 
             if guides_to_draw is None:
-                guides_to_draw = [ti.primary_sgRNA]
+                guides_to_draw = [ti.primary_protospacer]
 
             for guide_name in guides_to_draw:
                 PAM_start = ti.PAM_slices[guide_name].start - 0.5 - offset
@@ -681,7 +679,7 @@ def plot(outcome_order,
         if len(target_infos) > 1:
             raise ValueError
 
-        draw_wild_type(y, source_name, on_top=True, guides_to_draw=target_infos[single_source_name].sgRNAs)
+        draw_wild_type(y, source_name, on_top=True, guides_to_draw=target_infos[single_source_name].protospacer_names)
         ax.set_xticks([])
                 
     if not preserve_x_lims:
@@ -838,7 +836,7 @@ class DiagramGrid:
 
         self.outcomes = outcomes
         self.target_info = target_info
-        PAM_feature = target_info.PAM_features[target_info.target, f'{target_info.primary_sgRNA}_PAM']
+        PAM_feature = target_info.PAM_features[f'{target_info.primary_protospacer}_PAM']
         self.PAM_color = PAM_feature.attribute['color']
         self.ax_on_bottom = ax_on_bottom
 

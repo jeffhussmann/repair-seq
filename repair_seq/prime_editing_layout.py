@@ -1728,7 +1728,7 @@ class Layout(layout.Categorizer):
 
                 edge_als_cropped_to_cut['left'] = sam.crop_al_to_ref_int(details['edge_alignments']['left'], left_of_cut.start, left_of_cut.end)
 
-                MH_lengths['left'] = layout.junction_microhomology(self.target_info, edge_als_cropped_to_cut['left'], details['candidate_alignment'])
+                MH_lengths['left'] = layout.junction_microhomology(self.target_info.reference_sequences, edge_als_cropped_to_cut['left'], details['candidate_alignment'])
 
             if details['edge_alignments']['right'] is None:
                 edge_als_cropped_to_cut['right'] = None
@@ -1741,7 +1741,7 @@ class Layout(layout.Categorizer):
 
                 edge_als_cropped_to_cut['right'] = sam.crop_al_to_ref_int(details['edge_alignments']['right'], right_of_cut.start, right_of_cut.end)
 
-                MH_lengths['right'] = layout.junction_microhomology(self.target_info, details['candidate_alignment'], edge_als_cropped_to_cut['right'])
+                MH_lengths['right'] = layout.junction_microhomology(self.target_info.reference_sequences, details['candidate_alignment'], edge_als_cropped_to_cut['right'])
 
             details['MH_lengths'] = MH_lengths
             details['edge_alignments_cropped_to_cut'] = edge_als_cropped_to_cut
@@ -2370,7 +2370,6 @@ class Layout(layout.Categorizer):
             covered = interval.get_disjoint_covered(potentially_relevant_als)
 
             covered_by_extra = covered & need_to_cover
-            not_covered_by_extra = need_to_cover - covered_by_extra
 
             if covered_by_extra.total_length >= 10:
                 relevant_extra_als = interval.make_parsimonious(potentially_relevant_als)
