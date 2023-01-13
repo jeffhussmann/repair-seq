@@ -13,8 +13,8 @@ def test_intended_insertion_inferrence():
                                                 'pPC1000',
                                                 sgRNAs=pegRNA_name,
                                                )
-        assert len(ti.pegRNA_programmed_insertions) == 1
-        inferred_insertion = ti.pegRNA_programmed_insertions[0]
+        assert len(ti.pegRNA_programmed_insertion_features) == 1
+        inferred_insertion = ti.pegRNA_programmed_insertion_features[0]
         assert (inferred_insertion.start == start)
         assert (inferred_insertion.end == end)
         assert (inferred_insertion.strand == strand)
