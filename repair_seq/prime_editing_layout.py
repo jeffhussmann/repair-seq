@@ -1403,7 +1403,7 @@ class Layout(layout.Categorizer):
 
         elif self.target_info.intended_prime_edit_type == 'insertion':
             self.subcategory = 'insertion'
-            self.details = 'n/a'
+            self.outcome = InsertionOutcome(self.target_info.pegRNA_programmed_insertion)
 
         elif self.target_info.intended_prime_edit_type == 'deletion':
             if len(self.non_pegRNA_SNVs) == 0:
@@ -1415,10 +1415,14 @@ class Layout(layout.Categorizer):
 
         else:
             target_alignment = self.single_read_covering_target_alignment
+            
             if target_alignment is None:
                 target_alignment = self.original_target_covering_alignment
 
-            interesting_indels, uninteresting_indels = self.interesting_and_uninteresting_indels([target_alignment])
+            if target_alignment is not None:
+                _, uninteresting_indels = self.interesting_and_uninteresting_indels([target_alignment])
+            else:
+                uninteresting_indels = []
 
             HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [])
             self.outcome = HDR_outcome
@@ -1444,20 +1448,28 @@ class Layout(layout.Categorizer):
         if len(relevant_indels) == 1:
             indel = relevant_indels[0]
 
-            if indel.kind == 'D':
-                self.category = 'deletion'
-                self.outcome = DeletionOutcome(indel)
-                self.relevant_alignments = self.target_edge_alignments_list
-            elif indel.kind == 'I':
-                self.category = 'insertion'
-                self.outcome = InsertionOutcome(indel)
-                self.relevant_alignments = self.target_edge_alignments_list + self.non_protospacer_pegRNA_alignments
-
-            if len(self.non_pegRNA_SNVs) > 0:
-                self.subcategory = 'mismatches'
+            if indel == self.target_info.pegRNA_programmed_insertion:
+                # Splitting alignments at edit clusters may have prevented an intended
+                # insertion with a cluster of low-quality mismatches from 
+                # from being recognized as an intended insertion in split form.
+                # Catch these here, with the caveat that this may inflate the
+                # apparent ratio of intended edits to unintended rejoinings, since
+                # there is no equivalent catching of those.
+                self.register_intended_edit()
             else:
-                self.subcategory = 'clean'
+                if indel.kind == 'D':
+                    self.category = 'deletion'
+                    self.outcome = DeletionOutcome(indel)
+                    self.relevant_alignments = self.target_edge_alignments_list
+                elif indel.kind == 'I':
+                    self.category = 'insertion'
+                    self.outcome = InsertionOutcome(indel)
+                    self.relevant_alignments = self.target_edge_alignments_list + self.non_protospacer_pegRNA_alignments
 
+                if len(self.non_pegRNA_SNVs) > 0:
+                    self.subcategory = 'mismatches'
+                else:
+                    self.subcategory = 'clean'
         else:
             self.category = 'multiple indels'
             self.subcategory = 'multiple indels'
@@ -1658,7 +1670,7 @@ class Layout(layout.Categorizer):
         pegRNA_al = details['candidate_alignment']
         indels = self.extract_indels_from_alignments([pegRNA_al])
 
-        for insertion_feature in self.target_info.pegRNA_programmed_insertions:
+        for insertion_feature in self.target_info.pegRNA_programmed_insertion_features:
             shares_HA = {side: (side, side) in details['shared_HAs'] for side in ['left', 'right']}
             overlaps_feature = sam.overlaps_feature(pegRNA_al, insertion_feature, require_same_strand=False)
             no_indels = len(indels) == 0
@@ -1711,40 +1723,21 @@ class Layout(layout.Categorizer):
         # For performance reasons, only compute some properties on possible insertions that haven't
         # already been ruled out.
 
-        # Assume that edge alignments extending past the expected cut site are just cooincidental
-        # sequence match and don't count any such matches as microhomology.
         for details in ranked:
-            edge_als_cropped_to_cut = {}
             MH_lengths = {}
 
             if details['edge_alignments']['left'] is None:
-                edge_als_cropped_to_cut['left'] = None
                 MH_lengths['left'] = None
             else:
-                if details['edge_alignments']['left'].is_reverse:
-                    left_of_cut = self.target_info.target_side_intervals[3]
-                else:
-                    left_of_cut = self.target_info.target_side_intervals[5]
-
-                edge_als_cropped_to_cut['left'] = sam.crop_al_to_ref_int(details['edge_alignments']['left'], left_of_cut.start, left_of_cut.end)
-
-                MH_lengths['left'] = layout.junction_microhomology(self.target_info.reference_sequences, edge_als_cropped_to_cut['left'], details['candidate_alignment'])
+                MH_lengths['left'] = layout.junction_microhomology(self.target_info.reference_sequences, details['edge_alignments']['left'], details['candidate_alignment'])
 
             if details['edge_alignments']['right'] is None:
-                edge_als_cropped_to_cut['right'] = None
                 MH_lengths['right'] = None
             else:
-                if details['edge_alignments']['right'].is_reverse:
-                    right_of_cut = self.target_info.target_side_intervals[5]
-                else:
-                    right_of_cut = self.target_info.target_side_intervals[3]
 
-                edge_als_cropped_to_cut['right'] = sam.crop_al_to_ref_int(details['edge_alignments']['right'], right_of_cut.start, right_of_cut.end)
-
-                MH_lengths['right'] = layout.junction_microhomology(self.target_info.reference_sequences, details['candidate_alignment'], edge_als_cropped_to_cut['right'])
+                MH_lengths['right'] = layout.junction_microhomology(self.target_info.reference_sequences, details['candidate_alignment'], details['edge_alignments']['right'])
 
             details['MH_lengths'] = MH_lengths
-            details['edge_alignments_cropped_to_cut'] = edge_als_cropped_to_cut
 
         return ranked
 
@@ -1770,8 +1763,6 @@ class Layout(layout.Categorizer):
             max_right_results = sam.find_best_query_switch_after(candidate_al, target_edge_als['right'], candidate_ref_seq, ti.target_sequence, max)
             if max_right_results['switch_after'] == len(self.seq) - 1:
                 right_results = max_right_results
-
-        # TODO: might be valuable to replace max in left_results tie breaker with something that picks the cut site if possible.
 
         # Crop the alignments at the switch points identified.
         target_bounds = {}
@@ -1821,25 +1812,6 @@ class Layout(layout.Categorizer):
         if source == 'pegRNA':
             has_pegRNA_SNV['insertion'] = self.specific_to_pegRNA(candidate_al) # should this be cropped_candidate_al?
 
-        missing_from_blunt = {
-            5: None,
-            3: None,
-        }
-
-        # TODO: there are edge cases where short extra sequence appears at start of read before expected NotI site.
-        if target_bounds[5] is not None:
-            if target_edge_als['left'].is_reverse:
-                missing_from_blunt[5] = target_bounds[5] - (ti.cut_after + 1)
-            else:
-                missing_from_blunt[5] = ti.cut_after - target_bounds[5]
-
-        if target_bounds[3] is not None:
-            missing_from_blunt[3] = (target_bounds[3] - ti.cut_after)
-            if target_edge_als['right'].is_reverse:
-                missing_from_blunt[3] = ti.cut_after - target_bounds[3]
-            else:
-                missing_from_blunt[3] = target_bounds[3] - (ti.cut_after + 1)
-
         longest_edge_deletion = None
 
         for side in ['left', 'right']:
@@ -1869,8 +1841,6 @@ class Layout(layout.Categorizer):
             'gap_before_length': gap_before_length,
             'gap_after_length': gap_after_length,
             'total_gap_length': total_gap_length,
-
-            'missing_from_blunt': missing_from_blunt,
 
             'total_edits_and_gaps': total_gap_length + edit_distance,
             'left_edits': left_edits,
@@ -2784,7 +2754,7 @@ class Layout(layout.Categorizer):
         flip_target = ti.sequencing_direction == '-'
         flip_pegRNA = False
 
-        if ti.pegRNA_names is not None:
+        if ti.pegRNA_names is not None and len(ti.pegRNA_names) > 0:
             pegRNA_name = ti.pegRNA_names[0]
 
             PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
@@ -2800,9 +2770,8 @@ class Layout(layout.Categorizer):
             label_offsets[feature_name] = 1
 
         for deletion in self.target_info.pegRNA_programmed_deletions:
-            label_offsets[deletion.ID] = 1
-            label_overrides[deletion.ID] = 'intended deletion'
-            feature_heights[deletion.ID] = 0.5
+            label_overrides[deletion.ID] = f'programmed deletion ({len(deletion)} nts)'
+            feature_heights[deletion.ID] = -0.5
 
         for name in ti.protospacer_names:
             if name == ti.primary_protospacer:

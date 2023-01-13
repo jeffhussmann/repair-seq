@@ -68,6 +68,10 @@ class Layout(repair_seq.prime_editing_layout.Layout):
              'mismatches',
             ),
         ),
+        ('multiple indels',
+            ('multiple indels',
+            ),
+        ),
         ('extension from intended annealing',
             ('n/a',
             ),
@@ -673,6 +677,9 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
             self.outcome = Outcome('n/a')
             self.relevant_alignments = self.target_edge_alignments_list + self.flipped_pegRNA_als['left'] + self.flipped_pegRNA_als['right']
+
+        elif self.original_target_alignment_has_only_relevant_indels:
+            self.register_simple_indels()
 
         else:
             self.category = 'uncategorized'
