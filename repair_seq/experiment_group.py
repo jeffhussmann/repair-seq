@@ -93,13 +93,13 @@ class ExperimentGroup:
                 args = [(type(self), self.group_args, sample_name, stage) for sample_name in self.sample_names]
                 pool.starmap(run_stage, args)
 
-        logger.removeHandler(file_handler)
-        file_handler.close()
-
         logger.info('Collecting outcome counts')
         self.make_outcome_counts()
 
-        logger.info('Done')
+        logger.info('Done!')
+
+        logger.removeHandler(file_handler)
+        file_handler.close()
 
     def make_common_sequences(self):
         ''' Identify all sequences that occur more than once across preprocessed
