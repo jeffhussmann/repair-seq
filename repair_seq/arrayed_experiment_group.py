@@ -1,7 +1,8 @@
 import gzip
 import itertools
-import time
+import logging
 import shutil
+import time
 import warnings
 from pathlib import Path
 from collections import defaultdict, Counter
@@ -1028,7 +1029,7 @@ def make_targets(base_dir, df, extra_genbanks=None):
 
     knock_knock.build_targets.build_target_infos_from_csv(base_dir)
 
-def make_group_descriptions_and_sample_sheet(base_dir, batch_name, df):
+def make_group_descriptions_and_sample_sheet(base_dir, df, batch_name=None):
     df = df.copy()
 
     if 'donor' not in df.columns:
@@ -1040,7 +1041,9 @@ def make_group_descriptions_and_sample_sheet(base_dir, batch_name, df):
     condition_columns = [column for column in df.columns if column.startswith('condition:')]
     shortened_condition_columns = [column[len('condition:'):] for column in condition_columns]
 
-    for group_i, ((amplicon_primers, sgRNAs, donor), group_rows) in enumerate(df.groupby(['amplicon_primers', 'sgRNAs', 'donor']), 1):
+    grouped = df.groupby(['amplicon_primers', 'sgRNAs', 'donor'])
+
+    for group_i, ((amplicon_primers, sgRNAs, donor), group_rows) in enumerate(grouped, 1):
         group_name = f'{amplicon_primers}_{sgRNAs}_{donor}'
         group_name = group_name.replace(';', '+')
 
@@ -1093,6 +1096,19 @@ def make_group_descriptions_and_sample_sheet(base_dir, batch_name, df):
                     'color': group_i,
                 }
 
+    fn_parents = {Path(fn).parent for fn in df['R1']}
+
+    if len(fn_parents) != 1:
+        raise ValueError('Sequencing files in more than one directory')
+
+    fn_parent = fn_parents.pop()
+
+    if batch_name is None:
+        if str(fn_parent) == '.':
+            raise ValueError('Sequencing files were not provided as full paths.')
+        else:
+            batch_name = fn_parent.parts[3]
+
     batch_dir = Path(base_dir) / 'data' / batch_name
     batch_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1108,4 +1124,4 @@ def make_group_descriptions_and_sample_sheet(base_dir, batch_name, df):
     samples_csv_fn = batch_dir / 'sample_sheet.csv'
     samples_df.to_csv(samples_csv_fn)
 
-    return samples_df, groups_df
+    return samples_df, groups_df, fn_parent
