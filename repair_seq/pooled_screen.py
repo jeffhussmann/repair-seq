@@ -2,7 +2,6 @@ import matplotlib
 if 'inline' not in matplotlib.get_backend():
     matplotlib.use('Agg')
 
-import bisect
 import copy
 import datetime
 import gzip
