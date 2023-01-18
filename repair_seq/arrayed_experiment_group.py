@@ -1,6 +1,5 @@
 import gzip
 import itertools
-import logging
 import shutil
 import time
 import warnings
@@ -998,6 +997,31 @@ class ArrayedGroupExplorer(knock_knock.explore.Explorer):
         self.populate_read_ids({'name': 'initial'})
 
         return selection_widget_keys
+
+def sanitize_and_validate_input(df):
+    # Remove any rows or columns that are entirely nan (e.g. because excel exported
+    # unwanted empty rows into a csv), then replace any remaining nans with an empty string.
+    df = df.dropna(axis='index', how='all').dropna(axis='columns', how='all').fillna('')
+
+    # Confirm mandatory columns are present.
+
+    mandatory_columns = [
+        'sample_name',
+        'R1',
+        'amplicon_primers',
+        'sgRNAs',
+    ]
+    
+    missing_columns = [col for col in mandatory_columns if col not in df.columns]
+    if len(missing_columns) > 0:
+        raise ValueError(f'{missing_columns} column(s) not found in sample sheet')
+
+    if not df['sample_name'].is_unique:
+        counts = df['sample_name'].value_counts()
+        bad_names = ', '.join(f'{name} ({count})' for name, count in counts[counts > 1].items())
+        raise ValueError(f'Sample name are not unique: {bad_names}')
+
+    return df
 
 def make_targets(base_dir, df, extra_genbanks=None):
     if extra_genbanks is None:
