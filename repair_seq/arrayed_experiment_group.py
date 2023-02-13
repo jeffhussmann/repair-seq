@@ -1105,7 +1105,7 @@ def make_group_descriptions_and_sample_sheet(base_dir, df, batch_name=None):
                         'R1': Path(row['R1']).name,
                         'group': group_name,
                         'replicate': rep_i,
-                        'color': condition_i, 
+                        'color': (condition_i * 10 + group_i), 
                     }
 
                     for full, short in zip(condition_columns, shortened_condition_columns):
@@ -1120,18 +1120,14 @@ def make_group_descriptions_and_sample_sheet(base_dir, df, batch_name=None):
                     'color': group_i,
                 }
 
-    fn_parents = {Path(fn).parent for fn in df['R1']}
-
-    if len(fn_parents) != 1:
-        raise ValueError('Sequencing files in more than one directory')
-
-    fn_parent = fn_parents.pop()
-
     if batch_name is None:
-        if str(fn_parent) == '.':
-            raise ValueError('Sequencing files were not provided as full paths.')
+        fn_parents = {Path(fn).parent for fn in df['R1']}
+
+        batch_names = {fn_parent.parts[3] for fn_parent in fn_parents}
+        if len(batch_names) > 1:
+            raise ValueError(batch_names)
         else:
-            batch_name = fn_parent.parts[3]
+            batch_name = batch_names.pop()
 
     batch_dir = Path(base_dir) / 'data' / batch_name
     batch_dir.mkdir(parents=True, exist_ok=True)
@@ -1148,4 +1144,4 @@ def make_group_descriptions_and_sample_sheet(base_dir, df, batch_name=None):
     samples_csv_fn = batch_dir / 'sample_sheet.csv'
     samples_df.to_csv(samples_csv_fn)
 
-    return samples_df, groups_df, fn_parent
+    return samples_df, groups_df
