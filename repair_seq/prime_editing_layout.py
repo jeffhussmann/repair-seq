@@ -235,7 +235,7 @@ class Layout(layout.Categorizer):
 
     def pegRNA_alignment_extends_target_alignment(self, pegRNA_al, target_al, shared_feature):
         if pegRNA_al is None or target_al is None:
-            return None, None
+            return None, None, None
 
         pegRNA_name = pegRNA_al.reference_name
         target_PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
@@ -252,6 +252,7 @@ class Layout(layout.Categorizer):
                 right_feature_name = 'PBS'
 
                 pegRNA_al_key = 'right'
+                target_al_key = 'left'
 
             else:
                 right_al = target_al
@@ -261,6 +262,7 @@ class Layout(layout.Categorizer):
                 left_feature_name = 'PBS'
 
                 pegRNA_al_key = 'left'
+                target_al_key = 'right'
 
         elif shared_feature == 'RTT':
             left_feature_name = HA_RT_name
@@ -271,12 +273,14 @@ class Layout(layout.Categorizer):
                 right_al = target_al
 
                 pegRNA_al_key = 'left'
+                target_al_key = 'right'
 
             else:
                 right_al = pegRNA_al
                 left_al = target_al
 
                 pegRNA_al_key = 'right'
+                target_al_key = 'left'
 
         else:
             raise ValueError(shared_feature)
@@ -285,11 +289,13 @@ class Layout(layout.Categorizer):
         if extension_results:
             status = 'definite'
             cropped_pegRNA_extension_al = extension_results['cropped_alignments'][pegRNA_al_key]
+            cropped_target_al = extension_results['cropped_alignments'][target_al_key]
         else:
             status = None
             cropped_pegRNA_extension_al = None
+            cropped_target_al = None
 
-        return status, cropped_pegRNA_extension_al
+        return status, cropped_pegRNA_extension_al, cropped_target_al
 
     def find_target_alignment_extending_pegRNA_alignment(self, pegRNA_al, shared_feature):
         if pegRNA_al is None:
@@ -304,12 +310,12 @@ class Layout(layout.Categorizer):
         relevant_target_al = None
 
         for target_al in sorted(target_als, key=lambda al: al.query_alignment_length, reverse=True):
-            status, cropped_pegRNA_extension_al = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_al, shared_feature=shared_feature)
+            status, cropped_pegRNA_al, cropped_target_al = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_al, shared_feature=shared_feature)
             if status == 'definite':
                 relevant_target_al = target_al
                 break
 
-        return relevant_target_al
+        return relevant_target_al, cropped_pegRNA_al, cropped_target_al
 
     def find_pegRNA_alignment_extending_target_edge_al(self, side):
         target_edge_al = self.target_edge_alignments[side]
@@ -322,14 +328,16 @@ class Layout(layout.Categorizer):
             candidate_als = candidate_als + [manually_extended_al]
         
         relevant_pegRNA_al = None
+        cropped_pegRNA_al = None
+        cropped_target_al = None
         
         for pegRNA_al in sorted(candidate_als, key=lambda al: al.query_length, reverse=True):
-            status, _ = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_edge_al, 'PBS')
+            status, cropped_pegRNA_al, cropped_target_al = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_edge_al, 'PBS')
             if status == 'definite':
                 relevant_pegRNA_al = pegRNA_al
                 break
                 
-        return relevant_pegRNA_al
+        return relevant_pegRNA_al, cropped_pegRNA_al, cropped_target_al
 
     @memoized_property
     def pegRNA_side(self):
@@ -358,12 +366,12 @@ class Layout(layout.Categorizer):
         if target_edge_al is not None:
             als['first target'] = target_edge_al
         
-            pegRNA_al = self.find_pegRNA_alignment_extending_target_edge_al(self.pegRNA_side)
+            pegRNA_al, _, _ = self.find_pegRNA_alignment_extending_target_edge_al(self.pegRNA_side)
             
             if pegRNA_al is not None:
                 als['pegRNA'] = pegRNA_al
                 
-                extended_target_al = self.find_target_alignment_extending_pegRNA_alignment(pegRNA_al, shared_feature='RTT')
+                extended_target_al, _, _ = self.find_target_alignment_extending_pegRNA_alignment(pegRNA_al, shared_feature='RTT')
                     
                 if extended_target_al is not None:
                     als['second target'] = extended_target_al
@@ -455,7 +463,7 @@ class Layout(layout.Categorizer):
                 manually_extended_pegRNA_al = self.generate_extended_pegRNA_PBS_alignment(target_al, side)
                 
                 for pegRNA_al in pegRNA_als + [manually_extended_pegRNA_al]:
-                    definite_status, cropped_pegRNA_extension_al = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_al, 'PBS')
+                    definite_status, cropped_pegRNA_extension_al, cropped_target_al = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_al, 'PBS')
 
                     if definite_status is not None:
                         if target_al == self.target_edge_alignments[side]:

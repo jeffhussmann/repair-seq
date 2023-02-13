@@ -196,17 +196,21 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         if target_edge_al is not None:
             als['first target'] = target_edge_al
         
-            pegRNA_al = self.find_pegRNA_alignment_extending_target_edge_al(side)
+            pegRNA_al, cropped_pegRNA_al, cropped_target_al = self.find_pegRNA_alignment_extending_target_edge_al(side)
             
             if pegRNA_al is not None:
                 als['first pegRNA'] = pegRNA_al
+
+                # Overwrite the target al so that only the cropped extent is used to determine
+                # whether the pegRNA alignment contributed any novel query cover.
+                als['first target'] = cropped_target_al
                 
                 overlap_extended_pegRNA_al = self.find_pegRNA_alignment_extending_from_overlap(pegRNA_al)
                 
                 if overlap_extended_pegRNA_al is not None:
                     als['second pegRNA'] = overlap_extended_pegRNA_al
                     
-                    overlap_extended_target_al = self.find_target_alignment_extending_pegRNA_alignment(overlap_extended_pegRNA_al, 'PBS')
+                    overlap_extended_target_al, _, _ = self.find_target_alignment_extending_pegRNA_alignment(overlap_extended_pegRNA_al, 'PBS')
                     
                     if overlap_extended_target_al is not None:
                         als['second target'] = overlap_extended_target_al
@@ -240,11 +244,10 @@ class Layout(repair_seq.prime_editing_layout.Layout):
     def extensions_chains_by_side(self):
         chains = {side: self.characterize_extension_chain_on_side(side) for side in ['left', 'right']}
 
-        # If the two chains don't cover exactly the same part of the query (in which case
-        # they are usually the intended edit), check whether any members of an extension
-        # chain on one side are not necessary to make it to the other chain.
-        # (Warning: could imagine a scenario in which it would be possible to remove
-        # from either the left or right chain.)
+        # Check whether any members of an extension chain on one side are not
+        # necessary to make it to the other chain. (Warning: could imagine a
+        # scenario in which it would be possible to remove from either the
+        # left or right chain.)
 
         al_order = [
             'none',
@@ -272,9 +275,12 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                             covered_left = chains['left']['query_covered_incremental'][left_key]
                             covered_right = chains['right']['query_covered_incremental'][right_key]
 
-                            # Check if left and right abutt each other.
+                            # Check if left and right overlap or abut each other.
                             if covered_left.end >= covered_right.start - 1:
                                 possible_covers.add((left_key, right_key))
+
+        #for left, right in sorted(possible_covers, key=lambda pair: (al_order.index(pair[0]), al_order.index(pair[1]))):
+        #    print(left, right, al_order.index(left), al_order.index(right))
                             
         last_parsimonious_key = {}
 
@@ -549,6 +555,29 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             self.details = 'n/a'
             self.outcome = None
 
+        elif self.has_any_pegRNA_extension_al:
+            if self.is_intended_replacement:
+                self.category = 'intended edit'
+                self.subcategory = self.is_intended_replacement
+                self.outcome = Outcome('n/a')
+                self.relevant_alignments = self.target_edge_alignments_list + self.pegRNA_extension_als_list
+
+            elif self.is_intended_deletion:
+                self.category = 'intended edit'
+                self.subcategory = 'deletion'
+                self.outcome = DeletionOutcome(self.target_info.pegRNA_intended_deletion)
+                self.relevant_alignments = self.target_edge_alignments_list + self.pegRNA_extension_als_list
+
+            elif self.is_unintended_rejoining:
+                self.register_unintended_rejoining()
+
+            else:
+                self.category = 'uncategorized'
+                self.subcategory = 'uncategorized'
+                self.details = 'n/a'
+
+                self.relevant_alignments = self.uncategorized_relevant_alignments
+
         elif self.single_read_covering_target_alignment:
             target_alignment = self.single_read_covering_target_alignment
             interesting_indels, uninteresting_indels = self.interesting_and_uninteresting_indels([target_alignment])
@@ -596,7 +625,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                     self.subcategory = 'uncategorized'
                     self.outcome = Outcome('n/a')
 
-                    self.details = str(self.outcome)
                     self.relevant_alignments = [target_alignment]
 
             elif len(interesting_indels) == 1:
@@ -618,12 +646,10 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                         self.relevant_alignments = self.target_edge_alignments_list
 
                     self.outcome = DeletionOutcome(indel)
-                    self.details = str(self.outcome)
 
                 elif indel.kind == 'I':
                     self.category = 'insertion'
                     self.outcome = InsertionOutcome(indel)
-                    self.details = str(self.outcome)
                     self.relevant_alignments = [target_alignment]
 
             else: # more than one indel
@@ -639,7 +665,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             self.category = 'duplication'
 
             self.subcategory = subcategory
-            self.details = str(self.outcome)
             self.relevant_alignments = merged_als
 
         elif self.scaffold_chimera:
@@ -647,23 +672,6 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             self.subcategory = 'scaffold chimera'
             self.details = 'n/a'
             self.relevant_alignments = self.uncategorized_relevant_alignments
-
-        elif self.has_any_pegRNA_extension_al:
-            if self.is_intended_replacement:
-                self.category = 'intended edit'
-                self.subcategory = self.is_intended_replacement
-                self.outcome = Outcome('n/a')
-                self.relevant_alignments = self.target_edge_alignments_list + self.pegRNA_extension_als_list
-
-            elif self.is_unintended_rejoining:
-                self.register_unintended_rejoining()
-
-            else:
-                self.category = 'uncategorized'
-                self.subcategory = 'uncategorized'
-                self.details = 'n/a'
-
-                self.relevant_alignments = self.uncategorized_relevant_alignments
 
         elif len(self.has_any_flipped_pegRNA_al) > 0:
             self.category = 'flipped pegRNA incorporation'
