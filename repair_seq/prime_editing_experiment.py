@@ -166,7 +166,7 @@ class BoundaryProperties:
 
         self.joint_array = hits.utilities.counts_to_array(counts, dim=2) / self.total_outcomes
 
-    def count_boundaries(self, exp):
+    def count_single_flap_boundaries(self, exp):
         ti = exp.target_info
 
         for outcome in exp.outcome_iter():
@@ -178,7 +178,34 @@ class BoundaryProperties:
                     if outcome.subcategory not in self.specific_subcategories:
                         continue
 
-                ur_outcome = twin_prime_layout.UnintendedRejoiningOutcome.from_string(outcome.details)
+                ur_outcome = prime_editing_layout.UnintendedRejoiningOutcome.from_string(outcome.details)
+
+                if ur_outcome.edges['left'] is not None:
+                    self.edge_distributions['pegRNA', 'RT\'ed'][ur_outcome.edges['left']] += 1
+                
+                if ur_outcome.edges['right'] is not None:
+                    self.edge_distributions['target', 'RT\'ed'][ur_outcome.edges['right']] += 1
+
+                self.MH_nts_distribution[ur_outcome.MH_nts] += 1
+
+                joint_key = (outcome.subcategory, ur_outcome.edges['left'], ur_outcome.edges['right'])
+                self.joint_distribution[joint_key] += 1
+
+        return self
+
+    def count_dual_flap_boundaries(self, exp):
+        ti = exp.target_info
+
+        for outcome in exp.outcome_iter():
+            if outcome.category != 'nonspecific amplification':
+                self.total_outcomes += 1
+
+            if outcome.category.startswith('unintended rejoining'):
+                if self.specific_subcategories is not None:
+                    if outcome.subcategory not in self.specific_subcategories:
+                        continue
+
+                ur_outcome = prime_editing_layout.UnintendedRejoiningOutcome.from_string(outcome.details)
 
                 for side_description in outcome.subcategory.split(', '):
                     side, description = side_description.split(' ', 1)
@@ -190,7 +217,6 @@ class BoundaryProperties:
                 self.joint_distribution[joint_key] += 1
 
             elif outcome.category == 'deletion':
-
                 deletion_outcome = knock_knock.outcome.DeletionOutcome.from_string(outcome.details).undo_anchor_shift(ti.anchor)
 
                 if ti.sequencing_direction == '+':
@@ -244,7 +270,205 @@ class BoundaryProperties:
 
         return xs, ys
 
-def plot_extension_chain_edges(ti, guide_sets,
+def plot_single_flap_extension_chain_edges(ti,
+                                           guide_sets,
+                                           normalize=False,
+                                          ):
+    features = ti.features
+
+    # Common parameters.
+    ref_bar_height = 0.02
+    feature_height = 0.03
+
+    marker_size = 2
+
+    figsize = (16, 6)
+
+    # just RT'ed
+    subcategory_key = "RT\'ed"
+
+    fig, axs = plt.subplots(2, 2, figsize=figsize)
+
+    xs = {}
+    ys = {}
+    for ax_col, side in zip(axs.T, ['pegRNA', 'target']):
+        for ax, cumulative in zip(ax_col, [True, False]):
+            for set_name, set_details in guide_sets.items():
+                color = set_details['color']
+
+                xs[side], ys[side] = set_details['results'].get_xs_and_ys(side, subcategory_key, cumulative=cumulative, normalize=normalize)
+
+                if xs[side] is None:
+                    continue
+
+                ax.plot(xs[side], ys[side], 'o-', label=set_name, markersize=marker_size, color=color, alpha=0.5)
+
+    ax = axs[1, 0]
+    pegRNA_name = ti.pegRNA_names[0]
+
+    # By definition, the end of the PBS on this side's pegRNA 
+    # is zero in the coordinate system.
+    PBS_end = features[pegRNA_name, 'PBS'].end
+
+    y_start = -0.2
+
+    for feature_name in ['PBS', 'RTT', 'scaffold', 'protospacer']:
+        feature = features[pegRNA_name, feature_name]
+
+        # Moving back from the PBS end is moving
+        # forward in the coordinate system.
+        start, end = PBS_end - feature.end - 0.5, PBS_end - feature.start + 0.5
+
+        ax.axvspan(start, end, y_start + ref_bar_height, y_start + ref_bar_height + feature_height,
+                   facecolor=feature.attribute['color'],
+                   alpha=0.75,
+                   clip_on=False,
+                  )
+
+        ax.annotate(feature_name,
+                    xy=(np.mean([start, end]), y_start),
+                    xycoords=('data', 'axes fraction'),
+                    xytext=(0, -5),
+                    textcoords='offset points',
+                    ha='center',
+                    va='top',
+                    color=feature.attribute['color'],
+                    annotation_clip=False,
+                    weight='bold',
+                   )
+
+    pegRNA_length = len(ti.reference_sequences[pegRNA_name])
+
+    start = PBS_end - pegRNA_length - 0.5
+    end = PBS_end + 0.5
+    ax.axvspan(start, end, y_start, y_start + ref_bar_height,
+               facecolor='C1',
+               clip_on=False,
+              )
+
+    for ax in axs[:, 0]:
+        ax.set_xlim(start - 10, end + 10)
+        ax.set_ylim(0)
+
+    axs[0, 0].set_title('pegRNA', color='C1')
+
+    axs[0, 1].set_xticklabels([])
+
+    ax = axs[1, 1]
+
+    colors = {
+    }
+
+    for primer_name in ti.primer_names:
+        colors[primer_name] = 'grey'
+
+    PBS = features[ti.target, pegRNAs.PBS_name(pegRNA_name)]
+
+    # By definition, the edge of the PBS adjacent to the nick in the target
+    # for the pegRNA is zero in the coordinate system.
+
+    feature_names = ti.protospacer_names + list(ti.PAM_features) + ti.primer_names
+
+    if PBS.strand == '+':
+        x_min = ti.amplicon_interval.start - PBS.end - 0.5
+        x_max = ti.amplicon_interval.end - PBS.end + 0.5
+    else:
+        x_min = PBS.start - ti.amplicon_interval.end - 0.5
+        x_max = PBS.start - ti.amplicon_interval.start + 0.5
+
+    for feature_name in feature_names:
+        feature = features[ti.target, feature_name]
+        
+        if PBS.strand == '+':
+            start, end = feature.start - PBS.end - 0.5, feature.end - PBS.end + 0.5
+        else:
+            start, end = PBS.start - feature.end - 0.5, PBS.start - feature.start + 0.5
+
+        if 'PBS' in feature_name:
+            height = 0.015
+        else:
+            height = 0.03
+        
+        color = colors.get(feature_name, feature.attribute['color'])
+
+        ax.axvspan(start, end,
+                   y_start, y_start - height,
+                   facecolor=color,
+                   clip_on=False,
+                  )
+
+        if 'PAM' in feature_name:
+            label = None
+        elif 'protospacer' in feature_name:
+            if feature_name.startswith(pegRNA_name):
+                label = 'pegRNA\nprotospacer'
+            else:
+                label = 'nicking\nprotospacer'
+        else:
+            label = feature_name
+
+        ax.annotate(label,
+                    xy=(np.mean([start, end]), y_start),
+                    xycoords=('data', 'axes fraction'),
+                    xytext=(0, -15),
+                    textcoords='offset points',
+                    ha='center',
+                    va='top',
+                    color=color,
+                    annotation_clip=False,
+                    weight='bold',
+                   )
+
+
+    ax.axvspan(x_min, x_max, y_start, y_start + ref_bar_height, facecolor='C0', clip_on=False)
+
+    for cut_after_name, cut_after in ti.cut_afters.items():
+        if PBS.strand == '+':
+            x = cut_after - PBS.end
+        else:
+            x = PBS.start - cut_after
+
+        name, strand = cut_after_name.rsplit('_', 1)
+
+        ref_y = y_start + 0.5 * ref_bar_height
+        cut_y_bottom = ref_y - feature_height
+        cut_y_middle = ref_y
+        cut_y_top = ref_y + feature_height
+
+        if (strand == '+' and ti.sequencing_direction == '+') or (strand == '-' and ti.sequencing_direction == '-'):
+            ys = [cut_y_middle, cut_y_top]
+        elif (strand == '-' and ti.sequencing_direction == '+') or (strand == '+' and ti.sequencing_direction == '-'):
+            ys = [cut_y_bottom, cut_y_middle]
+        else:
+            raise ValueError
+
+        ax.plot([x, x],
+                ys,
+                '-',
+                linewidth=1,
+                color='black',
+                solid_capstyle='butt',
+                zorder=10,
+                transform=ax.get_xaxis_transform(),
+                clip_on=False,
+               )
+
+    for ax in axs[:, 1]:
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(0)
+
+    axs[0, 1].set_title('genome', color='C0')
+
+    axs[0, 0].set_xticklabels([])
+    axs[0, 0].legend()
+
+    axs[0, 0].set_ylabel('Cumulative\npercentage of reads', size=12)
+    axs[1, 0].set_ylabel('Percentage of reads', size=12)
+
+    return fig
+
+def plot_dual_flap_extension_chain_edges(ti,
+                               guide_sets,
                                cumulative=False,
                                normalize=False,
                                x_lims=(-100, 150),
@@ -413,7 +637,7 @@ def plot_extension_chain_edges(ti, guide_sets,
 
         for feature_name in ['PBS', 'RTT', 'overlap', 'scaffold', 'protospacer']:
             feature = features[pegRNA_name, feature_name]
-            
+
             # On this side's pegRNA, moving back from the PBS end is moving
             # forward in the coordinate system.
             start, end = PBS_end - feature.end - 0.5, PBS_end - feature.start + 0.5

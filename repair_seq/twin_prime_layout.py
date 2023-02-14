@@ -115,7 +115,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
     @memoized_property
     def has_any_pegRNA_extension_al(self):
-        chains = self.extensions_chains_by_side
+        chains = self.extension_chains_by_side
         contains_RTed_sequence = any(chains[side]['description'].startswith('RT\'ed') for side in ['left', 'right'])
 
         return contains_RTed_sequence
@@ -241,7 +241,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         return results
 
     @memoized_property
-    def extensions_chains_by_side(self):
+    def extension_chains_by_side(self):
         chains = {side: self.characterize_extension_chain_on_side(side) for side in ['left', 'right']}
 
         # Check whether any members of an extension chain on one side are not
@@ -321,7 +321,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         last_als = {}
 
         for side in ['left', 'right']:
-            chain = self.extensions_chains_by_side[side]
+            chain = self.extension_chains_by_side[side]
             if chain['description'] in ['not seen', 'no target']:
                 last_al = None
             else:
@@ -353,7 +353,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         PBS_end = ti.features[this_side_pegRNA_name, 'PBS'].end
 
-        chain = self.extensions_chains_by_side[side]
+        chain = self.extension_chains_by_side[side]
         if chain['description'] in ['not seen', 'no target']:
             relevant_edge = None
         else:
@@ -411,7 +411,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
     @memoized_property
     def has_intended_pegRNA_overlap(self):
-        chains = self.extensions_chains_by_side
+        chains = self.extension_chains_by_side
 
         return (chains['left']['description'] == 'RT\'ed + overlap-extended' and
                 chains['right']['description'] == 'RT\'ed + overlap-extended' and 
@@ -459,7 +459,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         ''' At least one side has RT'ed sequence, and together the extension
         chains cover the whole read.
         '''
-        chains = self.extensions_chains_by_side
+        chains = self.extension_chains_by_side
 
         contains_RTed_sequence = any(chains[side]['description'].startswith('RT\'ed') for side in ['left', 'right'])
 
@@ -475,7 +475,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         return contains_RTed_sequence and uncovered.total_length == 0
 
     def register_unintended_rejoining(self):
-        chains = self.extensions_chains_by_side
+        chains = self.extension_chains_by_side
 
         if any('overlap' in chains[side]['description'] for side in ['left', 'right']):
             self.category = 'unintended rejoining of overlap-extended sequence'
@@ -489,7 +489,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         MH_nts = self.extension_chain_junction_microhomology
 
-        self.outcome = UnintendedRejoiningOutcome(left_edge, right_edge, MH_nts)
+        self.outcome = repair_seq.prime_editing_layout.UnintendedRejoiningOutcome(left_edge, right_edge, MH_nts)
 
         self.relevant_alignments = list(chains['left']['alignments'].values()) + list(chains['right']['alignments'].values())
 
@@ -809,8 +809,8 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             feature_heights[PBS_name] = 0.5
 
         for deletion in self.target_info.pegRNA_programmed_deletions:
-            label_overrides[deletion.ID] = 'intended deletion'
-            feature_heights[deletion.ID] = -0.3
+            label_overrides[deletion.ID] = f'programmed deletion ({len(deletion)} nts)'
+            feature_heights[deletion.ID] = -0.5
 
         if 'features_to_show' in manual_diagram_kwargs:
             features_to_show.update(manual_diagram_kwargs.pop('features_to_show'))
@@ -932,24 +932,3 @@ class Layout(repair_seq.prime_editing_layout.Layout):
             diagram.update_size()
 
         return diagram
-
-class UnintendedRejoiningOutcome(Outcome):
-    def __init__(self, left_edge, right_edge, MH_nts):
-        self.edges = {
-            'left': left_edge,
-            'right': right_edge,
-        }
-
-        self.MH_nts = MH_nts
-
-    @classmethod
-    def from_string(cls, details_string):
-        def convert(s):
-            return int(s) if s != 'None' else None
-
-        left_edge, right_edge, MH_nts = map(convert, details_string.split(','))
-
-        return cls(left_edge, right_edge, MH_nts)
-
-    def __str__(self):
-        return f'{self.edges["left"]},{self.edges["right"]},{self.MH_nts}'

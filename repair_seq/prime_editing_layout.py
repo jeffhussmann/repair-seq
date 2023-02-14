@@ -299,7 +299,7 @@ class Layout(layout.Categorizer):
 
     def find_target_alignment_extending_pegRNA_alignment(self, pegRNA_al, shared_feature):
         if pegRNA_al is None:
-            return None
+            return None, None, None
 
         target_als = self.target_gap_covering_alignments + self.target_edge_alignments_list
         manually_extended_al = self.generate_extended_target_PBS_alignment(pegRNA_al)
@@ -317,22 +317,28 @@ class Layout(layout.Categorizer):
 
         return relevant_target_al, cropped_pegRNA_al, cropped_target_al
 
-    def find_pegRNA_alignment_extending_target_edge_al(self, side):
+    def find_pegRNA_alignment_extending_target_edge_al(self, side, shared_feature):
         target_edge_al = self.target_edge_alignments[side]
         if target_edge_al is None:
-            return None
+            return None, None, None
 
-        candidate_als = self.pegRNA_alignments[self.target_info.pegRNA_names_by_side_of_read[side]]
-        manually_extended_al = self.generate_extended_pegRNA_PBS_alignment(target_edge_al, side)
-        if manually_extended_al is not None:
-            candidate_als = candidate_als + [manually_extended_al]
+        if len(self.target_info.pegRNA_names) == 1:
+            pegRNA_name = self.target_info.pegRNA_names[0]
+        else:
+            pegRNA_name = self.target_info.pegRNA_names_by_side_of_read[side]
+        candidate_als = self.pegRNA_alignments[pegRNA_name]
+
+        if shared_feature == 'PBS':
+            manually_extended_al = self.generate_extended_pegRNA_PBS_alignment(target_edge_al, side)
+            if manually_extended_al is not None:
+                candidate_als = candidate_als + [manually_extended_al]
         
         relevant_pegRNA_al = None
         cropped_pegRNA_al = None
         cropped_target_al = None
         
         for pegRNA_al in sorted(candidate_als, key=lambda al: al.query_length, reverse=True):
-            status, cropped_pegRNA_al, cropped_target_al = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_edge_al, 'PBS')
+            status, cropped_pegRNA_al, cropped_target_al = self.pegRNA_alignment_extends_target_alignment(pegRNA_al, target_edge_al, shared_feature=shared_feature)
             if status == 'definite':
                 relevant_pegRNA_al = pegRNA_al
                 break
@@ -359,19 +365,103 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def extension_chain(self):
+        return self.extension_chains_by_side[self.pegRNA_side]
+
+    @memoized_property
+    def extension_chains_by_side(self):
+        chains = {side: self.characterize_extension_chain_on_side(side) for side in ['left', 'right']}
+
+        # Check whether any members of an extension chain on one side are not
+        # necessary to make it to the other chain. (Warning: could imagine a
+        # scenario in which it would be possible to remove from either the
+        # left or right chain.)
+
+        al_order = [
+            'none',
+            'first target',
+            'pegRNA',
+            'second target',
+        ]
+
+        last_al_to_description = {
+            'none': 'no target',
+            'first target': 'not RT\'ed',
+            'pegRNA': 'RT\'ed',
+            'second target': 'RT\'ed + annealing-extended',
+        }
+
+        possible_covers = set()
+
+        if chains['left']['query_covered'] != chains['right']['query_covered']:
+            for left_key in al_order:
+                if left_key in chains['left']['alignments']:
+                    for right_key in al_order:
+                        if right_key in chains['right']['alignments']:
+                            covered_left = chains['left']['query_covered_incremental'][left_key]
+                            covered_right = chains['right']['query_covered_incremental'][right_key]
+
+                            # Check if left and right overlap or abut each other.
+                            if covered_left.end >= covered_right.start - 1:
+                                possible_covers.add((left_key, right_key))
+
+        last_parsimonious_key = {}
+
+        if possible_covers:
+            last_parsimonious_key['left'], last_parsimonious_key['right'] = min(possible_covers, key=lambda pair: (al_order.index(pair[0]), al_order.index(pair[1])))
+        else:
+            for side in ['left', 'right']:
+                last_parsimonious_key[side] = max(chains[side]['alignments'], key=al_order.index, default='none')
+
+        for side in ['left', 'right']:
+            key = last_parsimonious_key[side]
+
+            chains[side]['description'] = last_al_to_description[key]
+
+            last_index = al_order.index(key)
+            chains[side]['parsimonious_alignments'] = [al for key, al in chains[side]['alignments'].items() if al_order.index(key) <= last_index]
+
+            chains[side]['query_covered'] = chains[side]['query_covered_incremental'][key]
+
+        # If one chain is absent and the other chain covers the whole read
+        # (except possibly 2 nts at either edge), classify the missing side
+        # as 'not seen'.
+
+        not_covered_by_primers_minus_edges = self.not_covered_by_primers & self.whole_read_minus_edges(2)
+
+        if not_covered_by_primers_minus_edges in chains['left']['query_covered']:
+            if chains['right']['description'] == 'no target':
+                chains['right']['description'] = 'not seen'
+
+        if not_covered_by_primers_minus_edges in chains['right']['query_covered']:
+            if chains['left']['description'] == 'no target':
+                chains['left']['description'] = 'not seen'
+
+        return chains
+
+    def characterize_extension_chain_on_side(self, side):
         als = {}
 
-        target_edge_al = self.target_edge_alignments[self.pegRNA_side]
+        target_edge_al = self.target_edge_alignments[side]
         
         if target_edge_al is not None:
             als['first target'] = target_edge_al
         
-            pegRNA_al, _, _ = self.find_pegRNA_alignment_extending_target_edge_al(self.pegRNA_side)
+            if side == self.pegRNA_side:
+                shared_feature = 'PBS'
+            else:
+                shared_feature = 'RTT'
+
+            pegRNA_al, _, _ = self.find_pegRNA_alignment_extending_target_edge_al(side, shared_feature)
             
             if pegRNA_al is not None:
                 als['pegRNA'] = pegRNA_al
                 
-                extended_target_al, _, _ = self.find_target_alignment_extending_pegRNA_alignment(pegRNA_al, shared_feature='RTT')
+                if side == self.pegRNA_side:
+                    shared_feature = 'RTT'
+                else:
+                    shared_feature = 'PBS'
+
+                extended_target_al, _, _ = self.find_target_alignment_extending_pegRNA_alignment(pegRNA_al, shared_feature)
                     
                 if extended_target_al is not None:
                     als['second target'] = extended_target_al
@@ -399,6 +489,65 @@ class Layout(layout.Categorizer):
         }
 
         return results
+
+    @memoized_property
+    def extension_chain_junction_microhomology(self):
+        last_als = {}
+
+        for side in ['left', 'right']:
+            chain = self.extension_chains_by_side[side]
+            if chain['description'] in ['not seen', 'no target']:
+                last_al = None
+            else:
+                if chain['description'] == 'RT\'ed + annealing-extended':
+                    last_al = chain['alignments']['second target']
+                else:
+                    if chain['description'] == 'not RT\'ed':
+                        last_al = chain['alignments']['first target']
+
+                    elif chain['description'] == 'RT\'ed':
+                        last_al = chain['alignments']['pegRNA']
+
+            last_als[side] = last_al
+
+        return knock_knock.layout.junction_microhomology(self.target_info.reference_sequences, last_als['left'], last_als['right'])
+
+    def get_extension_chain_edge(self, side):
+        ''' Get the position of the far edge of an extension chain
+        in the relevant coordinate system.
+        '''
+        ti = self.target_info
+
+        pegRNA_name = ti.pegRNA_names[0]
+
+        PBS_end = ti.features[pegRNA_name, 'PBS'].end
+
+        chain = self.extension_chains_by_side[side]
+        if chain['description'] in ['not seen', 'no target']:
+            relevant_edge = None
+        else:
+            if chain['description'] in ['RT\'ed', 'RT\'ed + annealing-extended']:
+                al = chain['alignments']['pegRNA']
+
+                relevant_edge = PBS_end - al.reference_start
+
+            else:
+                if chain['description'] == 'not RT\'ed':
+                    al = chain['alignments']['first target']
+
+                    target_PBS_name = ti.PBS_names_by_side_of_read[self.pegRNA_side]
+                    target_PBS = ti.features[ti.target, target_PBS_name]
+
+                    # Positive values are away from the pegRNA-directed nick
+                    # in the direction that the flap points.
+
+                    # TODO: confirm that there are no off-by-one errors here.
+                    if target_PBS.strand == '+':
+                        relevant_edge = al.reference_start - target_PBS.end
+                    else:
+                        relevant_edge = target_PBS.start - (al.reference_end - 1)
+
+        return relevant_edge
 
     @memoized_property
     def is_intended_deletion(self):
@@ -1648,7 +1797,8 @@ class Layout(layout.Categorizer):
 
         else:
             self.category = 'unintended rejoining of RT\'ed sequence'
-            if details['shared_HAs'] == {('left', 'right')}:
+
+            if self.target_info.intended_prime_edit_type == 'insertion' and details['shared_HAs'] == {('left', 'right')}:
                 self.subcategory = 'doesn\'t include insertion'
             else:
                 if self.alignment_scaffold_overlap(details['cropped_candidate_alignment']) >= 2:
@@ -1662,6 +1812,13 @@ class Layout(layout.Categorizer):
                 if details['longest_edge_deletion'] is not None:
                     if details['longest_edge_deletion'] != self.target_info.pegRNA_intended_deletion:
                         self.subcategory += ', with deletion'
+
+            pegRNA_edge = self.get_extension_chain_edge(self.pegRNA_side)
+            target_edge = self.get_extension_chain_edge(self.non_pegRNA_side)
+
+            MH_nts = self.extension_chain_junction_microhomology
+
+            outcome = UnintendedRejoiningOutcome(pegRNA_edge, target_edge, MH_nts)
 
         self.relevant_alignments = relevant_alignments
         self.special_alignment = details['candidate_alignment']
@@ -2758,6 +2915,7 @@ class Layout(layout.Categorizer):
             self.categorize()
 
         ti = self.target_info
+        features_to_show = {*ti.features_to_show}
 
         flip_target = ti.sequencing_direction == '-'
         flip_pegRNA = False
@@ -2771,8 +2929,16 @@ class Layout(layout.Categorizer):
             if (flip_target and PBS_strand == '-') or (not flip_target and PBS_strand == '+'):
                 flip_pegRNA = True
 
-            for pegRNA in self.target_info.pegRNA_names:
-                label_offsets[f'insertion_{pegRNA}'] = 1
+            for pegRNA_name in ti.pegRNA_names:
+                label_overrides[f'HA_RT_{pegRNA_name}'] = 'HA_RT'
+                label_overrides[pegRNA_name, 'protospacer'] = 'pegRNA\nprotospacer'
+
+                for HA_side in ['PBS', 'RT']:
+                    name = f'HA_{HA_side}_{pegRNA_name}'
+                    label_overrides[ti.target, name] = None
+                    feature_heights[ti.target, name] = 0.5
+
+                    features_to_show.add((ti.target, name))
 
         for feature_name in self.target_info.PAM_features:
             label_offsets[feature_name] = 1
@@ -2780,6 +2946,10 @@ class Layout(layout.Categorizer):
         for deletion in self.target_info.pegRNA_programmed_deletions:
             label_overrides[deletion.ID] = f'programmed deletion ({len(deletion)} nts)'
             feature_heights[deletion.ID] = -0.5
+
+        for insertion in self.target_info.pegRNA_programmed_insertion_features:
+            label_overrides[insertion.ID] = 'insertion'
+            label_offsets[insertion.ID] = 1
 
         for name in ti.protospacer_names:
             if name == ti.primary_protospacer:
@@ -2791,7 +2961,6 @@ class Layout(layout.Categorizer):
 
         label_overrides.update({feature_name: None for feature_name in ti.PAM_features})
 
-        features_to_show = {*ti.features_to_show}
         features_to_show.update({(ti.target, name) for name in ti.protospacer_names})
         features_to_show.update({(ti.target, name) for name in ti.PAM_features})
 
@@ -2857,3 +3026,24 @@ class Layout(layout.Categorizer):
             diagram.update_size()
 
         return diagram
+
+class UnintendedRejoiningOutcome(Outcome):
+    def __init__(self, left_edge, right_edge, MH_nts):
+        self.edges = {
+            'left': left_edge,
+            'right': right_edge,
+        }
+
+        self.MH_nts = MH_nts
+
+    @classmethod
+    def from_string(cls, details_string):
+        def convert(s):
+            return int(s) if s != 'None' else None
+
+        left_edge, right_edge, MH_nts = map(convert, details_string.split(','))
+
+        return cls(left_edge, right_edge, MH_nts)
+
+    def __str__(self):
+        return f'{self.edges["left"]},{self.edges["right"]},{self.MH_nts}'
