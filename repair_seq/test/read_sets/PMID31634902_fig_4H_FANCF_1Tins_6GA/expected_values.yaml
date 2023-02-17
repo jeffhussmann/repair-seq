@@ -1,7 +1,7 @@
 experiment_type: prime_editing
 target_info: PMID31634902_FANCF
 target_info_kwargs:
-  sgRNAs: FANCF_4h_1Tins_6GtoA;FANCF_4d_+48
+  sgRNAs: FANCF_4h_1Tins_6GtoA;FANCF_4d_+48_nicking
 expected_values:
   010288008:0000000001:
     category: intended edit
@@ -24,14 +24,14 @@ expected_values:
     subcategory: simple
     note: duplication close to pegRNA-targeted nick
   010288008:0000000748:
-    category: edit + duplication
-    subcategory: simple
+    category: edit + indel
+    subcategory: duplication
     note: short duplication between nicks
   010288008:0000001154:
-    category: edit + duplication
-    subcategory: simple
+    category: edit + indel
+    subcategory: duplication
     note: duplication of almost entire sequence between nicks
   010288008:0000002365:
-    category: edit + deletion
-    subcategory: edit + deletion
+    category: edit + indel
+    subcategory: deletion
     note: short deletion between nicks

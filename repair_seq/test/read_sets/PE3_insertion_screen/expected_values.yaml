@@ -53,6 +53,6 @@ expected_values:
     subcategory: simple
     note: at one point, incorrectly called unintended rejoining
   01:01107:024469:001783_:
-    category: edit + duplication
-    subcategory: simple
+    category: edit + indel
+    subcategory: duplication
     note: pegRNA alignment switches back to target, with mismatches afterwards

@@ -13,31 +13,8 @@ FEATURES             Location/Qualifiers
      misc_feature    complement(778..797)
                      /label="reverse_primer"
                      /ApEinfo_fwdcolor="#9eafd2"
-     misc_feature    501..505
-                     /label="sequencing_start"
-     misc_feature    501..505
+     misc_feature    501..520
                      /label="anchor"
-     sgRNA_SpCas9H840complement(701..720)
-                     /label="HEK3_3b_+26"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840complement(712..729)
-                     /label="HEK3_3b_+37"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840complement(738..756)
-                     /label="HEK3_3b_+63"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840complement(765..783)
-                     /label="HEK3_3b_+90"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840complement(567..585)
-                     /label="HEK3_3b_-108"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840complement(637..655)
-                     /label="HEK3_3b_-38"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840complement(765..783)
-                     /label="HEK3_4a_+90"
-                     /ApEinfo_fwdcolor="#c6c9d1"
 ORIGIN
         1 agagtctgtg ggaggaacag ccagtgtttc aggatggcta aagcagaggt tgtgaagggc
        61 agggacgact ttagacctta gaggccccag gcactgttat tttccaaggc cccaccccca

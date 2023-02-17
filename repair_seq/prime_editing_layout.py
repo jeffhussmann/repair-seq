@@ -57,23 +57,13 @@ class Layout(layout.Categorizer):
              'mismatches',
             ),
         ),
-        ('edit + deletion',
-            ('edit + deletion',
+        ('edit + indel',
+            ('deletion',
+             'insertion',
+             'duplication',
             ),
         ),
         ('duplication',
-            ('simple',
-             'iterated',
-             'complex',
-            ),
-        ),
-        ('edit + duplication',
-            ('simple',
-             'iterated',
-             'complex',
-            ),
-        ),
-        ('deletion + duplication',
             ('simple',
              'iterated',
              'complex',
@@ -84,14 +74,10 @@ class Layout(layout.Categorizer):
              'mismatches',
             ),
         ),
-        ('insertion + duplication',
-            ('simple',
-             'iterated',
-             'complex',
-            ),
-        ),
         ('multiple indels',
             ('multiple indels',
+             'duplication + deletion',
+             'duplication + insertion',
             ),
         ),
         ('extension from intended annealing',
@@ -116,6 +102,8 @@ class Layout(layout.Categorizer):
         ),
         ('uncategorized',
             ('uncategorized',
+             'low quality',
+             'no alignments detected',
             ),
         ),
         ('nonspecific amplification',
@@ -124,16 +112,12 @@ class Layout(layout.Categorizer):
              'mm10',
              'bosTau7',
              'e_coli',
+             'b_subtilis',
              'primer dimer',
              'short unknown',
              'plasmid',
             ),
         ),
-        ('malformed layout',
-            ('low quality',
-             'no alignments detected',
-            ),
-        ), 
     ]
 
     def __init__(self, alignments, target_info, error_corrected=False, mode=None):
@@ -1191,7 +1175,6 @@ class Layout(layout.Categorizer):
             pegRNA_SNV_locii, _ = self.SNVs_summary
 
             target = self.target_info.target
-            pegRNA = self.target_info.pegRNA_names[0]
             
             genotype = {}
 
@@ -1508,6 +1491,10 @@ class Layout(layout.Categorizer):
             source that either reaches the end of the read or reaches an
             an alignment to the other primer that does not extend 
             substantially past the primer.
+         - read starts with an alignment to the expected primr, but all
+            alignments to the target collectively leave a substantial part
+            of the read uncovered, and a single alignment to some other
+            source covers the entire read with minimal edit distance.
         '''
         results = {}
 
@@ -1614,19 +1601,34 @@ class Layout(layout.Categorizer):
                 # there is no equivalent catching of those.
                 self.register_intended_edit()
             else:
-                if indel.kind == 'D':
-                    self.category = 'deletion'
-                    self.outcome = DeletionOutcome(indel)
-                    self.relevant_alignments = self.target_edge_alignments_list
-                elif indel.kind == 'I':
-                    self.category = 'insertion'
-                    self.outcome = InsertionOutcome(indel)
+                if self.has_pegRNA_SNV:
+                    self.category = 'edit + indel'
+
+                    if indel.kind == 'D':
+                        self.subcategory = 'deletion'
+                        self.outcome = DeletionOutcome(indel)
+
+                    elif indel.kind == 'I':
+                        self.subcategory = 'insertion'
+                        self.outcome = InsertionOutcome(indel)
+
                     self.relevant_alignments = self.target_edge_alignments_list + self.non_protospacer_pegRNA_alignments
 
-                if len(self.non_pegRNA_SNVs) > 0:
-                    self.subcategory = 'mismatches'
                 else:
-                    self.subcategory = 'clean'
+                    if indel.kind == 'D':
+                        self.category = 'deletion'
+                        self.outcome = DeletionOutcome(indel)
+                        self.relevant_alignments = self.target_edge_alignments_list
+
+                    elif indel.kind == 'I':
+                        self.category = 'insertion'
+                        self.outcome = InsertionOutcome(indel)
+                        self.relevant_alignments = self.target_edge_alignments_list + self.non_protospacer_pegRNA_alignments
+
+                    if len(self.non_pegRNA_SNVs) > 0:
+                        self.subcategory = 'mismatches'
+                    else:
+                        self.subcategory = 'clean'
         else:
             self.category = 'multiple indels'
             self.subcategory = 'multiple indels'
@@ -1784,8 +1786,8 @@ class Layout(layout.Categorizer):
                 self.category = 'intended edit'
                 self.subcategory = 'insertion'
             else:
-                self.category = 'edit + deletion'
-                self.subcategory = 'edit + deletion'
+                self.category = 'edit + indel'
+                self.subcategory = 'deletion'
 
                 HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [])
                 deletion_outcome = DeletionOutcome(details['longest_edge_deletion'])
@@ -1915,11 +1917,19 @@ class Layout(layout.Categorizer):
         
         # Find the locations on the query at which switching from edge alignments to the
         # candidate and then back again minimizes the edit distance incurred.
-        left_results = sam.find_best_query_switch_after(target_edge_als['left'], candidate_al, ti.target_sequence, candidate_ref_seq, min)
-        right_results = sam.find_best_query_switch_after(candidate_al, target_edge_als['right'], candidate_ref_seq, ti.target_sequence, max)
+
+        if source == 'genomic':
+            left_tie_break = max
+            right_tie_break = min
+        else:
+            left_tie_break = min
+            right_tie_break = max
+
+        left_results = sam.find_best_query_switch_after(target_edge_als['left'], candidate_al, ti.target_sequence, candidate_ref_seq, left_tie_break)
+        right_results = sam.find_best_query_switch_after(candidate_al, target_edge_als['right'], candidate_ref_seq, ti.target_sequence, right_tie_break)
 
         # For genomic insertions, parsimoniously assign maximal query to candidates that make it all the way to the read edge
-        # even if there is a short target alignmnent at the edge.
+        # even if there is a short target alignment at the edge.
         if source == 'genomic':
             min_left_results = sam.find_best_query_switch_after(target_edge_als['left'], candidate_al, ti.target_sequence, candidate_ref_seq, min)
             if min_left_results['switch_after'] == -1:
@@ -2042,7 +2052,7 @@ class Layout(layout.Categorizer):
             })
 
             # Since genomic insertions draw from a much large reference sequence
-            # than pegRNA insertions, enforce a more stringent minimum length.
+            # than pegRNA insertions, enforce a stringent minimum length.
 
             if insertion_length <= 25:
                 details['failed'] = f'insertion length = {insertion_length}'
@@ -2081,9 +2091,6 @@ class Layout(layout.Categorizer):
         if has_pegRNA_SNV['right']:
             failures.append('right alignment has a pegRNA SNV')
 
-        #if insertion_length < 5:
-        #    failures.append(f'insertion length = {insertion_length}')
-
         edit_distance_over_length = middle_edits / insertion_length
         if edit_distance_over_length >= 0.1:
             failures.append(f'edit distance / length = {edit_distance_over_length}')
@@ -2095,10 +2102,12 @@ class Layout(layout.Categorizer):
 
     @memoized_property
     def possible_templated_insertions(self):
-        # Make some shorter aliases.
         ti = self.target_info
-        # 22.07.14: Removed split=False argument to get_target_edge_alignemnts here.
+
         edge_als = self.get_target_edge_alignments(self.parsimonious_target_alignments)
+
+        if edge_als['left'] is None and edge_als['right'] is None:
+            return [{'failed': 'no target edge alignments'}]
 
         if edge_als['left'] is not None:
             # If a target alignment to the start of the read exists,
@@ -2129,7 +2138,7 @@ class Layout(layout.Categorizer):
         self.outcome = None
 
         if self.no_alignments_detected:
-            self.category = 'malformed layout'
+            self.category = 'uncategorized'
             self.subcategory = 'no alignments detected'
             self.details = 'n/a'
             self.outcome = None
@@ -2190,8 +2199,8 @@ class Layout(layout.Categorizer):
                         if self.pegRNA_insertion:
                             self.register_pegRNA_insertion()
                         else:
-                            self.category = 'edit + deletion'
-                            self.subcategory = 'edit + deletion'
+                            self.category = 'edit + indel'
+                            self.subcategory = 'deletion'
                             HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [])
                             deletion_outcome = DeletionOutcome(indel)
                             self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
@@ -2223,11 +2232,12 @@ class Layout(layout.Categorizer):
                 if len(self.indels) == 2:
                     indels = [indel for indel, near_cut in self.indels]
                     if self.target_info.pegRNA_intended_deletion in indels:
-                        self.category = 'edit + deletion'
-                        HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [self.target_info.pegRNA_intended_deletion])
                         indel = [indel for indel in indels if indel != self.target_info.pegRNA_intended_deletion][0]
+
                         if indel.kind  == 'D':
-                            self.subcategory = 'edit + deletion'
+                            self.category = 'edit + indel'
+                            self.subcategory = 'deletion'
+                            HDR_outcome = HDROutcome(self.pegRNA_SNV_string, [self.target_info.pegRNA_intended_deletion])
                             deletion_outcome = DeletionOutcome(indel)
                             self.outcome = HDRPlusDeletionOutcome(HDR_outcome, deletion_outcome)
                             self.relevant_alignments = self.parsimonious_target_alignments + self.pegRNA_alignments
@@ -2261,10 +2271,11 @@ class Layout(layout.Categorizer):
 
             if als_with_pegRNA_SNVs == 0:
                 self.category = 'duplication'
+                self.subcategory = subcategory
             else:
-                self.category = 'edit + duplication'
+                self.category = 'edit + indel'
+                self.subcategory = 'duplication'
 
-            self.subcategory = subcategory
             self.relevant_alignments = self.possible_pegRNA_extension_als_list + merged_als
 
         elif self.pegRNA_insertion is not None:
@@ -2300,74 +2311,72 @@ class Layout(layout.Categorizer):
 
                 if als_with_pegRNA_SNVs == 0:
                     self.category = 'duplication'
+                    self.subcategory = subcategory
                 else:
-                    self.category = 'edit + duplication'
+                    self.category = 'edit + indel'
+                    self.subcategory = 'duplication'
 
-                self.subcategory = subcategory
                 self.relevant_alignments = self.possible_pegRNA_extension_als_list + merged_als
 
             elif len(indels) == 1 and indels[0].kind == 'D':
                 indel = indels[0]
                 if indel == self.target_info.pegRNA_intended_deletion:
-                    self.category = 'edit + duplication'
+                    self.category = 'edit + indel'
+                    self.subcategory = 'duplication'
                 else:
-                    self.category = 'deletion + duplication'
+                    self.category = 'multiple indels'
+                    self.subcategory = 'duplication + deletion'
 
                 deletion_outcome = DeletionOutcome(indels[0])
                 duplication_outcome = DuplicationOutcome(ref_junctions)
                 self.outcome = DeletionPlusDuplicationOutcome(deletion_outcome, duplication_outcome)
-                self.subcategory = subcategory
                 self.relevant_alignments = self.possible_pegRNA_extension_als_list + merged_als
 
             elif len(indels) == 1 and indels[0].kind == 'I':
                 indel = indels[0]
-                self.category = 'insertion + duplication'
-                self.subcategory = subcategory
+                self.category = 'multiple indels'
+                self.subcategory = 'duplication + insertion'
                 self.details = 'n/a'
 
             else:
                 raise ValueError('duplication shouldn\'t have >1 indel') 
 
         elif self.duplication_plus_edit is not None:
-            self.category = 'edit + duplication'
-            self.subcategory = 'simple'
+            self.category = 'edit + indel'
+            self.subcategory = 'duplication'
             self.details = 'n/a'
             self.relevant_alignments = self.duplication_plus_edit
 
         elif self.deletion_plus_edit is not None:
-            self.category = 'edit + deletion'
-            self.subcategory = 'edit + deletion'
+            self.category = 'edit + indel'
+            self.subcategory = 'deletion'
             self.details = 'n/a'
             self.relevant_alignments = self.deletion_plus_edit
 
-        elif (not self.has_pegRNA_SNV) and self.original_target_alignment_has_only_relevant_indels:
+        elif self.original_target_alignment_has_only_relevant_indels:
             self.register_simple_indels()
 
         elif self.genomic_insertion is not None:
             self.register_genomic_insertion()
 
         else:
+            self.category = 'uncategorized'
+
             num_Ns = Counter(self.seq)['N']
 
             if num_Ns > 10:
-                self.category = 'malformed layout'
                 self.subcategory = 'low quality'
-                self.details = 'n/a'
 
             elif self.Q30_fractions['all'] < 0.5:
-                self.category = 'malformed layout'
                 self.subcategory = 'low quality'
-                self.details = 'n/a'
 
             elif self.Q30_fractions['second_half'] < 0.5:
-                self.category = 'malformed layout'
                 self.subcategory = 'low quality'
-                self.details = 'n/a'
                 
             else:
-                self.category = 'uncategorized'
                 self.subcategory = 'uncategorized'
-                self.details = 'n/a'
+
+            self.details = 'n/a'
 
             self.relevant_alignments = self.uncategorized_relevant_alignments
 

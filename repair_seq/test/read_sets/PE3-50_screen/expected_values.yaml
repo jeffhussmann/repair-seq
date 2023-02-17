@@ -32,14 +32,14 @@ expected_values:
     subcategory: mismatches
     note: deletion, 34 nts with multiple mismatches
   01:01101:009417:014481_:
-    category: deletion + duplication
-    subcategory: simple
+    category: multiple indels
+    subcategory: duplication + deletion
     note: deletion spanning -50 nick
   01:01104:026087:007216_:
-    category: deletion + duplication
-    subcategory: iterated
+    category: multiple indels
+    subcategory: duplication + deletion
     note: long deletion
   01:01101:023131:013119_:
-    category: edit + duplication
-    subcategory: simple
+    category: edit + indel
+    subcategory: duplication
     note: duplication of part of 3' overhang with intended edit

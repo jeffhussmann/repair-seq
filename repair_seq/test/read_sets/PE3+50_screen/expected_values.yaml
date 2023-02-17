@@ -55,12 +55,12 @@ expected_values:
     subcategory: simple
     note: duplication of part of 5' overhang with a mismatch
   01:01101:017806:036714_:
-    category: edit + duplication
-    subcategory: simple
+    category: edit + indel
+    subcategory: duplication
     note: duplication with edit, no errors
   01:01103:013078:005603_:
-    category: edit + duplication
-    subcategory: simple
+    category: edit + indel
+    subcategory: duplication
     note: duplication with edit with 1 mismatch
   01:01105:032208:029716_:
     category: unintended rejoining of RT'ed sequence
@@ -76,7 +76,7 @@ expected_values:
     subcategory: mismatches
     note: deletion, 17 nts between nicks plus 1 mismatch towards end
   01:01117:010411:027070_:
-    category: deletion + duplication
-    subcategory: simple
+    category: multiple indels
+    subcategory: duplication + deletion
     note: consistent with a duplication between nicks that preserves both nicking
       targets, followed by deletion

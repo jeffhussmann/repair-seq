@@ -1,4 +1,4 @@
-LOCUS       FANCF                   1182 bp    DNA              UNK 01-JAN-1980
+LOCUS       FANCF                   1195 bp    DNA              UNK 01-JAN-1980
 DEFINITION  .
 ACCESSION   <unknown id>
 VERSION     <unknown id>
@@ -8,36 +8,13 @@ SOURCE      .
             .
 FEATURES             Location/Qualifiers
      misc_feature    501..518
-                     /label="reverse_primer"
-                     /ApEinfo_fwdcolor="#9eafd2"
-     misc_feature    complement(663..682)
                      /label="forward_primer"
                      /ApEinfo_fwdcolor="#75C6A9"
-     misc_feature    complement(678..682)
-                     /label="sequencing_start"
-     misc_feature    complement(678..682)
+     misc_feature    complement(663..695)
+                     /label="reverse_primer"
+                     /ApEinfo_fwdcolor="#9eafd2"
+     misc_feature    501..518
                      /label="anchor"
-     sgRNA_SpCas9H840528..547
-                     /label="FANCF_3b_+21"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840502..520
-                     /label="FANCF_3b_+48"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840567..585
-                     /label="FANCF_3b_-17"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840577..595
-                     /label="FANCF_3b_-27"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840599..618
-                     /label="FANCF_3b_-50"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840628..646
-                     /label="FANCF_3b_-78"
-                     /ApEinfo_fwdcolor="#c6c9d1"
-     sgRNA_SpCas9H840502..520
-                     /label="FANCF_4d_+48"
-                     /ApEinfo_fwdcolor="#c6c9d1"
 ORIGIN
         1 cgctcccaca ggctgctgag aaacctggcg ggacgctccg cttcggcctt ccccacctcc
        61 tgcagacgct ccagcagcag ctccgcctgg gtcttcatca gagagtcctc ctggagattt
@@ -58,5 +35,5 @@ ORIGIN
       961 aaattaagta acgccagaga catactgtga cgtgaggaaa cgctcttaaa tgaaatttta
      1021 agatctattt gagaaacatg tactaaaaat gtactgacct cctattaatg ccaggcgcta
      1081 tgctgaattc tgggccttca cattgtcctt ccattattag aactgaagcc cagattattt
-     1141 gaaacaaaaa ataaacttca ataatttatt aaaatttgca aa
+     1141 gaaacaaaaa ataaacttca ataatttatt aaaatttgca aaggaacaaa atttt
 //

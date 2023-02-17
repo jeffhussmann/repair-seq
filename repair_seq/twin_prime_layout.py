@@ -68,6 +68,12 @@ class Layout(repair_seq.prime_editing_layout.Layout):
              'mismatches',
             ),
         ),
+        ('edit + indel',
+            ('deletion',
+             'insertion',
+             'duplication',
+            ),
+        ),
         ('multiple indels',
             ('multiple indels',
             ),
@@ -167,7 +173,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         if pegRNA_al_to_extend is None:
             return None
 
-        # Prime-del strategies don't have a natural overlap.
+        # Prime-del strategies (or non-homologous flaps) don't have a natural overlap.
         if (pegRNA_al_to_extend.reference_name, 'overlap') not in self.target_info.features:
             return None
 

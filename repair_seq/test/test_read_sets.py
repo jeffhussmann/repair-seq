@@ -150,7 +150,7 @@ def build_pooled_screen_read_set(set_name):
     # Pools may specify specialized values for some target_info
     # parameters that need to be passed along.
     possible_target_info_kwargs_keys = [
-        'pegRNAs',
+        'sgRNAs',
         'sequencing_start_feature_name',
         'primer_names',
     ]
@@ -196,7 +196,7 @@ def build_all_arrayed_group_read_sets(only_new=False):
         else:
             build_arrayed_group_read_set(set_name)
 
-def build_arrayed_group_read_set(set_name):
+def build_arrayed_group_read_set(set_name, prompt=True):
     read_set_fn = base_dir / 'manual_read_sets' / 'arrayed_groups' / f'{set_name}.yaml'
     manual_details = yaml.safe_load(read_set_fn.read_text())
 
@@ -231,7 +231,10 @@ def build_arrayed_group_read_set(set_name):
     existing_target_info_dir = exp.target_info.dir
 
     if new_target_info_dir.is_dir():
-        approved_deletion = input(f'Deleting target directory {new_target_info_dir}, proceed?') == 'y'
+        if prompt:
+            approved_deletion = input(f'Deleting target directory {new_target_info_dir}, proceed?') == 'y'
+        else:
+            approved_deletion = True
 
         if approved_deletion:
             shutil.rmtree(new_target_info_dir)
@@ -273,7 +276,10 @@ def test_read_sets():
 
     discrepancies = []
 
-    for read_set in read_sets:
+    # Delete each read_set after processing to avoid excessive memory usage.
+    while len(read_sets) > 0:
+        read_set = read_sets.pop(0)
+
         tested_layouts = read_set.process()
 
         num_tested = len(tested_layouts['passed']) + len(tested_layouts['failed'])
@@ -282,6 +288,8 @@ def test_read_sets():
             discrepancies.append((read_set.name, layout.query_name, expected, layout.category, layout.subcategory))
 
         print(f'Tested {num_tested: >3d} sequences for {read_set.name}.') 
+
+        del read_set
 
     diagnostic_messages = []
 

@@ -29,7 +29,7 @@ def test_intended_deletion_inferrence():
         ('HEK3_4g_del1-80', 'D:677,80'),
     ]:
         ti = knock_knock.target_info.TargetInfo(base_dir,
-                                                'HEK3',
+                                                'PMID31634902_HEK3',
                                                 sgRNAs=[pegRNA],
                                                )
 
