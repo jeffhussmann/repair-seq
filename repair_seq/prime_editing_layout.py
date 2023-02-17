@@ -1530,17 +1530,32 @@ class Layout(layout.Categorizer):
                 target_nts_past_primer[side] = target_past_primer.total_length 
 
             if self.primer_alignments['left'] is not None:
+                covering_als = []
+
                 if target_nts_past_primer['left'] <= 10 and target_nts_past_primer['right'] <= 10:
                     covering_als = []
 
                     for al in self.supplemental_alignments + self.split_pegRNA_alignments + self.extra_alignments:
                         covered_by_al = interval.get_covered(al)
-                        if len(self.not_covered_by_primers - covered_by_al) == 0:
+                        if (self.not_covered_by_primers - covered_by_al).total_length == 0:
                             covering_als.append(al)
                 
-                    if len(covering_als) > 0:
-                        valid = True
-                        results['covering_als'] = covering_als
+                else:
+                    target_als = [al for al in self.primary_alignments if al.reference_name == self.target_info.target]
+                    not_covered_by_any_target_als = self.whole_read - interval.get_disjoint_covered(target_als)
+
+                    if not_covered_by_any_target_als.total_length >= 100:
+                        for al in self.supplemental_alignments:
+                            covered_by_al = interval.get_covered(al)
+                            if (self.not_covered_by_primers - covered_by_al).total_length == 0:
+                                cropped_al = sam.crop_al_to_query_int(al, self.not_covered_by_primers.start, self.not_covered_by_primers.end)
+                                total_edits = sum(knock_knock.layout.edit_positions(cropped_al, self.target_info.reference_sequences, use_deletion_length=True))
+                                if total_edits <= 5:
+                                    covering_als.append(al)
+
+                if len(covering_als) > 0:
+                    valid = True
+                    results['covering_als'] = covering_als
 
         if not valid:
             results = None
