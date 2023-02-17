@@ -1,4 +1,3 @@
-import array
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -2975,14 +2974,22 @@ class Layout(layout.Categorizer):
 
                     features_to_show.add((ti.target, name))
 
-        for feature_name in self.target_info.PAM_features:
+        # Draw protospacer features on the same side as their nick.
+        for feature_name, feature in ti.PAM_features.items():
+            if (feature.strand == '+' and not flip_target) or (feature.strand == '-' and flip_target):
+                feature_heights[feature_name] = -1
+
             label_offsets[feature_name] = 1
 
-        for deletion in self.target_info.pegRNA_programmed_deletions:
+        for feature_name, feature in ti.protospacer_features.items():
+            if (feature.strand == '+' and not flip_target) or (feature.strand == '-' and flip_target):
+                feature_heights[feature_name] = -1
+
+        for deletion in ti.pegRNA_programmed_deletions:
             label_overrides[deletion.ID] = f'programmed deletion ({len(deletion)} nts)'
             feature_heights[deletion.ID] = -0.5
 
-        for insertion in self.target_info.pegRNA_programmed_insertion_features:
+        for insertion in ti.pegRNA_programmed_insertion_features:
             label_overrides[insertion.ID] = 'insertion'
             label_offsets[insertion.ID] = 1
 

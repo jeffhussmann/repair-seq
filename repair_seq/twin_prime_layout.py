@@ -778,6 +778,12 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         ti = self.target_info
 
+        feature_heights = {}
+        label_offsets = {feature_name: 1 for feature_name in ti.PAM_features}
+        label_overrides = {name: 'protospacer' for name in ti.protospacer_names}
+
+        flip_target = ti.sequencing_direction == '-'
+
         color_overrides = {}
         if ti.primer_names is not None:
             for primer_name in ti.primer_names:
@@ -798,15 +804,19 @@ class Layout(repair_seq.prime_editing_layout.Layout):
                 PAM_name = f'{ps_name}_PAM'
                 color_overrides[PAM_name] = color
 
+        # Draw protospacer features on the same side as their nick.
+        for feature_name, feature in ti.PAM_features.items():
+            if (feature.strand == '+' and not flip_target) or (feature.strand == '-' and flip_target):
+                feature_heights[feature_name] = -1
+
+        for feature_name, feature in ti.protospacer_features.items():
+            if (feature.strand == '+' and not flip_target) or (feature.strand == '-' and flip_target):
+                feature_heights[feature_name] = -1
+
         features_to_show = {*ti.features_to_show}
         features_to_show.update({(ti.target, name) for name in ti.protospacer_names})
         features_to_show.update({(ti.target, name) for name in ti.PAM_features})
 
-        label_offsets = {feature_name: 1 for feature_name in ti.PAM_features}
-
-        label_overrides = {name: 'protospacer' for name in ti.protospacer_names}
-
-        feature_heights = {}
 
         for pegRNA_name in ti.pegRNA_names:
             PBS_name = knock_knock.pegRNAs.PBS_name(pegRNA_name)
@@ -845,7 +855,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
 
         diagram_kwargs = dict(
             draw_sequence=True,
-            flip_target=ti.sequencing_direction == '-',
+            flip_target=flip_target,
             split_at_indels=True,
             label_offsets=label_offsets,
             features_to_show=features_to_show,
