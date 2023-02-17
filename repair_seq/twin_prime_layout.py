@@ -202,7 +202,7 @@ class Layout(repair_seq.prime_editing_layout.Layout):
         if target_edge_al is not None:
             als['first target'] = target_edge_al
         
-            pegRNA_al, cropped_pegRNA_al, cropped_target_al = self.find_pegRNA_alignment_extending_target_edge_al(side)
+            pegRNA_al, cropped_pegRNA_al, cropped_target_al = self.find_pegRNA_alignment_extending_target_edge_al(side, 'PBS')
             
             if pegRNA_al is not None:
                 als['first pegRNA'] = pegRNA_al

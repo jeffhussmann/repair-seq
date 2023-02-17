@@ -1198,9 +1198,20 @@ class Layout(layout.Categorizer):
                     else:
                         genotype[name] = b
 
-                        pegRNA_base = SNVs[pegRNA][name]['base']
-                        if SNVs[pegRNA][name]['strand'] == '-':
-                            pegRNA_base = utilities.reverse_complement(pegRNA_base)
+                        pegRNA_bases = set()
+
+                        for pegRNA_name in self.target_info.pegRNA_names:
+                            if name in SNVs[pegRNA_name]:
+                                pegRNA_base = SNVs[pegRNA_name][name]['base']
+                                if SNVs[pegRNA_name][name]['strand'] == '-':
+                                    pegRNA_base = utilities.reverse_complement(pegRNA_base)
+
+                                pegRNA_bases.add(pegRNA_base)
+
+                        if len(pegRNA_bases) > 1:
+                            raise ValueError(pegRNA_base)
+                        else:
+                            pegRNA_base = list(pegRNA_bases)[0]
                     
                         if b == pegRNA_base:
                             has_pegRNA_SNV = True
