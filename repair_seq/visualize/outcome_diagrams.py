@@ -636,7 +636,7 @@ def plot(outcome_order,
             draw_donor(y, HDR_outcome, deletion_outcome, insertion_outcome, source_name, False)
 
         elif category == 'duplication' and subcategory == 'simple':
-            duplication_outcome = DuplicationOutcome.from_string(details)
+            duplication_outcome = DuplicationOutcome.from_string(details).undo_anchor_shift(ti.anchor)
             draw_duplication(y, duplication_outcome, source_name)
             
         else:
