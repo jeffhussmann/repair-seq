@@ -1,5 +1,6 @@
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -8,8 +9,8 @@ from pathlib import Path
 
 import knock_knock.build_targets
 
-import repair_seq.build_guide_specific_targets
 import repair_seq.demux
+import repair_seq.demux_gDNA
 import repair_seq.pooled_screen
 
 def install_metadata(base_dir):
@@ -29,29 +30,11 @@ def install_metadata(base_dir):
 
     logging.info(f'Metadata installed in {base_dir}')
 
-def build_targets(base_dir, num_processes):
-    SRA_sample_sheet = repair_seq.demux.load_SRA_sample_sheet()
-
-    pairs_to_build = set(zip(SRA_sample_sheet['variable_guide_library'], SRA_sample_sheet['target_info_prefix']))
-
-    for variable_guide_library, target_info_prefix in pairs_to_build:
-        logging.info(f'Building guide-specific targets in {base_dir} for {target_info_prefix} {variable_guide_library}')
-
-        original_target = target_info_prefix
-        original_genbank_name = target_info_prefix
-
-        repair_seq.build_guide_specific_targets.build_all_singles(base_dir,
-                                                                  original_target,
-                                                                  original_genbank_name,
-                                                                  [variable_guide_library],
-                                                                  num_processes=num_processes,
-                                                                 )
-
 def download_and_build_indices(base_dir, num_processes):
     for genome_name in ['hg19', 'bosTau7']:
         knock_knock.build_targets.download_genome_and_build_indices(base_dir, genome_name, num_threads=num_processes)
 
-def download_SRA_data(base_dir, screen_name, debug=False):
+def download_data(base_dir, screen_name, debug=False):
     logging.info(f'Downloading data for {screen_name} into {base_dir}')
 
     data_dir = Path(base_dir) / 'data' / screen_name
@@ -59,19 +42,29 @@ def download_SRA_data(base_dir, screen_name, debug=False):
 
     SRR_accessions = repair_seq.demux.load_SRR_accessions().loc[screen_name].index
 
-    fastq_dump_common_command = [
-        'fastq-dump',
-        '--split-3',
-        '--origfmt',
-        '--gzip',
-        '--outdir', str(data_dir),
-    ]
-
-    if debug:
-        fastq_dump_common_command.extend([
-            '--maxSpotId', str(int(1e6)),
-        ])
-    
     for SRR_accession in SRR_accessions:
-        fastq_dump_command = fastq_dump_common_command + [SRR_accession]
-        subprocess.run(fastq_dump_command, check=True)
+
+        # prefetch into the same directory the fastqs will end up to avoid
+        # potential issues with tmp space limits 
+
+        sra_fn = data_dir / f'{SRR_accession}.sra'
+        prefetch_command = f'prefetch {SRR_accession} --output-file {sra_fn} --max-size {int(1e12)}'
+        subprocess.run(shlex.split(prefetch_command), check=True)
+
+        fastq_dump_command = f'fastq-dump --split-3 --origfmt --gzip --outdir {data_dir}'
+
+        if debug:
+            fastq_dump_command += f' --maxSpotId {int(1e6)}'
+        
+        fastq_dump_command += f' {sra_fn}'
+        subprocess.run(shlex.split(fastq_dump_command), check=True)
+
+def demux(base_dir, screen_name, debug=False):
+    has_UMIs = repair_seq.demux.load_SRA_sample_sheet().loc[screen_name, 'has_UMIs']
+    
+    if has_UMIs:
+        demux_module = repair_seq.demux
+    else:
+        demux_module = repair_seq.demux_gDNA
+
+    demux_module.demux_group(base_dir, screen_name, from_SRA=True, debug=debug)

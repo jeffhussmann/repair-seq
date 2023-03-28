@@ -39,7 +39,7 @@ FEATURES             Location/Qualifiers
                        /ApEinfo_revcolor="#faac61"
                        /ApEinfo_fwdcolor="#faac61"
      misc_feature      2945..2964
-                       /label="protospacer"
+                       /label="library_protospacer"
                        /ApEinfo_revcolor="#ffef86"
                        /ApEinfo_fwdcolor="#ffef86"
      misc_feature      2965..3050
@@ -54,18 +54,6 @@ FEATURES             Location/Qualifiers
                        /label="anchor"
                        /ApEinfo_revcolor="#b7e6d7"
                        /ApEinfo_fwdcolor="#b7e6d7"
-     sgRNA_SaCas9H840A complement(3152..3173)
-                       /label=-50
-                       /ApEinfo_revcolor="#c7b0e3"
-                       /ApEinfo_fwdcolor="#c7b0e3"
-     sgRNA_SaCas9H840A 3186..3207
-                       /label="edit"
-                       /ApEinfo_revcolor="#f6989d"
-                       /ApEinfo_fwdcolor="#f6989d"
-     sgRNA_SaCas9H840A complement(3252..3273)
-                       /label=+50
-                       /ApEinfo_revcolor="#85dae9"
-                       /ApEinfo_fwdcolor="#85dae9"
      misc_feature      complement(3353..3373)
                        /label="reverse_primer"
                        /ApEinfo_revcolor="#b7e6d7"

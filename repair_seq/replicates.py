@@ -8,8 +8,6 @@ import pandas as pd
 import scipy.stats
 import seaborn as sns
 
-from scipy.stats import pearsonr
-
 import hits.utilities
 memoized_property = hits.utilities.memoized_property
 

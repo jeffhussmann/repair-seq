@@ -28,15 +28,15 @@ import yaml
 import hits.visualize
 from hits import utilities, sam, fastq, fasta, interval
 from knock_knock import experiment, target_info, visualize, ranges, explore, outcome_record, parallel
+from knock_knock import prime_editing_layout
+from knock_knock import twin_prime_layout
 
 from . import annotations
 from . import coherence
 from . import collapse
 from . import guide_library
 from . import pooled_layout
-from . import prime_editing_layout
 from . import statistics
-from . import twin_prime_layout
 
 memoized_property = utilities.memoized_property
 memoized_with_args = utilities.memoized_with_args
@@ -148,7 +148,7 @@ class SingleGuideExperiment(experiment.Experiment):
 
         ti = target_info.TargetInfo(self.base_dir,
                                     self.target_name,
-                                    feature_to_replace=(self.pool.target_info.target, 'library_protospacer', protospacer_sequence),
+                                    feature_to_replace=('library_protospacer', protospacer_sequence),
                                     primer_names=self.primer_names,
                                     sgRNAs=self.sgRNAs,
                                     donor=self.donor,
@@ -589,7 +589,7 @@ class SingleGuideExperiment(experiment.Experiment):
             perfect = outcome.guide_mismatch == -1
             counts[perfect, outcome.category, outcome.subcategory, outcome.details] += 1
 
-        counts = pd.Series(counts).sort_values(ascending=False)
+        counts = pd.Series(counts, dtype=int).sort_values(ascending=False)
         counts.to_csv(counts_fn, mode='a', sep='\t', header=False)
 
     def collapse_UMI_outcomes(self):
@@ -1145,7 +1145,7 @@ def collapse_categories(df):
     if isinstance(df, pd.DataFrame):
         new_rows = pd.DataFrame.from_dict(new_rows, orient='index')
     elif isinstance(df, pd.Series):
-        new_rows = pd.Series(new_rows)
+        new_rows = pd.Series(new_rows, dtype=df.dtype)
     else:
         raise ValueError
 

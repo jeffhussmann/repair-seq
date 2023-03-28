@@ -1,0 +1,7 @@
+name,effector,protospacer,scaffold,extension
+SpCas9 target 1,SpCas9,gcaggctgcctatcagaaag
+SpCas9 target 2,SpCas9,gaattctttgccaaagtgat
+SpCas9 target 3,SpCas9,agcgagcttagtgatacttg
+SpCas9 target 4,SpCas9,gcgagcttagtgatacttgt
+SaCas9 target,SaCas9,tgataggcagcctgcactgg
+AsCas12a target,AsCas12a,tgataggcagcctgcactgg

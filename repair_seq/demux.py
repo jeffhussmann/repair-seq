@@ -83,9 +83,6 @@ def load_SRA_pool_sample_sheet(screen_name):
         sample_sheet['quartets'][SRR_accession] = {which: f'{SRR_accession}_{which[-1]}' for which in ['R1', 'R2']}
         sample_sheet['quartets'][SRR_accession]['num_reads'] = num_reads
 
-    sample_sheet['R1_primer'] = 'forward_primer'
-    sample_sheet['R2_primer'] = 'reverse_primer'
-
     return sample_sheet
 
 def write_SRA_pool_sample_sheet(base_dir, screen_name):
@@ -185,6 +182,7 @@ class UMISorters:
 
         self.sorters = defaultdict(list)
 
+
     def __getitem__(self, key):
         return self.sorters[key]
 
@@ -200,8 +198,10 @@ class UMISorters:
             else:
                 pool_name = f'{self.group_name}_{sample}'
 
-            guides_name = f'{fixed_guide}-{variable_guide}'
-            output_dir = self.base_dir / 'results' / pool_name / guides_name / 'chunks'
+            pool = repair_seq.pooled_screen.PooledScreen(self.base_dir, pool_name)
+
+            exp = pool.single_guide_experiment(fixed_guide, variable_guide)
+            output_dir = exp.fns['chunks']
             output_dir.mkdir(exist_ok=True, parents=True)
             
             fn = output_dir / f'{self.chunk_string}_R2.fastq.gz'
@@ -471,7 +471,13 @@ def merge_ids(base_dir, group):
     for fn in count_fns:
         fn.unlink()
 
-def demux_group(base_dir, group, debug=False, reads_per_chunk=int(5e6), from_SRA=False, just_chunk=False):
+def demux_group(base_dir,
+                group,
+                debug=False,
+                reads_per_chunk=int(5e6),
+                from_SRA=False,
+                just_chunk=False,
+               ):
     '''
     just_chunk: Only split input files into chunks (don't demux them). 
     '''

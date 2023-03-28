@@ -244,7 +244,7 @@ def get_resolvers(base_dir, group, from_SRA):
 
     variable_guide_library = repair_seq.guide_library.GuideLibrary(base_dir, sample_sheet['variable_guide_library'])
 
-    ti_prefix = sample_sheet['target_info_prefix']
+    ti_name = sample_sheet['target_info']
 
     guide_seqs = {}
     guide_seqs['variable_guide'] = defaultdict(set)
@@ -261,15 +261,15 @@ def get_resolvers(base_dir, group, from_SRA):
         guide_pairs = [('none', vg) for vg in variable_guide_library.guides]
 
     for fg, vg in guide_pairs:
-        if fg == 'none':
-            ti_name = f'{ti_prefix}_{variable_guide_library.name}_{vg}'
-        else:
-            ti_name = f'{ti_prefix}-{fg}-{vg}'
         
-        ti = knock_knock.target_info.TargetInfo(base_dir, ti_name)
+        protospacer_sequence = variable_guide_library.guides_df.loc[vg, 'protospacer']
+
+        ti = knock_knock.target_info.TargetInfo(base_dir, ti_name, 
+                                                feature_to_replace=('library_protospacer', protospacer_sequence),
+                                               )
         
-        R1_primer = ti.features[ti.target, sample_sheet['R1_primer']]
-        R2_primer = ti.features[ti.target, sample_sheet['R2_primer']]
+        R1_primer = ti.features[ti.target, sample_sheet['guide_primer']]
+        R2_primer = ti.features[ti.target, sample_sheet['outcome_primer']]
         
         target_seq = ti.reference_sequences[ti.target]
         

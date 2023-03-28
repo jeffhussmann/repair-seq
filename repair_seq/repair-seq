@@ -81,7 +81,6 @@ if __name__ == '__main__':
 
     def initial_setup(args):
         repair_seq.process_SRA_data.install_metadata(args.base_dir)
-        repair_seq.process_SRA_data.build_targets(args.base_dir, args.num_processes)
         repair_seq.process_SRA_data.download_and_build_indices(args.base_dir, args.num_processes)
 
     initial_setup_subparser.set_defaults(func=initial_setup)
@@ -95,7 +94,7 @@ if __name__ == '__main__':
     add_debug_arg(download_subparser)
 
     def download(args):
-        repair_seq.process_SRA_data.download_SRA_data(args.base_dir, args.screen_name, debug=args.debug)
+        repair_seq.process_SRA_data.download_data(args.base_dir, args.screen_name, debug=args.debug)
 
     download_subparser.set_defaults(func=download)
 
@@ -109,7 +108,7 @@ if __name__ == '__main__':
     add_debug_arg(process_SRA_subparser)
 
     def process_SRA(args):
-        repair_seq.demux.demux_group(args.base_dir, args.screen_name, from_SRA=True, debug=args.debug)
+        repair_seq.process_SRA_data.demux(args.base_dir, args.screen_name, debug=args.debug)
         process(args)
 
     process_SRA_subparser.set_defaults(func=process_SRA)

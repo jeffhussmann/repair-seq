@@ -36,7 +36,7 @@ def load_sample_sheet(base_dir, batch):
         'has_UMIs': False,
         'categorizer': sample_sheet.get('categorizer', 'pooled_layout'),
         'R1_read_lengths': (43, 45),
-        'target_info_prefix': sample_sheet.get('target_info_prefix', 'pooled_vector'),
+        'target_info': sample_sheet.get('target_info', 'pooled_vector'),
     }
 
     for sample_name, details in pool_details.items():
