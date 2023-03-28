@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import hits.utilities
 import hits.visualize
 
+import knock_knock.pegRNAs
 from knock_knock.target_info import degenerate_indel_from_string, SNV, SNVs
 from knock_knock.outcome import *
 
@@ -80,7 +81,9 @@ def plot(outcome_order,
         sequence_alpha = draw_all_sequence
     else:
         sequence_alpha = 0.1
-
+        
+    del_height = 0.15
+        
     offsets = {}
     seqs = {}
     transform_seqs = {}
@@ -103,10 +106,7 @@ def plot(outcome_order,
             else:
                 offset = ti.PAM_slice.stop - 1
         else:
-            if guide.strand == '-':
-                offset = max(ti.cut_afters.values())
-            else:
-                offset = max(ti.cut_afters.values())
+            offset = max(v for n, v in ti.cut_afters.items() if n.startswith(ti.primary_protospacer))
 
         offsets[source_name] = offset
 
@@ -125,6 +125,7 @@ def plot(outcome_order,
     if draw_cut_afters:
         for source_name, ti in target_infos.items():
             offset = offsets[source_name]
+            window_left, window_right = windows[source_name]
 
             for cut_after in ti.cut_afters.values():
                 # temp fix for empirically-determined offset of Cpf1 cut.
@@ -135,7 +136,7 @@ def plot(outcome_order,
                 else:
                     ys = [-0.5, num_outcomes - 0.5]
 
-                if x not in cuts_drawn_at: 
+                if x not in cuts_drawn_at and window_left <= x <= window_right: 
                     ax.plot([x, x], ys,
                             color=cut_color,
                             linestyle='--',
@@ -240,8 +241,6 @@ def plot(outcome_order,
                                     )
                             xs_to_skip.add(x)
 
-        del_height = 0.15
-        
         if flip_MH_deletion_boundaries == False:
             del_start = starts[0] - 0.5
             del_end = starts[0] + deletion.length - 1 + 0.5
@@ -284,7 +283,7 @@ def plot(outcome_order,
             xs = [start + 0.5, start + 0.5]
 
             if draw_insertion_degeneracy or (start == start_to_label):
-                ax.plot(xs, ys, color='purple', linewidth=purple_line_width, alpha=purple_line_alpha)
+                ax.plot(xs, ys, color='purple', linewidth=purple_line_width, alpha=purple_line_alpha, clip_on=False)
 
             if start == start_to_label:
                 width = 0.9
@@ -299,7 +298,8 @@ def plot(outcome_order,
                                 size=text_size * 1,
                                 color=hits.visualize.igv_colors[transform_seq(b)],
                                 weight='bold',
-                            )
+                                annotation_clip=False,
+                               )
 
     def draw_duplication(y, duplication, source_name):
         window_left, window_right = windows[source_name]
@@ -320,7 +320,10 @@ def plot(outcome_order,
             y_offset = i * wt_height * 0.1
 
             draw_rect(source_name, start - 0.5, end + 0.5, bottom + y_offset, top + y_offset, alpha, color='tab:purple', fill=False)
-            
+
+        if draw_all_sequence:
+            draw_sequence(y, source_name, alpha=sequence_alpha)
+
     def draw_wild_type(y, source_name, on_top=False, guides_to_draw=None):
         ti = target_infos[source_name]
         offset = offsets[source_name]
@@ -412,7 +415,7 @@ def plot(outcome_order,
                                 #color=hits.visualize.igv_colors[transform_seq(read_base)],
                                 #weight='bold',
                                 annotation_clip=False,
-                                )
+                               )
             
                 if read_base != '-':
                     if  read_base == '_':
@@ -495,6 +498,212 @@ def plot(outcome_order,
                         alpha=0.2,
                         clip_on=False,
                 )
+
+    def draw_programmed_edit(y, programmed_edit_outcome, source_name, on_top=False):
+        ti = target_infos[source_name]
+        transform_seq = transform_seqs[source_name]
+        window_left, window_right = windows[source_name]
+        SNP_ps = sorted(p for (s, p), b in ti.fingerprints[ti.target])
+
+        p_to_i = SNP_ps.index
+        i_to_p = dict(enumerate(SNP_ps))
+
+        SNP_xs = set()
+        observed_SNP_idxs = set()
+
+        SNV_names = sorted(ti.pegRNA_SNVs[ti.target])
+        for SNV_name, read_base in zip(SNV_names, programmed_edit_outcome.SNV_read_bases):
+            position = ti.pegRNA_SNVs[ti.target][SNV_name]['position']
+            pegRNA_base = ti.pegRNA_SNVs[ti.pegRNA_names[0]][SNV_name]['base']
+            if ti.pegRNA_SNVs[ti.pegRNA_names[0]][SNV_name]['strand'] == '-':
+                pegRNA_base = hits.utilities.reverse_complement(pegRNA_base)
+
+            x = position - offset
+            if window_left <= x <= window_right:
+                # Note: read base of '-' means it was deleted
+                if read_base == pegRNA_base:
+                    SNP_xs.add(x)
+                    observed_SNP_idxs.add(p_to_i(position))
+
+                if read_base != '-' and read_base != '_':
+                    ax.annotate(transform_seq(read_base),
+                                xy=(x + shift_x, y),
+                                xycoords='data', 
+                                ha='center',
+                                va='center',
+                                size=text_size,
+                                alpha=0.35,
+                                #color=hits.visualize.igv_colors[transform_seq(read_base)],
+                                #weight='bold',
+                                annotation_clip=False,
+                               )
+            
+                if read_base == '_':
+                    color = 'grey'
+                    alpha = 0.3
+                else:
+                    color = hits.visualize.igv_colors[transform_seq(read_base)]
+                    alpha = 0.7
+
+                draw_rect(source_name, x - 0.5, x + 0.5, y - wt_height / 2, y + wt_height / 2, alpha, color=color)
+
+        if not on_top:
+            # Draw rectangles around blocks of consecutive incorporated donor SNVs. 
+            observed_SNP_idxs = sorted(observed_SNP_idxs)
+            if observed_SNP_idxs:
+                # no SNPs if just a donor deletion
+                blocks = []
+                block = [observed_SNP_idxs[0]]
+
+                for i in observed_SNP_idxs[1:]:
+                    if block == [] or i == block[-1] + 1:
+                        block.append(i)
+                    else:
+                        blocks.append(block)
+                        block = [i]
+
+                blocks.append(block)
+                for block in blocks:
+                    start = i_to_p[block[0]] - offset
+                    end = i_to_p[block[-1]] - offset
+                    x_buffer = 0.7
+                    y_buffer = 0.7
+                    draw_rect(source_name, start - x_buffer, end + x_buffer, y - y_buffer * wt_height, y + y_buffer * wt_height, 0.5, fill=False)
+
+        if len(programmed_edit_outcome.deletions) == 0:
+            draw_rect(source_name, window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+        elif len(programmed_edit_outcome.deletions) == 1:
+            deletion = DeletionOutcome(programmed_edit_outcome.deletions[0]).undo_anchor_shift(ti.anchor).deletion
+            draw_deletion(y, deletion, source_name, color='red', draw_MH=False, background_color='black')
+        else:
+            raise NotImplementedError
+
+        if len(programmed_edit_outcome.insertions) == 0:
+            pass
+        elif len(programmed_edit_outcome.insertions) == 1:
+            insertion = InsertionOutcome(programmed_edit_outcome.insertions[0]).undo_anchor_shift(ti.anchor).insertion
+            insertion = ti.expand_degenerate_indel(insertion)
+            draw_insertion(y, insertion, source_name)
+        else:
+            raise NotImplementedError
+        
+        if draw_all_sequence:
+            draw_sequence(y, source_name, xs_to_skip=SNP_xs, alpha=sequence_alpha)
+
+    def draw_pegRNA(source_name):
+        ti = target_infos[source_name]
+        pegRNA = ti.pegRNAs[0]
+        SNVs, _, _, _, (flap_subsequences, target_subsequences) = pegRNA.align_RTT_to_target()
+
+        feature = ti.features[ti.target, f'{pegRNA.name}_PBS']
+
+        start = feature.start - 0.5 - offset
+        end = feature.end + 0.5 - offset
+
+        color = feature.attribute['color']
+
+        y = len(outcome_order) + 1
+
+        draw_rect(source_name, start, end, y - wt_height / 2, y + wt_height / 2, 0.8, color)
+        ax.annotate('PBS',
+                    xy=(np.mean([start, end]), y + wt_height / 2),
+                    xytext=(0, 5),
+                    textcoords='offset points',
+                    color='black',
+                    annotation_clip=False,
+                    ha='center',
+                    va='bottom',
+                   )
+
+        PBS_seq = hits.utilities.reverse_complement(pegRNA.components['PBS'])
+
+        if guide.strand == '+':
+            xs = range(-len(PBS_seq) + 1, 1)
+        else:
+            xs = range(len(PBS_seq), 0, -1)
+            PBS_seq = hits.utilities.complement(PBS_seq)
+
+        for x, b in zip(xs, PBS_seq):
+            ax.annotate(b,
+                        xy=(x, y),
+                        xycoords='data', 
+                        ha='center',
+                        va='center',
+                        size=text_size,
+                        annotation_clip=False,
+                       )
+
+        RTT_xs = []
+        RTT_rc = hits.utilities.reverse_complement(pegRNA.components['RTT'])
+        RTT_aligned_seq = ''
+        for (target_start, target_end), (flap_start, flap_end) in zip(target_subsequences, flap_subsequences):
+            # target_subsequences are in downstream_of_nick coords and end is exclusive.
+            # 0 is cut_after
+
+            RTT_subsequence = RTT_rc[flap_start:flap_end]
+            if guide.strand == '-':
+                RTT_subsequence = hits.utilities.complement(RTT_subsequence)
+            RTT_aligned_seq += RTT_subsequence
+
+            if guide.strand == '+':
+                xs_start = target_start + 1
+                xs_end = target_end + 1
+                step = 1
+            else:
+                xs_start = -target_start
+                xs_end = -target_end
+                step = -1
+
+            RTT_xs.extend(range(xs_start, xs_end, step))
+
+            rect_start, rect_end = sorted([xs_start, xs_end])
+
+            rect_start = rect_start - (0.5 * step)
+            rect_end = rect_end - (0.5 * step)
+
+            color = knock_knock.pegRNAs.default_feature_colors['RTT']
+
+            draw_rect(source_name, rect_start, rect_end, y - wt_height / 2, y + wt_height / 2, 0.8, color)
+
+        for (_, previous_end), (next_start, _) in zip(target_subsequences, target_subsequences[1:]):
+            draw_rect(source_name, previous_end + 1 - 0.5, next_start + 1 - 0.5, y - del_height / 2, y + del_height / 2, 0.4, color='red')
+
+        seq = seqs[source_name]
+        window_left, window_right = windows[source_name]
+        for x, b in zip(RTT_xs, RTT_aligned_seq):
+            target_b = seq[-window_left + x]
+            if b != target_b:
+                color = hits.visualize.igv_colors[b]
+                weight = 'bold'
+            else:
+                color = 'black'
+                weight = 'normal'
+
+            ax.annotate(b,
+                        xy=(x, y),
+                        xycoords='data', 
+                        ha='center',
+                        va='center',
+                        size=text_size,
+                        annotation_clip=False,
+                        color=color,
+                        weight=weight,
+                       )
+
+        if ti.pegRNA_programmed_insertion is not None:
+            draw_insertion(y, ti.pegRNA_programmed_insertion, source_name)
+
+        ax.annotate('RTT',
+                    xy=(np.mean(RTT_xs), y + wt_height / 2),
+                    xytext=(0, 5),
+                    textcoords='offset points',
+                    color='black',
+                    annotation_clip=False,
+                    ha='center',
+                    va='bottom',
+                   )
+
+    draw_pegRNA('single_source')
 
     for i, (source_name, category, subcategory, details) in enumerate(outcome_order):
         ti = target_infos[source_name]
@@ -634,6 +843,9 @@ def plot(outcome_order,
                 raise ValueError
     
             draw_donor(y, HDR_outcome, deletion_outcome, insertion_outcome, source_name, False)
+
+        elif category == 'intended edit':
+            draw_programmed_edit(y, ProgrammedEditOutcome.from_string(details), source_name, False)
 
         elif category == 'duplication' and subcategory == 'simple':
             duplication_outcome = DuplicationOutcome.from_string(details).undo_anchor_shift(ti.anchor)
