@@ -18,7 +18,6 @@ setup(
     packages=[
         'repair_seq',
         'repair_seq/visualize',
-        'repair_seq/test',
     ],
 
     package_data={
