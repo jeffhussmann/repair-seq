@@ -104,7 +104,10 @@ def load_batch_guide_counts(base_dir, batch):
 
         all_counts = {}
         for sample_name in sample_sheet['samples']:
-            all_counts[sample_name] = load_guide_counts(base_dir, batch, sample_name) 
+            try:
+                all_counts[sample_name] = load_guide_counts(base_dir, batch, sample_name) 
+            except:
+                print(f'No counts for {sample_name}')
 
         if 'sample_pairs' in sample_sheet:
             for pair_name, sample_names in sample_sheet['sample_pairs'].items():
