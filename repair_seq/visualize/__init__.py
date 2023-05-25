@@ -8,13 +8,13 @@ import pandas as pd
 
 import knock_knock.outcome
 
+from knock_knock.visualize import fold_changes_cmap
+
 targeting_guide_color = 'silver'
 nontargeting_guide_color = bokeh.palettes.Greys9[2]
 
 correlation_cmap = copy.copy(plt.get_cmap('PuOr_r'))
 correlation_cmap.set_bad('white')
-
-fold_changes_cmap = copy.copy(plt.get_cmap('RdBu_r'))
 
 cell_cycle_cmap = copy.copy(plt.get_cmap('PiYG_r'))
 
