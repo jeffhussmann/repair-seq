@@ -260,7 +260,7 @@ def plot(outcome_order,
 
         return xs_to_skip
 
-    def draw_insertion(y, insertion, source_name):
+    def draw_insertion(y, insertion, source_name, draw_sequence=True):
         ti = target_infos[source_name]
         offset = offsets[source_name]
         transform_seq = transform_seqs[source_name]
@@ -285,7 +285,7 @@ def plot(outcome_order,
             if draw_insertion_degeneracy or (start == start_to_label):
                 ax.plot(xs, ys, color='purple', linewidth=purple_line_width, alpha=purple_line_alpha, clip_on=False)
 
-            if start == start_to_label:
+            if draw_sequence and start == start_to_label:
                 width = 0.9
                 center = start + 0.5
                 left_edge = center - (len(bs) * 0.5 * width)
@@ -336,31 +336,33 @@ def plot(outcome_order,
                 guides_to_draw = [ti.primary_protospacer]
 
             for guide_name in guides_to_draw:
-                PAM_start = ti.PAM_slices[guide_name].start - 0.5 - offset
-                PAM_end = ti.PAM_slices[guide_name].stop + 0.5 - 1 - offset
+                if guide_name in ti.PAM_slices:
+                    # PE3b protospacers might not exist
+                    PAM_start = ti.PAM_slices[guide_name].start - 0.5 - offset
+                    PAM_end = ti.PAM_slices[guide_name].stop + 0.5 - 1 - offset
 
-                guide = ti.features[ti.target, guide_name]
-                guide_start = guide.start - 0.5 - offset
-                guide_end = guide.end + 0.5 - offset
+                    guide = ti.features[ti.target, guide_name]
+                    guide_start = guide.start - 0.5 - offset
+                    guide_end = guide.end + 0.5 - offset
 
-                if override_protospacer_color is not None:
-                    protospacer_color = override_protospacer_color
-                else:
-                    protospacer_color = ti.protospacer_color
+                    if override_protospacer_color is not None:
+                        protospacer_color = override_protospacer_color
+                    else:
+                        protospacer_color = ti.protospacer_color
 
-                if override_PAM_color is not None:
-                    PAM_color = override_PAM_color
-                else:
-                    PAM_color = ti.PAM_color
+                    if override_PAM_color is not None:
+                        PAM_color = override_PAM_color
+                    else:
+                        PAM_color = ti.PAM_color
 
-                draw_rect(source_name, guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, None, color=protospacer_color)
-                draw_rect(source_name, PAM_start, PAM_end, y - wt_height / 2, y + wt_height / 2, None, color=PAM_color)
+                    draw_rect(source_name, guide_start, guide_end, y - wt_height / 2, y + wt_height / 2, None, color=protospacer_color)
+                    draw_rect(source_name, PAM_start, PAM_end, y - wt_height / 2, y + wt_height / 2, None, color=PAM_color)
 
 
-            if not on_top:
-                # Draw PAMs. Needs to be updated to support multiple sgRNAs.
-                draw_rect(source_name, window_left - 0.5, min(PAM_start, guide_start), y - wt_height / 2, y + wt_height / 2, block_alpha)
-                draw_rect(source_name, max(PAM_end, guide_end), window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
+                    if not on_top:
+                        # Draw PAMs.
+                        draw_rect(source_name, window_left - 0.5, min(PAM_start, guide_start), y - wt_height / 2, y + wt_height / 2, block_alpha)
+                        draw_rect(source_name, max(PAM_end, guide_end), window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
 
         else:
             draw_rect(source_name, window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
@@ -372,7 +374,7 @@ def plot(outcome_order,
                 start = feature.start - 0.5 - offset
                 end = feature.end + 0.5 - offset
 
-                color = feature.attribute['color']
+                color = feature.attribute.get('color', 'grey')
 
                 draw_rect(source_name, start, end, y - wt_height / 2, y + wt_height / 2, 0.8, color)
                 ax.annotate(feature_name,
@@ -499,7 +501,7 @@ def plot(outcome_order,
                         clip_on=False,
                 )
 
-    def draw_programmed_edit(y, programmed_edit_outcome, source_name, on_top=False):
+    def draw_programmed_edit(y, programmed_edit_outcome, source_name):
         ti = target_infos[source_name]
         transform_seq = transform_seqs[source_name]
         window_left, window_right = windows[source_name]
@@ -511,70 +513,80 @@ def plot(outcome_order,
         SNP_xs = set()
         observed_SNP_idxs = set()
 
-        SNV_names = sorted(ti.pegRNA_SNVs[ti.target])
-        for SNV_name, read_base in zip(SNV_names, programmed_edit_outcome.SNV_read_bases):
-            position = ti.pegRNA_SNVs[ti.target][SNV_name]['position']
-            pegRNA_base = ti.pegRNA_SNVs[ti.pegRNA_names[0]][SNV_name]['base']
-            if ti.pegRNA_SNVs[ti.pegRNA_names[0]][SNV_name]['strand'] == '-':
-                pegRNA_base = hits.utilities.reverse_complement(pegRNA_base)
+        if ti.pegRNA_SNVs is not None:
+            SNV_names = sorted(ti.pegRNA_SNVs[ti.target])
+            for SNV_name, read_base in zip(SNV_names, programmed_edit_outcome.SNV_read_bases):
+                position = ti.pegRNA_SNVs[ti.target][SNV_name]['position']
 
-            x = position - offset
-            if window_left <= x <= window_right:
-                # Note: read base of '-' means it was deleted
-                if read_base == pegRNA_base:
-                    SNP_xs.add(x)
-                    observed_SNP_idxs.add(p_to_i(position))
-
-                if read_base != '-' and read_base != '_':
-                    ax.annotate(transform_seq(read_base),
-                                xy=(x + shift_x, y),
-                                xycoords='data', 
-                                ha='center',
-                                va='center',
-                                size=text_size,
-                                alpha=0.35,
-                                #color=hits.visualize.igv_colors[transform_seq(read_base)],
-                                #weight='bold',
-                                annotation_clip=False,
-                               )
-            
-                if read_base == '_':
-                    color = 'grey'
-                    alpha = 0.3
+                pegRNA_bases = set()
+                for pegRNA_name in ti.pegRNA_names:
+                    if SNV_name in ti.pegRNA_SNVs[pegRNA_name]:
+                        pegRNA_base = ti.pegRNA_SNVs[pegRNA_name][SNV_name]['base']
+                        if ti.pegRNA_SNVs[pegRNA_name][SNV_name]['strand'] == '-':
+                            pegRNA_base = hits.utilities.reverse_complement(pegRNA_base)
+                        pegRNA_bases.add(pegRNA_base)
+                    
+                if len(pegRNA_bases) != 1:
+                    raise ValueError(SNV_name, pegRNA_bases)
                 else:
-                    color = hits.visualize.igv_colors[transform_seq(read_base)]
-                    alpha = 0.7
+                    pegRNA_base = list(pegRNA_bases)[0]
 
-                draw_rect(source_name, x - 0.5, x + 0.5, y - wt_height / 2, y + wt_height / 2, alpha, color=color)
+                x = position - offset
+                if window_left <= x <= window_right:
+                    # Note: read base of '-' means it was deleted
+                    if read_base == pegRNA_base:
+                        SNP_xs.add(x)
+                        observed_SNP_idxs.add(p_to_i(position))
 
-        if not on_top:
-            # Draw rectangles around blocks of consecutive incorporated donor SNVs. 
-            observed_SNP_idxs = sorted(observed_SNP_idxs)
-            if observed_SNP_idxs:
-                # no SNPs if just a donor deletion
-                blocks = []
-                block = [observed_SNP_idxs[0]]
-
-                for i in observed_SNP_idxs[1:]:
-                    if block == [] or i == block[-1] + 1:
-                        block.append(i)
+                    if read_base != '-' and read_base != '_':
+                        ax.annotate(transform_seq(read_base),
+                                    xy=(x + shift_x, y),
+                                    xycoords='data', 
+                                    ha='center',
+                                    va='center',
+                                    size=text_size,
+                                    alpha=0.35,
+                                    #color=hits.visualize.igv_colors[transform_seq(read_base)],
+                                    #weight='bold',
+                                    annotation_clip=False,
+                                )
+                
+                    if read_base == '_':
+                        color = 'grey'
+                        alpha = 0.3
                     else:
-                        blocks.append(block)
-                        block = [i]
+                        color = hits.visualize.igv_colors[transform_seq(read_base)]
+                        alpha = 0.7
 
-                blocks.append(block)
-                for block in blocks:
-                    start = i_to_p[block[0]] - offset
-                    end = i_to_p[block[-1]] - offset
-                    x_buffer = 0.7
-                    y_buffer = 0.7
-                    draw_rect(source_name, start - x_buffer, end + x_buffer, y - y_buffer * wt_height, y + y_buffer * wt_height, 0.5, fill=False)
+                    draw_rect(source_name, x - 0.5, x + 0.5, y - wt_height / 2, y + wt_height / 2, alpha, color=color)
+
+        # Draw rectangles around blocks of consecutive incorporated donor SNVs. 
+        observed_SNP_idxs = sorted(observed_SNP_idxs)
+        if observed_SNP_idxs:
+            # no SNPs if just a donor deletion
+            blocks = []
+            block = [observed_SNP_idxs[0]]
+
+            for i in observed_SNP_idxs[1:]:
+                if block == [] or i == block[-1] + 1:
+                    block.append(i)
+                else:
+                    blocks.append(block)
+                    block = [i]
+
+            blocks.append(block)
+            for block in blocks:
+                start = i_to_p[block[0]] - offset
+                end = i_to_p[block[-1]] - offset
+                x_buffer = 0.7
+                y_buffer = 0.7
+                draw_rect(source_name, start - x_buffer, end + x_buffer, y - y_buffer * wt_height, y + y_buffer * wt_height, 0.5, fill=False)
 
         if len(programmed_edit_outcome.deletions) == 0:
             draw_rect(source_name, window_left - 0.5, window_right + 0.5, y - wt_height / 2, y + wt_height / 2, block_alpha)
         elif len(programmed_edit_outcome.deletions) == 1:
             deletion = DeletionOutcome(programmed_edit_outcome.deletions[0]).undo_anchor_shift(ti.anchor).deletion
-            draw_deletion(y, deletion, source_name, color='red', draw_MH=False, background_color='black')
+            draw_deletion(y, deletion, source_name, color='black', draw_MH=False)
         else:
             raise NotImplementedError
 
@@ -583,7 +595,7 @@ def plot(outcome_order,
         elif len(programmed_edit_outcome.insertions) == 1:
             insertion = InsertionOutcome(programmed_edit_outcome.insertions[0]).undo_anchor_shift(ti.anchor).insertion
             insertion = ti.expand_degenerate_indel(insertion)
-            draw_insertion(y, insertion, source_name)
+            draw_insertion(y, insertion, source_name, draw_sequence=False)
         else:
             raise NotImplementedError
         
@@ -592,10 +604,9 @@ def plot(outcome_order,
 
     def draw_pegRNA(source_name):
         ti = target_infos[source_name]
-        pegRNA = ti.pegRNAs[0]
-        SNVs, _, _, _, (flap_subsequences, target_subsequences) = pegRNA.align_RTT_to_target()
+        SNVs, _, _, _, (flap_subsequences, target_subsequences) = ti.pegRNA.extract_edits_from_alignment()
 
-        feature = ti.features[ti.target, f'{pegRNA.name}_PBS']
+        feature = ti.features[ti.target, f'{ti.pegRNA.name}_PBS']
 
         start = feature.start - 0.5 - offset
         end = feature.end + 0.5 - offset
@@ -615,7 +626,7 @@ def plot(outcome_order,
                     va='bottom',
                    )
 
-        PBS_seq = hits.utilities.reverse_complement(pegRNA.components['PBS'])
+        PBS_seq = hits.utilities.reverse_complement(ti.pegRNA.components['PBS'])
 
         if guide.strand == '+':
             xs = range(-len(PBS_seq) + 1, 1)
@@ -634,7 +645,7 @@ def plot(outcome_order,
                        )
 
         RTT_xs = []
-        RTT_rc = hits.utilities.reverse_complement(pegRNA.components['RTT'])
+        RTT_rc = hits.utilities.reverse_complement(ti.pegRNA.components['RTT'])
         RTT_aligned_seq = ''
         for (target_start, target_end), (flap_start, flap_end) in zip(target_subsequences, flap_subsequences):
             # target_subsequences are in downstream_of_nick coords and end is exclusive.
@@ -666,29 +677,33 @@ def plot(outcome_order,
             draw_rect(source_name, rect_start, rect_end, y - wt_height / 2, y + wt_height / 2, 0.8, color)
 
         for (_, previous_end), (next_start, _) in zip(target_subsequences, target_subsequences[1:]):
-            draw_rect(source_name, previous_end + 1 - 0.5, next_start + 1 - 0.5, y - del_height / 2, y + del_height / 2, 0.4, color='red')
+            draw_rect(source_name, previous_end + 1 - 0.5, next_start + 1 - 0.5, y - del_height / 2, y + del_height / 2, 0.4, color='black')
 
         seq = seqs[source_name]
         window_left, window_right = windows[source_name]
         for x, b in zip(RTT_xs, RTT_aligned_seq):
-            target_b = seq[-window_left + x]
-            if b != target_b:
-                color = hits.visualize.igv_colors[b]
-                weight = 'bold'
-            else:
-                color = 'black'
-                weight = 'normal'
+            if window_left <= x <= window_right:
+                target_b = seq[-window_left + x]
+                if b != target_b:
+                    color = hits.visualize.igv_colors[b]
+                    weight = 'bold'
+                else:
+                    color = 'black'
+                    weight = 'normal'
 
-            ax.annotate(b,
-                        xy=(x, y),
-                        xycoords='data', 
-                        ha='center',
-                        va='center',
-                        size=text_size,
-                        annotation_clip=False,
-                        color=color,
-                        weight=weight,
-                       )
+                if flip:
+                    b = hits.utilities.complement(b)
+
+                ax.annotate(b,
+                            xy=(x, y),
+                            xycoords='data', 
+                            ha='center',
+                            va='center',
+                            size=text_size,
+                            annotation_clip=False,
+                            color=color,
+                            weight=weight,
+                        )
 
         if ti.pegRNA_programmed_insertion is not None:
             draw_insertion(y, ti.pegRNA_programmed_insertion, source_name)
@@ -845,7 +860,7 @@ def plot(outcome_order,
             draw_donor(y, HDR_outcome, deletion_outcome, insertion_outcome, source_name, False)
 
         elif category == 'intended edit':
-            draw_programmed_edit(y, ProgrammedEditOutcome.from_string(details), source_name, False)
+            draw_programmed_edit(y, ProgrammedEditOutcome.from_string(details), source_name)
 
         elif category == 'duplication' and subcategory == 'simple':
             duplication_outcome = DuplicationOutcome.from_string(details).undo_anchor_shift(ti.anchor)
