@@ -8,6 +8,8 @@ import gzip
 import heapq
 import itertools
 import logging
+import multiprocessing
+import os
 import pickle
 import resource
 import shutil
@@ -23,6 +25,7 @@ import numpy as np
 import pandas as pd
 import pysam
 import scipy.sparse
+import threadpoolctl
 import yaml
 
 import hits.visualize
@@ -282,7 +285,12 @@ class SingleGuideExperiment(experiment.Experiment):
 
     def collapsed_reads(self, no_progress=False):
         fn = self.fns_by_read_type['fastq']['collapsed_R2']
-        reads = fastq.reads(fn)
+
+        if fn.exists():
+            reads = fastq.reads(fn)
+        else:
+            reads = iter([])
+
         if no_progress:
             return reads
         else:
@@ -1064,7 +1072,7 @@ class SingleGuideNoUMIExperiment(SingleGuideExperiment):
             perfect = (outcome.guide_mismatches == '')
             counts[perfect, outcome.category, outcome.subcategory, outcome.details] += 1
 
-        counts = pd.Series(counts).sort_values(ascending=False)
+        counts = pd.Series(counts, dtype=int).sort_values(ascending=False)
         counts.to_csv(counts_fn, mode='a', sep='\t', header=False)
 
     def collapse_UMI_outcomes(self):
@@ -1181,7 +1189,7 @@ class PooledScreen:
         categorizer_name = self.sample_sheet.get('categorizer', 'pooled_layout')
         if categorizer_name == 'pooled_layout':
             self.categorizer = pooled_layout.Layout
-        elif categorizer_name == 'prime_editing_layout': 
+        elif categorizer_name in ['prime_editing_layout', 'prime_editing']: 
             self.categorizer = prime_editing_layout.Layout
         elif categorizer_name == 'twin_prime': 
             self.categorizer = twin_prime_layout.Layout
@@ -2611,14 +2619,7 @@ class PooledScreen:
         highest_gene_gene = pd.Series(highest_gene_gene).sort_index()
         highest_gene_gene.to_csv(self.fns['highest_guide_correlations'])
 
-    def process(self, num_processes=18):
-        # Note: in old GNU parallel-based design, environment needed to be
-        # passed via subprocess to prevent numpy/pandas from greedily consuming
-        # cores:
-        #    env = os.environ
-        #    env['OPENBLAS_NUM_THREADS'] = '1'
-        # Unclear if equivalent is needed for multiprocessing design.
-
+    def process(self, num_processes=18, use_logger_thread=True):
         log_fn = self.dir / f'log_{datetime.datetime.now():%y%m%d-%H%M%S}.out'
 
         logger = logging.getLogger(__name__)
@@ -2632,21 +2633,29 @@ class PooledScreen:
         file_handler.setLevel(logging.DEBUG)
         logger.addHandler(file_handler)
 
-        print(f'Logging in {log_fn}')
+        print(f'Logging in {log_fn}, {use_logger_thread=}')
 
-        def process_stage(stage):
-            arg_tuples = []
+        if use_logger_thread:
+            pool = parallel.PoolWithLoggerThread(num_processes, logger)
+        else:
+            NICENESS = 3
+            pool = multiprocessing.Pool(num_processes, maxtasksperchild=1, initializer=os.nice, initargs=(NICENESS,))
 
-            for exp_i, (fixed_guide, variable_guide) in enumerate(self.guide_combinations_by_read_count):
-                arg_tuple = (self.base_dir, self.name, fixed_guide, variable_guide, stage, None, exp_i, len(self.guide_combinations_by_read_count))
-                arg_tuples.append(arg_tuple)
+        with pool:
+            def process_stage(stage):
+                arg_tuples = []
 
-            with parallel.PoolWithLoggerThread(num_processes, logger) as process_pool:
-                process_pool.starmap(process_single_guide_experiment_stage, arg_tuples)
+                for exp_i, (fixed_guide, variable_guide) in enumerate(self.guide_combinations_by_read_count):
+                    arg_tuple = (self.base_dir, self.name, fixed_guide, variable_guide, stage, None, exp_i, len(self.guide_combinations_by_read_count))
+                    if not use_logger_thread:
+                        arg_tuple += (log_fn,)
+                    arg_tuples.append(arg_tuple)
 
-        process_stage('preprocess')
-        process_stage('align')
-        process_stage('categorize')
+                pool.starmap(process_single_guide_experiment_stage, arg_tuples)
+
+            process_stage('preprocess')
+            process_stage('align')
+            process_stage('categorize')
 
         self.generate_outcome_counts()
         self.merge_templated_insertion_details()
@@ -2768,17 +2777,33 @@ def process_single_guide_experiment_stage(base_dir,
                                           progress=None,
                                           guide_index=None,
                                           total_guides=None,
+                                          log_fn=None,
                                          ):
-    pool = get_pool(base_dir, pool_name, progress=progress)
-    exp = pool.single_guide_experiment(fixed_guide, variable_guide)
+    if log_fn is not None:
+        logger = logging.getLogger(__name__)
+        logger.propagate = False
+        logger.setLevel(logging.DEBUG)
+        file_handler = logging.FileHandler(log_fn)
+        formatter = logging.Formatter(fmt='%(asctime)s: %(message)s',
+                                      datefmt='%y-%m-%d %H:%M:%S',
+                                     )
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(logging.DEBUG)
+        logger.addHandler(file_handler)
+    else:
+        logger = logging.getLogger()
 
-    progress_string = f'({guide_index + 1: >7,} / {total_guides: >7,})'
-    stage_string = f'{fixed_guide}-{variable_guide} {stage}'
-    logging.info(f'{progress_string} Started {stage_string}')
+    with threadpoolctl.threadpool_limits(limits=1, user_api='blas'):
+        pool = get_pool(base_dir, pool_name, progress=progress)
+        exp = pool.single_guide_experiment(fixed_guide, variable_guide)
 
-    exp.process(stage)
+        progress_string = f'({guide_index + 1: >7,} / {total_guides: >7,})'
+        stage_string = f'{fixed_guide}-{variable_guide} {stage}'
+        logger.info(f'{progress_string} Started {stage_string}')
 
-    logging.info(f'{progress_string} Finished {stage_string}')
+        exp.process(stage)
+
+        logger.info(f'{progress_string} Finished {stage_string}')
 
 class PooledScreenExplorer(explore.Explorer):
     def __init__(self,
