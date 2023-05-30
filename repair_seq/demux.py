@@ -79,7 +79,7 @@ def load_SRA_pool_sample_sheet(screen_name):
 
     sample_sheet['quartets'] = {}
 
-    for SRR_accession, num_reads in SRR_accessions.loc[screen_name]['num_reads'].iteritems():
+    for SRR_accession, num_reads in SRR_accessions.loc[screen_name]['num_reads'].items():
         sample_sheet['quartets'][SRR_accession] = {which: f'{SRR_accession}_{which[-1]}' for which in ['R1', 'R2']}
         sample_sheet['quartets'][SRR_accession]['num_reads'] = num_reads
 

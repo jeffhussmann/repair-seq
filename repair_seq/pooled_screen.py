@@ -92,9 +92,9 @@ class SingleGuideExperiment(experiment.Experiment):
             'filtered_cell_bam': self.results_dir / 'filtered_cell_aligments.bam',
             'reads_per_UMI': self.results_dir / 'reads_per_UMI.pkl',
 
-            'common_sequences_dir': self.results_dir / 'common_sequences',
-            'common_sequence_outcomes': self.results_dir / 'common_sequences' / 'common_sequence_outcomes.txt',
-            'common_sequence_special_alignments': self.results_dir / 'common_sequences' / 'all_special_alignments.bam',
+            'common_sequences_dir': self.results_dir / 'common-sequences',
+            'common_sequence_outcomes': self.results_dir / 'common-sequences' / 'common_sequence_outcomes.txt',
+            'common_sequence_special_alignments': self.results_dir / 'common-sequences' / 'all_special_alignments.bam',
         })
 
         self.max_insertion_length = None
@@ -1690,6 +1690,8 @@ class PooledScreen:
             outcome_counts.loc['genomic insertion', 'hg19', f'<={length_cutoff} nts'] = short_gis
             outcome_counts.loc['genomic insertion', 'hg19', f'>{length_cutoff} nts'] = long_gis
         
+            # need to set index names
+            outcome_counts.index.names = ('category', 'subcategory', 'details')
         return outcome_counts
 
     def generate_high_frequency_outcome_counts(self):
@@ -1730,6 +1732,9 @@ class PooledScreen:
         with h5py.File(self.fns['high_frequency_outcome_counts'], 'w') as fh:
             for key, df in to_write.items():
                 dataset = fh.create_dataset(key, data=df.values)
+                # set names for index and columns to fix errors
+                df.index.names = ('category', 'subcategory', 'details')
+                df.columns.names = ('fixed_guide', 'variable_guide')
                 
                 for level in df.index.names:
                     dataset.attrs[level] = [s.encode() for s in df.index.get_level_values(level)]
@@ -2661,7 +2666,8 @@ class PooledScreen:
         self.merge_templated_insertion_details()
         self.extract_genomic_insertion_length_distributions()
         self.extract_category_counts()
-        #self.generate_high_frequency_outcome_counts()
+        # uncomment the following method to generate data based on published data
+        self.generate_high_frequency_outcome_counts()
         #self.compute_deletion_boundaries()
         #self.merge_deletion_ranges()
         #self.merge_templated_insertion_details(fn_key='filtered_duplication_details')
