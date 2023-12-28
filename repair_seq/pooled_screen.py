@@ -30,7 +30,9 @@ import yaml
 
 import hits.visualize
 from hits import utilities, sam, fastq, fasta, interval
-from knock_knock import experiment, target_info, visualize, ranges, explore, outcome_record, parallel
+import knock_knock.lengths
+import knock_knock.outcome_record
+from knock_knock import experiment, target_info, visualize, ranges, explore, parallel
 from knock_knock import prime_editing_layout
 from knock_knock import twin_prime_layout
 
@@ -38,6 +40,7 @@ from . import annotations
 from . import coherence
 from . import collapse
 from . import guide_library
+from . import outcome_record
 from . import pooled_layout
 from . import statistics
 
@@ -120,7 +123,7 @@ class SingleGuideExperiment(experiment.Experiment):
         self.count_index_levels = ['perfect_guide', 'category', 'subcategory', 'details']
 
         self.x_tick_multiple = 100
-        self.max_relevant_length = 1000
+        self.max_relevant_length = self.pool.max_relevant_length
 
     @property
     def default_read_type(self):
@@ -128,7 +131,7 @@ class SingleGuideExperiment(experiment.Experiment):
 
     @property
     def final_Outcome(self):
-        return coherence.Pooled_UMI_Outcome
+        return outcome_record.Pooled_UMI_Outcome
 
     def load_description(self):
         return self.pool.sample_sheet
@@ -324,9 +327,7 @@ class SingleGuideExperiment(experiment.Experiment):
 
     @memoized_property
     def common_sequence_outcomes(self):
-        outcomes = []
-        for outcome in self.common_sequence_experiment.outcome_iter():
-            outcomes.append(outcome)
+        outcomes = list(self.common_sequence_experiment.outcome_iter())
 
         return outcomes
 
@@ -497,21 +498,21 @@ class SingleGuideExperiment(experiment.Experiment):
                 elif self.has_UMIs:
                     annotation = annotations.Annotations['collapsed_UMI_mismatch'].from_identifier(read.name)
 
-                    outcome = coherence.Pooled_UMI_Outcome(annotation['UMI'],
-                                                           annotation['mismatch'],
-                                                           annotation['cluster_id'],
-                                                           annotation['num_reads'],
-                                                           layout.inferred_amplicon_length,
-                                                           layout.category,
-                                                           layout.subcategory,
-                                                           layout.details,
-                                                           read.name,
-                                                           common_sequence_name,
-                                                          )
+                    outcome = outcome_record.UMI_Outcome(annotation['UMI'],
+                                                         annotation['mismatch'],
+                                                         annotation['cluster_id'],
+                                                         annotation['num_reads'],
+                                                         layout.inferred_amplicon_length,
+                                                         layout.category,
+                                                         layout.subcategory,
+                                                         layout.details,
+                                                         read.name,
+                                                         common_sequence_name,
+                                                        )
 
                 else:
                     annotation = annotations.Annotations['R2_with_guide_mismatches'].from_identifier(read.name)
-                    outcome = coherence.gDNA_Outcome.from_layout(layout,
+                    outcome = outcome_record.Outcome.from_layout(layout,
                                                                  guide_mismatches=annotation['mismatches'],
                                                                  query_name=read.name,
                                                                  common_sequence_name=common_sequence_name,
@@ -663,7 +664,7 @@ class SingleGuideExperiment(experiment.Experiment):
 
         with open(self.fns['cell_outcomes']) as fh:
             for line in fh:
-                outcome = coherence.Pooled_UMI_Outcome.from_line(line)
+                outcome = outcome_record.UMI_Outcome.from_line(line)
 
                 reads_per_UMI['all'][outcome.num_reads] += 1
 
@@ -683,12 +684,22 @@ class SingleGuideExperiment(experiment.Experiment):
 
     @memoized_property
     def cell_outcomes(self):
-        df = pd.read_csv(self.fns['cell_outcomes'], header=None, na_filter=False, names=coherence.Pooled_UMI_Outcome.columns, sep='\t')
+        df = pd.read_csv(self.fns['cell_outcomes'],
+                         header=None,
+                         na_filter=False,
+                         names=outcome_record.UMI_Outcome.columns,
+                         sep='\t',
+                        )
         return df
 
     @memoized_property
     def filtered_cell_outcomes(self):
-        df = pd.read_csv(self.fns['filtered_cell_outcomes'], header=None, na_filter=False, names=coherence.Pooled_UMI_Outcome.columns, sep='\t')
+        df = pd.read_csv(self.fns['filtered_cell_outcomes'],
+                         header=None,
+                         na_filter=False,
+                         names=outcome_record.UMI_Outcome.columns,
+                         sep='\t',
+                        )
         return df
 
     def get_read_layout(self, read_id, qname_to_als=None, outcome=None):
@@ -976,7 +987,7 @@ class SingleGuideExperiment(experiment.Experiment):
         else:
             read_type = 'collapsed_R2'
 
-        self.generate_alignments(read_type)
+        self.generate_alignments_with_blast(read_type)
         self.generate_supplemental_alignments_with_STAR(read_type, min_length=20)
         self.combine_alignments(read_type)
 
@@ -985,7 +996,7 @@ class SingleGuideExperiment(experiment.Experiment):
         self.collapse_UMI_outcomes()
 
         self.generate_outcome_counts()
-        self.generate_read_lengths()
+        self.generate_outcome_stratified_lengths()
         self.record_sanitized_category_names()
 
         self.extract_genomic_insertion_info()
@@ -1005,7 +1016,7 @@ class SingleGuideNoUMIExperiment(SingleGuideExperiment):
 
     @property
     def final_Outcome(self):
-        return coherence.gDNA_Outcome
+        return outcome_record.Outcome
 
     def preprocess(self):
         self.merge_read_chunks()
@@ -1106,7 +1117,7 @@ class CommonSequenceExperiment(SingleGuideExperiment):
     def process(self):
         try:
             read_type = 'collapsed_R2'
-            self.generate_alignments(read_type)
+            self.generate_alignments_with_blast(read_type)
             self.generate_supplemental_alignments_with_STAR(read_type, min_length=20)
             self.combine_alignments(read_type)
             self.categorize_outcomes()
@@ -1234,6 +1245,7 @@ class PooledScreen:
             'total_outcome_counts': self.dir / 'total_outcome_counts.txt',
             'collapsed_outcome_counts': self.dir / 'collapsed_outcome_counts.npz',
             'collapsed_total_outcome_counts': self.dir / 'collapsed_total_outcome_counts.txt',
+            'outcome_stratified_lengths': self.dir / 'lengths.hdf5',
 
             'category_counts': self.dir / 'category_counts.txt',
             'subcategory_counts': self.dir / 'subcategory_counts.txt',
@@ -1264,6 +1276,9 @@ class PooledScreen:
 
             'snapshots_dir': self.dir / 'snapshots',
         }
+
+        self.max_relevant_length = 1000
+        self.length_to_store_unknown = 1050
 
     def __repr__(self):
         return f'{type(self).__name__}: {self.name} (base_dir={self.base_dir})'
@@ -2583,6 +2598,21 @@ class PooledScreen:
 
         return chi_squared.sort_values(ascending=False)
 
+    def outcome_iter(self):
+        for exp in self.progress(self.single_guide_experiments(), total=len(self.guide_combinations)):
+            yield from exp.outcome_iter()
+
+    def generate_outcome_stratified_lengths(self):
+        lengths = knock_knock.lengths.OutcomeStratifiedLengths(self.outcome_iter(),
+                                                               self.max_relevant_length,
+                                                               self.length_to_store_unknown,
+                                                              )
+        lengths.to_file(self.fns['outcome_stratified_lengths'])
+    
+    @memoized_property
+    def outcome_stratified_lengths(self):
+        return knock_knock.lengths.OutcomeStratifiedLengths.from_file(self.fns['outcome_stratified_lengths'])
+
     def explore(self, **kwargs):
         explorer = PooledScreenExplorer(self, **kwargs)
         return explorer.layout
@@ -2661,6 +2691,7 @@ class PooledScreen:
         self.merge_templated_insertion_details()
         self.extract_genomic_insertion_length_distributions()
         self.extract_category_counts()
+        self.generate_outcome_stratified_lengths()
         #self.generate_high_frequency_outcome_counts()
         #self.compute_deletion_boundaries()
         #self.merge_deletion_ranges()

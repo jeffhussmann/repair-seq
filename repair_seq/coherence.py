@@ -5,39 +5,6 @@ from hits.utilities import group_by
 
 from .collapse_cython import hamming_distance_matrix, register_corrections
 
-Pooled_UMI_Outcome = outcome_record.OutcomeRecord_factory(
-    columns_arg=[
-        'UMI',
-        'guide_mismatch',
-        'cluster_id',
-        'num_reads',
-        'inferred_amplicon_length',
-        'category',
-        'subcategory',
-        'details',
-        'query_name',
-        'common_sequence_name',
-    ],
-    converters_arg={
-        'num_reads': int,
-        'guide_mismatch': int,
-        'inferred_amplicon_length': int,
-    },
-)
-
-gDNA_Outcome = outcome_record.OutcomeRecord_factory(
-    columns_arg=[
-        'query_name',
-        'guide_mismatches',
-        'inferred_amplicon_length',
-        'category',
-        'subcategory',
-        'details',
-        'common_sequence_name',
-    ],
-    converters_arg={'inferred_amplicon_length': int},
-)
-
 def collapse_pooled_UMI_outcomes(outcome_iter):
     def is_relevant(outcome):
         return (outcome.category != 'bad sequence' and
