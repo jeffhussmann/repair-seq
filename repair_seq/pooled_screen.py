@@ -32,6 +32,7 @@ import hits.visualize
 from hits import utilities, sam, fastq, fasta, interval
 import knock_knock.lengths
 import knock_knock.outcome_record
+import knock_knock.utilities
 from knock_knock import experiment, target_info, visualize, ranges, explore, parallel
 from knock_knock import prime_editing_layout
 from knock_knock import twin_prime_layout
@@ -475,8 +476,7 @@ class SingleGuideExperiment(experiment.Experiment):
                     try:
                         layout.categorize()
                     except:
-                        print()
-                        print(self.sample_name, name)
+                        logging.info(f'Error categorizing {self.fixed_guide} {self.variable_guide} {name}')
                         raise
 
                     if layout.outcome is not None:
@@ -1122,7 +1122,7 @@ class CommonSequenceExperiment(SingleGuideExperiment):
             self.combine_alignments(read_type)
             self.categorize_outcomes()
         except:
-            print(f'Error in {self.sample_name}')
+            logging.info(f'Error in {self.fixed_guide} {self.variable_guide}')
             raise
 
     @property
@@ -2653,42 +2653,30 @@ class PooledScreen:
         highest_gene_gene.to_csv(self.fns['highest_guide_correlations'])
 
     def process(self, num_processes=18, use_logger_thread=True):
-        log_fn = self.dir / f'log_{datetime.datetime.now():%y%m%d-%H%M%S}.out'
-
-        logger = logging.getLogger(__name__)
-        logger.propagate = False
-        logger.setLevel(logging.DEBUG)
-        file_handler = logging.FileHandler(log_fn)
-        formatter = logging.Formatter(fmt='%(asctime)s: %(message)s',
-                                      datefmt='%y-%m-%d %H:%M:%S',
-                                     )
-        file_handler.setFormatter(formatter)
-        file_handler.setLevel(logging.DEBUG)
-        logger.addHandler(file_handler)
-
-        print(f'Logging in {log_fn}, {use_logger_thread=}')
+        logger, file_handler = knock_knock.utilities.configure_standard_logger(self.dir)
 
         if use_logger_thread:
-            pool = parallel.PoolWithLoggerThread(num_processes, logger)
+            process_pool = parallel.PoolWithLoggerThread(num_processes, logger)
         else:
             NICENESS = 3
-            pool = multiprocessing.Pool(num_processes, maxtasksperchild=1, initializer=os.nice, initargs=(NICENESS,))
+            process_pool = multiprocessing.Pool(num_processes, maxtasksperchild=1, initializer=os.nice, initargs=(NICENESS,))
 
-        with pool:
-            def process_stage(stage):
-                arg_tuples = []
+        with process_pool:
+            arg_tuples = []
 
-                for exp_i, (fixed_guide, variable_guide) in enumerate(self.guide_combinations_by_read_count):
-                    arg_tuple = (self.base_dir, self.name, fixed_guide, variable_guide, stage, None, exp_i, len(self.guide_combinations_by_read_count))
-                    if not use_logger_thread:
-                        arg_tuple += (log_fn,)
-                    arg_tuples.append(arg_tuple)
+            for exp_i, (fixed_guide, variable_guide) in enumerate(self.guide_combinations_by_read_count):
+                arg_tuple = (
+                    self.base_dir,
+                    self.name,
+                    fixed_guide,
+                    variable_guide,
+                    exp_i,
+                    len(self.guide_combinations_by_read_count),
+                )
 
-                pool.starmap(process_single_guide_experiment_stage, arg_tuples)
+                arg_tuples.append(arg_tuple)
 
-            process_stage('preprocess')
-            process_stage('align')
-            process_stage('categorize')
+            process_pool.starmap(process_single_guide_experiment, arg_tuples)
 
         self.generate_outcome_counts()
         self.merge_templated_insertion_details()
@@ -2803,41 +2791,35 @@ def get_all_pools(base_dir=Path.home() / 'projects' / 'repair_seq', category_gro
 
     return pools
 
-def process_single_guide_experiment_stage(base_dir,
-                                          pool_name,
-                                          fixed_guide,
-                                          variable_guide,
-                                          stage,
-                                          progress=None,
-                                          guide_index=None,
-                                          total_guides=None,
-                                          log_fn=None,
-                                         ):
-    if log_fn is not None:
-        logger = logging.getLogger(__name__)
-        logger.propagate = False
-        logger.setLevel(logging.DEBUG)
-        file_handler = logging.FileHandler(log_fn)
-        formatter = logging.Formatter(fmt='%(asctime)s: %(message)s',
-                                      datefmt='%y-%m-%d %H:%M:%S',
-                                     )
-        file_handler.setFormatter(formatter)
-        file_handler.setLevel(logging.DEBUG)
-        logger.addHandler(file_handler)
-    else:
-        logger = logging.getLogger()
+def process_single_guide_experiment(base_dir,
+                                    pool_name,
+                                    fixed_guide,
+                                    variable_guide,
+                                    guide_index=None,
+                                    total_guides=None,
+                                   ):
 
     with threadpoolctl.threadpool_limits(limits=1, user_api='blas'):
-        pool = get_pool(base_dir, pool_name, progress=progress)
+        pool = get_pool(base_dir, pool_name)
         exp = pool.single_guide_experiment(fixed_guide, variable_guide)
 
         progress_string = f'({guide_index + 1: >7,} / {total_guides: >7,})'
-        stage_string = f'{fixed_guide}-{variable_guide} {stage}'
-        logger.info(f'{progress_string} Started {stage_string}')
 
-        exp.process(stage)
+        for stage in [
+            'preprocess',
+            'align',
+            'categorize',
+        ]:
 
-        logger.info(f'{progress_string} Finished {stage_string}')
+            stage_string = f'{fixed_guide}-{variable_guide} {stage}'
+            logging.info(f'{progress_string} Started {stage_string}')
+
+            try:
+                exp.process(stage)
+            except:
+                logging.info(f'Error in {stage_string}')
+
+            logging.info(f'{progress_string} Finished {stage_string}')
 
 class PooledScreenExplorer(explore.Explorer):
     def __init__(self,
