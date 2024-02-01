@@ -1127,7 +1127,7 @@ class CommonSequenceExperiment(SingleGuideExperiment):
 
     @property
     def final_Outcome(self):
-        return outcome_record.CommonSequenceOutcomeRecord
+        return knock_knock.outcome_record.CommonSequenceOutcomeRecord
 
 def collapse_categories(df):
     # Collapse details, retaining subcategories.
