@@ -1686,24 +1686,27 @@ class PooledScreen:
 
         length_cutoff = 75
 
-        gi_length_counts = self.genomic_insertion_length_counts.loc['hg19'].drop(ALL_NON_TARGETING, level=1)
+        try:
+            gi_length_counts = self.genomic_insertion_length_counts.loc['hg19'].drop(ALL_NON_TARGETING, level=1)
 
-        # Note weirdness with column slices here - no + 1 in :length_cutoff.
-        short_gis = gi_length_counts.loc[:, :length_cutoff].sum(axis=1)
-        long_gis = gi_length_counts.loc[:, length_cutoff + 1:].sum(axis=1)
+            # Note weirdness with column slices here - no + 1 in :length_cutoff.
+            short_gis = gi_length_counts.loc[:, :length_cutoff].sum(axis=1)
+            long_gis = gi_length_counts.loc[:, length_cutoff + 1:].sum(axis=1)
 
-        short_and_long = short_gis + long_gis
+            short_and_long = short_gis + long_gis
 
-        if ('genomic insertion', 'hg19', 'collapsed') in outcome_counts.index:
-            if guide_status == 'perfect':
-                    if not np.allclose(short_and_long, outcome_counts.loc['genomic insertion', 'hg19', 'collapsed']):
-                        # TODO: understand source of discrepancies here
-                        pass
+            if ('genomic insertion', 'hg19', 'collapsed') in outcome_counts.index:
+                if guide_status == 'perfect':
+                        if not np.allclose(short_and_long, outcome_counts.loc['genomic insertion', 'hg19', 'collapsed']):
+                            # TODO: understand source of discrepancies here
+                            pass
 
-            outcome_counts.drop(('genomic insertion', 'hg19', 'collapsed'), inplace=True)
+                outcome_counts.drop(('genomic insertion', 'hg19', 'collapsed'), inplace=True)
 
-            outcome_counts.loc['genomic insertion', 'hg19', f'<={length_cutoff} nts'] = short_gis
-            outcome_counts.loc['genomic insertion', 'hg19', f'>{length_cutoff} nts'] = long_gis
+                outcome_counts.loc['genomic insertion', 'hg19', f'<={length_cutoff} nts'] = short_gis
+                outcome_counts.loc['genomic insertion', 'hg19', f'>{length_cutoff} nts'] = long_gis
+        except:
+            logging.warning('No genomic insertion length counts')
         
         return outcome_counts
 
