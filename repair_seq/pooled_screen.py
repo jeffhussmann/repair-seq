@@ -31,6 +31,7 @@ import yaml
 import hits.visualize
 from hits import utilities, sam, fastq, fasta, interval
 import knock_knock.lengths
+import knock_knock.outcome
 import knock_knock.outcome_record
 import knock_knock.utilities
 from knock_knock import experiment, target_info, visualize, ranges, explore, parallel
@@ -1134,8 +1135,6 @@ def collapse_categories(df):
     possibly_collapse = [
         'genomic insertion',
         'donor misintegration',
-        'wild type',
-        'unintended annealing of RT\'ed sequence',
     ]
     to_collapse = [cat for cat in possibly_collapse if cat in df.index.levels[0]]
 
@@ -1662,7 +1661,7 @@ class PooledScreen:
 
     @memoized_with_kwargs
     def outcome_counts_raw(self, *, guide_status='perfect', snapshot_name=None):
-        ''' Necessary to avoid a depenency cycle in outcome_counts and UMI_counts '''
+        ''' Necessary to avoid a dependency cycle in outcome_counts and UMI_counts '''
 
         if guide_status == 'all':
             outcome_counts = self.outcome_counts_df(collapsed=True, snapshot_name=snapshot_name).groupby(level=[1, 2, 3]).sum()
@@ -1855,7 +1854,7 @@ class PooledScreen:
 
     def compute_deletion_boundaries(self):
         ti = self.target_info
-        deletion_fractions = self.outcome_fractions('perfect').xs('deletion', drop_level=False)
+        deletion_fractions = self.outcome_fractions().xs('deletion', drop_level=False)
 
         index = np.arange(len(ti.target_sequence))
         columns = deletion_fractions.columns
@@ -1866,12 +1865,12 @@ class PooledScreen:
 
         for (c, s, d), row in self.progress(deletion_fractions.iterrows()):
             # Undo anchor shift to make coordinates relative to full target sequence.
-            deletion = pooled_layout.DeletionOutcome.from_string(d).perform_anchor_shift(-ti.anchor).deletion
+            deletion = knock_knock.outcome.DeletionOutcome.from_string(d).perform_anchor_shift(-ti.anchor).deletion
             start = min(deletion.starts_ats)
             stop = max(deletion.ends_ats)
             deletion_slice = slice(start, stop + 1)
 
-            fraction_removed[deletion_slice] += row
+            fraction_removed[deletion_slice] += row.values
             starts[start] += row
             stops[stop] += row
 
@@ -1886,8 +1885,8 @@ class PooledScreen:
                                         axis=1,
                                        ) 
 
-        left_edge = ti.features[ti.target, 'protospacer'].end + 1
-        right_edge = ti.features[ti.target, 'sequencing_start'].start
+        left_edge = ti.features[ti.target, self.target_info.primers_by_side_of_target[5].ID].end + 1
+        right_edge = ti.features[ti.target, self.target_info.primers_by_side_of_target[3].ID].start
 
         deletion_boundaries = deletion_boundaries.loc[left_edge:right_edge]
         deletion_boundaries.index = deletion_boundaries.index - ti.cut_after

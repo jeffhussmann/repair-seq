@@ -6,7 +6,7 @@ import numpy as np
 import bokeh.palettes
 import scipy.cluster.hierarchy
 
-from . import outcome_diagrams
+import knock_knock.visualize.stacked
 import repair_seq.pooled_screen
 import repair_seq.visualize
 
@@ -59,7 +59,7 @@ def add_fold_change_colorbar(fig, im,
                         size=text_size,
                         )
 
-    cbar_ax.annotate(f'log$_2$ fold change\nin frequency from\n{baseline_condition_name}',
+    cbar_ax.annotate(f'Log$_2$ fold-change\nin frequency from\n{baseline_condition_name}',
                      xy=(0.5, 1),
                      xycoords='axes fraction',
                      xytext=(0, 5 + 2 * text_size),

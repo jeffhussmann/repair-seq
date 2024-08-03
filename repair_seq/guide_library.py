@@ -1,6 +1,7 @@
 from pathlib import Path
 from collections import defaultdict
 
+import Bio.SeqIO
 import pandas as pd
 
 from hits import utilities, fasta
@@ -32,6 +33,8 @@ class GuideLibrary:
             'cell_cycle_log2_fold_changes': self.full_dir / 'cell_cycle_effects.txt',
             
             'K562_knockdown': self.full_dir / 'K562_knockdown.txt',
+
+            'vector': self.full_dir / 'vector.gb',
         }
 
     @memoized_property
@@ -193,6 +196,10 @@ class GuideLibrary:
             non_targeting_guide_sets = {f'non-targeting_set_{i:05d}': s for i, s in enumerate(sets)}
 
         return non_targeting_guide_sets
+
+    @memoized_property
+    def vector_seq(self):
+        return str(Bio.SeqIO.read(self.fns['vector'], 'genbank').seq)
 
 class DummyGuideLibrary:
     def __init__(self):

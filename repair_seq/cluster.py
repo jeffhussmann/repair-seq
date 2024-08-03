@@ -221,10 +221,16 @@ class Clusterer:
             combined_categories.append(combined_category)
 
         combined_categories = pd.Series(combined_categories, index=embedding.index)
-        categories_aliased = combined_categories.map(visualize.category_aliases[effector])
+        if effector in visualize.category_aliases:
+            categories_aliased = combined_categories.map(visualize.category_aliases[effector])
+        else:
+            categories_aliased = combined_categories
 
-        value_to_color = visualize.category_alias_colors[effector]
-        colors = categories_aliased.map(value_to_color)
+        if effector in visualize.category_alias_colors:
+            value_to_color = visualize.category_alias_colors[effector]
+            colors = categories_aliased.map(value_to_color)
+        else:
+            colors = ['black' for c in categories_aliased]
 
         embedding['combined_categories'] = combined_categories
         embedding['categories_aliased'] = categories_aliased
@@ -903,7 +909,7 @@ class SinglePoolClusterer(Clusterer):
         self.pool = pool
         self.guide_library = self.pool.variable_guide_library
         self.pn_to_target_info = {self.pool.short_name: self.pool.target_info}
-        self.pn_to_sgRNA = {self.pool.short_name: self.pool.target_info.sgRNA}
+        self.pn_to_sgRNA = {self.pool.short_name: self.pool.target_info.sgRNAs[0]}
         self.pn_to_pool = {self.pool.short_name: self.pool}
         super().__init__(**options)
 
