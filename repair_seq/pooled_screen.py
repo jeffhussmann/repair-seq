@@ -2201,6 +2201,72 @@ class PooledScreen:
     @memoized_property
     def total_mismatch_rates(self):
         return self.mismatch_rates.sum(level='offset')
+
+    @memoized_property
+    def outcomes_containing_pegRNA_programmed_edits(self):
+        outcomes_containing_pegRNA_programmed_edits = {}
+        if self.target_info.pegRNA_SNVs is not None:
+            SNVs = self.target_info.pegRNA_SNVs[self.target_info.target]
+            # Note: sorting SNVs is critical here to match the order in outcome.SNV_read_bases.
+            SNV_order = sorted(SNVs)
+
+            for SNV_name in SNVs:
+                outcomes_containing_pegRNA_programmed_edits[SNV_name] = []
+
+        else:
+            SNVs = None
+        
+        if self.target_info.pegRNA_programmed_insertion is not None:
+            insertion = self.target_info.pegRNA_programmed_insertion
+
+            outcomes_containing_pegRNA_programmed_edits[str(insertion)] = []
+
+        else:
+            insertion = None
+
+        if self.target_info.pegRNA_programmed_deletion is not None:
+            deletion = self.target_info.pegRNA_programmed_deletion
+
+            outcomes_containing_pegRNA_programmed_edits[str(deletion)] = []
+
+        else:
+            deletion = None
+            
+        for c, s, d  in self.outcome_fractions().index:
+            if c in {'intended edit', 'partial replacement', 'partial edit'}:
+                outcome = knock_knock.outcome.ProgrammedEditOutcome.from_string(d).undo_anchor_shift(self.target_info.anchor)
+
+                if SNVs is not None:
+                    for SNV_name, read_base in zip(SNV_order, outcome.SNV_read_bases):
+                        SNV = SNVs[SNV_name]
+                        if read_base == SNV['alternative_base']:
+                            outcomes_containing_pegRNA_programmed_edits[SNV_name].append((c, s, d))
+
+                if insertion is not None and insertion in outcome.insertions:
+                    outcomes_containing_pegRNA_programmed_edits[str(insertion)].append((c, s, d))
+
+                if deletion is not None and deletion in outcome.deletions:
+                    outcomes_containing_pegRNA_programmed_edits[str(deletion)].append((c, s, d))
+
+        return outcomes_containing_pegRNA_programmed_edits
+
+    @memoized_property
+    def pegRNA_conversion_fractions(self):
+        fs = {}
+
+        for edit_name, outcomes in self.outcomes_containing_pegRNA_programmed_edits.items():
+            fs[edit_name] = self.outcome_fractions().loc[outcomes].sum()
+
+        if len(fs) > 0:
+            fs_df = pd.DataFrame.from_dict(fs, orient='index')
+
+            #fs_df.columns.names = self.full_condition_keys
+            fs_df.index.name = 'edit_name'
+
+        else:
+            fs_df = None
+
+        return fs_df
                     
     def sort_outcomes_by_gene_phenotype(self, outcomes, gene, top_n=None, ascending=False):
         if top_n is None:
