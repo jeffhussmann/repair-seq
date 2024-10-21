@@ -6,7 +6,6 @@ import numpy as np
 import bokeh.palettes
 import scipy.cluster.hierarchy
 
-import knock_knock.visualize.stacked
 import repair_seq.pooled_screen
 import repair_seq.visualize
 
@@ -27,7 +26,12 @@ def add_fold_change_colorbar(fig, im,
         cbar_ax = fig.add_axes((x0, y0, width, height)) 
 
     v_min, v_max = im.get_clim()
-    ticks = np.arange(v_min, v_max + 1)
+
+    if v_min < -2 or v_max > 2:
+        ticks = np.arange(v_min, v_max + 1, 2)
+    else:
+        ticks = np.arange(v_min, v_max + 1)
+
     cbar = plt.colorbar(im, cax=cbar_ax, orientation='horizontal', ticks=ticks)
 
     tick_labels = [str(int(t) if t.is_integer() else t) for t in ticks]
@@ -59,10 +63,11 @@ def add_fold_change_colorbar(fig, im,
                         size=text_size,
                         )
 
-    cbar_ax.annotate(f'Log$_2$ fold-change\nin frequency from\n{baseline_condition_name}',
+    last_part = " from\n" if baseline_condition_name != '' else ''
+    cbar_ax.annotate(f'Log$_2$ fold-change\nin frequency{last_part}{baseline_condition_name}',
                      xy=(0.5, 1),
                      xycoords='axes fraction',
-                     xytext=(0, 5 + 2 * text_size),
+                     xytext=(0, 5),
                      textcoords='offset points',
                      va='bottom',
                      ha='center',
